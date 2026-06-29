@@ -46,3 +46,6 @@ n8n_data/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Internal docs — keep out of public repo (business/client info, plans)
+docs/
