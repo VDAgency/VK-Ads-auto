@@ -55,7 +55,7 @@ jobs:
             docker compose up -d --build api postgres redis
             # Применяем миграции БД (с ретраями до готовности postgres).
             for i in $(seq 1 10); do
-              if docker compose exec -T api alembic upgrade head; then echo "migrations OK"; break; fi
+              if docker compose exec -T api uv run alembic upgrade head; then echo "migrations OK"; break; fi
               echo "waiting for db... ($i)"; sleep 3
               if [ "$i" = "10" ]; then echo "migrations FAILED"; docker compose logs --tail=80 postgres; exit 1; fi
             done
