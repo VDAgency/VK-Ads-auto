@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
     "asyncpg>=0.30",
     "redis>=5.2",
 ]
@@ -38,6 +39,10 @@ src = ["core", "bot", "services", "integrations", "db", "config", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "ASYNC"]
 
+[tool.ruff.lint.per-file-ignores]
+# Сгенерированные alembic-миграции: не навязываем строки/импорты.
+"db/migrations/versions/*" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
@@ -49,6 +54,11 @@ files = ["core", "bot", "services", "integrations", "db", "config", "tests"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# Сгенерированные alembic-миграции — вне строгой типизации.
+module = ["db.migrations.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
