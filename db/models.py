@@ -23,7 +23,7 @@ class Account(Base):
 
 
 class Operator(TenantMixin, Base):
-    """Оператор (Анастасия) — пользователь, ставящий задачи; принадлежит Account."""
+    """Оператор — пользователь, ставящий задачи; принадлежит Account."""
 
     __tablename__ = "operator"
 
