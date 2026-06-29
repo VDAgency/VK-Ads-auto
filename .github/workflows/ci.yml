@@ -53,6 +53,12 @@ jobs:
             cd /opt/vk-ads-auto
             git pull --ff-only
             docker compose up -d --build api postgres redis
+            # Применяем миграции БД (с ретраями до готовности postgres).
+            for i in $(seq 1 10); do
+              if docker compose exec -T api alembic upgrade head; then echo "migrations OK"; break; fi
+              echo "waiting for db... ($i)"; sleep 3
+              if [ "$i" = "10" ]; then echo "migrations FAILED"; docker compose logs --tail=80 postgres; exit 1; fi
+            done
             for i in $(seq 1 15); do
               code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
               if [ "$code" = "200" ]; then echo "health OK"; exit 0; fi
