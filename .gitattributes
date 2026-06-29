@@ -1,0 +1,11 @@
+# Normalize line endings — dev machine is Windows, runtime is Linux
+* text=auto eol=lf
+
+# Binary assets — never normalize
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.pdf binary

@@ -1,0 +1,48 @@
+# Secrets — NEVER commit (public repo)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.p12
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version-local
+*.egg-info/
+dist/
+build/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (Block 2 web)
+node_modules/
+.next/
+
+# DB dumps / data
+*.sql.gz
+*.dump
+pgdata/
+n8n_data/
+
+# Logs / temp
+*.log
+*.tmp
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
