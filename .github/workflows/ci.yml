@@ -1,7 +1,8 @@
 name: CI
 
-# Только проверки качества. Шаг деплоя добавляется отдельно после настройки
-# сервера (см. docs/DEPLOY.md) — здесь его намеренно НЕТ.
+# quality — гейт качества (на всех ветках/PR).
+# deploy — автодеплой на сервер ТОЛЬКО при push в main и только после зелёного quality
+#          (см. docs/DEPLOY.md). Секреты — в GitHub Actions Secrets, не в коде.
 
 on:
   push:
@@ -35,3 +36,26 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -q
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Deploy over SSH and verify health
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
+          script: |
+            set -e
+            cd /opt/vk-ads-auto
+            git pull --ff-only
+            docker compose up -d --build api postgres redis
+            for i in $(seq 1 15); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+              if [ "$code" = "200" ]; then echo "health OK"; exit 0; fi
+              sleep 3
+            done
+            echo "health check FAILED"; docker compose logs --tail=80 api; exit 1
