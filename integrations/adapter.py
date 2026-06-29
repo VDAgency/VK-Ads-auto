@@ -42,3 +42,8 @@ class PlatformAdapter(ABC):
     async def get_stats(self, campaign_id: str) -> dict[str, float]:
         """Вернуть срез метрик кампании (показы, расход, результат, CPL/CPC, CTR)."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """Проверить доступность канала. Используется роутером для выбора и фолбэка."""
+        raise NotImplementedError
