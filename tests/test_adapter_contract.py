@@ -18,6 +18,9 @@ class _StubAdapter(PlatformAdapter):
     async def get_stats(self, campaign_id: str) -> dict[str, float]:
         return {"impressions": 0.0}
 
+    async def health_check(self) -> bool:
+        return True
+
 
 def test_cannot_instantiate_abstract_adapter() -> None:
     with pytest.raises(TypeError):
