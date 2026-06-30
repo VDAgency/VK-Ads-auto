@@ -1,0 +1,8 @@
+# Caddy: HTTPS-терминатор и reverse-proxy перед ядром (FastAPI).
+# Сертификаты Let's Encrypt выпускаются автоматически (домен резолвится на сервер,
+# порт 80 открыт). Поддомены сервисов (n8n и пр.) добавляются отдельными блоками.
+
+vk-ads-auto.ru, www.vk-ads-auto.ru {
+	encode gzip
+	reverse_proxy api:8000
+}
