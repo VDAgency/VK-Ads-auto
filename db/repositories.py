@@ -5,7 +5,30 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Client
+from db.models import Client, Stat
+
+
+async def save_stat(
+    session: AsyncSession,
+    account_id: int,
+    campaign_id: str,
+    shows: float,
+    clicks: float,
+    spent: float,
+    results: float,
+) -> Stat:
+    """Сохранить срез метрик кампании."""
+    stat = Stat(
+        account_id=account_id,
+        campaign_id=campaign_id,
+        shows=shows,
+        clicks=clicks,
+        spent=spent,
+        results=results,
+    )
+    session.add(stat)
+    await session.flush()
+    return stat
 
 
 async def find_client_by_contacts(

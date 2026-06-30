@@ -81,3 +81,19 @@ class Brief(TenantMixin, Base):
     source: Mapped[str] = mapped_column(String(32), default="web")  # web | bot
     payload: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Stat(TenantMixin, Base):
+    """Срез метрик кампании на момент времени (для отчётов и дайджеста)."""
+
+    __tablename__ = "stat"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(String(64), index=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    shows: Mapped[float] = mapped_column(default=0.0)
+    clicks: Mapped[float] = mapped_column(default=0.0)
+    spent: Mapped[float] = mapped_column(default=0.0)
+    results: Mapped[float] = mapped_column(default=0.0)
