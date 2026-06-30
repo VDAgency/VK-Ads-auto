@@ -1,42 +1,94 @@
-"""VkApiAdapter — прямой VK Ads API. СКЕЛЕТ (живые вызовы ещё не реализованы).
+"""VkApiAdapter — прямой VK Ads API (myTarget v2) через httpx.
 
-Точные эндпоинты и поля VK Ads API сверяются с живой документацией (context7 / офсайт
-VK) и НЕ выдумываются (CLAUDE.md §6). Боевое создание кабинетов требует подтверждения
-агентского статуса ИП. До выполнения этих условий мутирующие методы бросают
-`NotImplementedError`. Токен берётся из per-account конфигурации (см. config.settings).
+Эндпоинты и поля — по docs/VK_API_REFERENCE.md (`ad_plans`→`ad_groups`→`banners`,
+цель `socialengagement`, статистика). Часть полей помечена в справке «verify» —
+сверять в песочнице перед боевыми мутациями (привязка сообщества, package_id).
+Адаптер мутаций НЕ вызывается автоматически; запуск идёт через оркестрацию, которую
+мы контролируем. Токен берётся из per-account конфигурации.
 """
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from typing import Any
+
+import httpx
 from pydantic import SecretStr
 
 from integrations.adapter import PlatformAdapter
 
-_PENDING = "VK Ads API: эндпоинты/поля сверяются с живой докой (context7) — pending"
+BASE_URL = "https://ads.vk.com/api/v2"
 
 
 class VkApiAdapter(PlatformAdapter):
-    """Адаптер прямого VK Ads API. Хранит токен; вызовы — после сверки с докой."""
+    """Адаптер прямого VK Ads API. `client` можно подменить (тесты/моки)."""
 
-    def __init__(self, access_token: SecretStr) -> None:
-        self._access_token = access_token
+    def __init__(self, access_token: SecretStr, *, client: httpx.AsyncClient | None = None) -> None:
+        self._token = access_token
+        self._client = client
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._token.get_secret_value()}"}
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        url = f"{BASE_URL}{path}"
+        headers = {**self._headers(), **kwargs.pop("headers", {})}
+        if self._client is not None:
+            return await self._client.request(method, url, headers=headers, **kwargs)
+        async with httpx.AsyncClient(timeout=30) as client:
+            return await client.request(method, url, headers=headers, **kwargs)
 
     async def health_check(self) -> bool:
-        # TODO: реальный health = read-only запрос к VK (scope read_user_info).
-        # Пока канал не введён в строй — считаем недоступным.
-        return False
+        """Read-only проверка: GET /user.json (scope read_user_info)."""
+        try:
+            response = await self._request("GET", "/user.json")
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200
 
     async def create_cabinet(self, account_id: int, client_ref: str) -> str:
-        raise NotImplementedError(_PENDING)
+        """Создать клиентский кабинет (агентство). Тело — см. справку (verify)."""
+        response = await self._request("POST", "/agency/clients.json", json={"name": client_ref})
+        response.raise_for_status()
+        return str(response.json()["id"])
 
     async def create_campaign(self, cabinet_id: str, goal: str) -> str:
-        raise NotImplementedError(_PENDING)
+        """Создать кампанию (ad_plan) с целью (например, socialengagement)."""
+        body = {"name": f"plan-{cabinet_id}", "objective": goal}
+        response = await self._request("POST", "/ad_plans.json", json=body)
+        response.raise_for_status()
+        return str(response.json()["id"])
 
     async def upload_creative(self, campaign_id: str, creative_ref: str) -> str:
-        raise NotImplementedError(_PENDING)
+        """Загрузить статичный креатив (multipart) и вернуть content id."""
+        content = await asyncio.to_thread(Path(creative_ref).read_bytes)
+        files = {"file": ("creative", content)}
+        response = await self._request("POST", "/content/static.json", files=files)
+        response.raise_for_status()
+        return str(response.json()["id"])
 
     async def launch(self, campaign_id: str) -> None:
-        raise NotImplementedError(_PENDING)
+        """Перевести кампанию в активное состояние."""
+        response = await self._request(
+            "POST", f"/ad_plans/{campaign_id}.json", json={"status": "active"}
+        )
+        response.raise_for_status()
 
     async def get_stats(self, campaign_id: str) -> dict[str, float]:
-        raise NotImplementedError(_PENDING)
+        """Снять сводную статистику кампании (base-метрики)."""
+        response = await self._request(
+            "GET", "/statistics/ad_plans/summary.json", params={"id": campaign_id}
+        )
+        response.raise_for_status()
+        return _parse_summary(response.json())
+
+
+def _parse_summary(payload: dict[str, Any]) -> dict[str, float]:
+    """Достать base-метрики из ответа статистики VK (показы/клики/расход/CTR)."""
+    items = payload.get("items") or []
+    if not items:
+        return {}
+    base = (items[0].get("total") or {}).get("base") or {}
+    metrics = ("shows", "clicks", "spent", "ctr", "cpc", "cpm", "goals")
+    return {key: float(base[key]) for key in metrics if key in base}
