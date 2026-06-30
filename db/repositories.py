@@ -5,7 +5,44 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Brief, Client, Stat
+from db.models import Brief, Client, Discount, Referral, Stat
+
+
+async def create_referral(
+    session: AsyncSession,
+    account_id: int,
+    referrer_client_id: int,
+    referred_client_id: int,
+) -> Referral:
+    """Записать факт «реферер привёл клиента»."""
+    referral = Referral(
+        account_id=account_id,
+        referrer_client_id=referrer_client_id,
+        referred_client_id=referred_client_id,
+    )
+    session.add(referral)
+    await session.flush()
+    return referral
+
+
+async def create_discount(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    percent: int,
+    month: str,
+) -> Discount:
+    """Начислить скидку клиенту на месяц."""
+    discount = Discount(
+        account_id=account_id,
+        client_id=client_id,
+        percent=percent,
+        month=month,
+        status="pending",
+    )
+    session.add(discount)
+    await session.flush()
+    return discount
 
 
 async def get_client(session: AsyncSession, account_id: int, client_id: int) -> Client | None:

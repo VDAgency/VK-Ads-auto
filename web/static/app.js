@@ -27,11 +27,12 @@ async function submitBrief(form) {
   const result = document.querySelector(".result");
   const btn = form.querySelector('button[type="submit"]');
   if (btn) btn.disabled = true;
+  const refCode = new URLSearchParams(location.search).get("ref");
   try {
     const resp = await fetch("/api/v1/briefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ variant: variant, payload: payload }),
+      body: JSON.stringify({ variant: variant, payload: payload, ref_code: refCode }),
     });
     if (resp.status === 201) {
       showResult(result, "ok", "Бриф отправлен. Спасибо — мы свяжемся с вами.");

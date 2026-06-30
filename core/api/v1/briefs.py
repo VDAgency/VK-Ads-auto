@@ -26,6 +26,7 @@ class BriefIn(BaseModel):
 
     variant: Literal["individual", "community"]
     payload: dict[str, str]
+    ref_code: str | None = None
 
 
 class BriefOut(BaseModel):
@@ -49,6 +50,7 @@ async def submit_brief(
             BriefVariant(data.variant),
             data.payload,
             source="web",
+            ref_code=data.ref_code,
         )
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc

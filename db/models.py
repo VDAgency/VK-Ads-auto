@@ -97,3 +97,27 @@ class Stat(TenantMixin, Base):
     clicks: Mapped[float] = mapped_column(default=0.0)
     spent: Mapped[float] = mapped_column(default=0.0)
     results: Mapped[float] = mapped_column(default=0.0)
+
+
+class Referral(TenantMixin, Base):
+    """Кто кого привёл (одноуровневая рефералка, Блок 2)."""
+
+    __tablename__ = "referral"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    referrer_client_id: Mapped[int] = mapped_column(ForeignKey("client.id"), index=True)
+    referred_client_id: Mapped[int] = mapped_column(ForeignKey("client.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Discount(TenantMixin, Base):
+    """Скидка реферера на 1 месяц (задел под автоматизацию платежей)."""
+
+    __tablename__ = "discount"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("client.id"), index=True)
+    percent: Mapped[int] = mapped_column(default=0)
+    month: Mapped[str] = mapped_column(String(7))  # YYYY-MM
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | applied
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

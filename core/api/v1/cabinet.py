@@ -15,6 +15,7 @@ from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from services.auth_magiclink import generate_token, verify_token
+from services.referral import generate_ref_code
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/cabinet", tags=["cabinet"])
@@ -44,6 +45,7 @@ class CabinetView(BaseModel):
     client_id: int
     full_name: str | None
     briefs: list[BriefStatus]
+    referral_url: str
 
 
 @router.post("/request-link", status_code=201)
@@ -75,8 +77,11 @@ async def view_cabinet(
     if client is None:
         raise HTTPException(status_code=404, detail="Клиент не найден")
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
+    settings = get_settings()
+    ref_code = generate_ref_code(client.id, settings.secret_key.get_secret_value())
     return CabinetView(
         client_id=client.id,
         full_name=client.full_name,
         briefs=[BriefStatus(id=b.id, variant=b.variant, status=b.status) for b in briefs],
+        referral_url=f"{settings.public_base_url}/?ref={ref_code}",
     )
