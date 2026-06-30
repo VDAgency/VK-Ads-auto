@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Окружение приложения: local / staging / production.
     app_env: str = "local"
 
+    # Публичный базовый URL (для ссылок на брифы из бота).
+    public_base_url: str = "https://vk-ads-auto.ru"
+
     # Строки подключения к инфраструктуре (значения — только из env).
     database_url: str = "postgresql+asyncpg://localhost/vk_ads_auto"
     redis_url: str = "redis://localhost:6379/0"
