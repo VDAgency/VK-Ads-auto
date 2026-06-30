@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Бриф для бизнеса — VK-Ads-auto</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar"><div class="brand">VK<span>·</span>Ads<span>·</span>auto</div></header>
+
+    <main class="wrap">
+      <div class="eyebrow">Бриф · подписчики в сообщество</div>
+      <h2>Расскажите о компании и продвижении</h2>
+      <p class="lead">Поля со звёздочкой обязательны. Это займёт пару минут.</p>
+
+      <form data-variant="community" novalidate>
+        <div class="section-title">Сообщество и контакт</div>
+        <div class="field">
+          <div class="num">01</div>
+          <div>
+            <label for="full_name">Контактное лицо *</label>
+            <input id="full_name" name="full_name" autocomplete="name" />
+            <div class="error">Укажите имя</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">02</div>
+          <div>
+            <label for="object_url">Ссылка на сообщество VK *</label>
+            <input id="object_url" name="object_url" placeholder="https://vk.com/club..." />
+            <div class="error">Укажите ссылку на сообщество</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">03</div>
+          <div>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" />
+            <div class="error">Нужен хотя бы один контакт</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">04</div>
+          <div>
+            <label for="phone">Телефон</label>
+            <input id="phone" name="phone" inputmode="tel" placeholder="+7..." />
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">05</div>
+          <div>
+            <label for="telegram">Telegram</label>
+            <input id="telegram" name="telegram" placeholder="@username" />
+          </div>
+        </div>
+
+        <div class="section-title">О бизнесе</div>
+        <div class="field">
+          <div class="num">06</div>
+          <div>
+            <label for="niche">Ниша / сфера *</label>
+            <input id="niche" name="niche" placeholder="например, кофейня, автосервис" />
+            <div class="error">Укажите нишу</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">07</div>
+          <div>
+            <label for="org_type">Форма организации *</label>
+            <select id="org_type" name="org_type">
+              <option value="">—</option>
+              <option value="ИП">ИП</option>
+              <option value="ООО / юрлицо">ООО / юрлицо</option>
+              <option value="Самозанятый">Самозанятый</option>
+              <option value="Физлицо">Физлицо</option>
+            </select>
+            <div class="error">Выберите форму организации</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">08</div>
+          <div>
+            <label for="product_description">Что продвигаем (товар/услуга) *</label>
+            <textarea id="product_description" name="product_description"></textarea>
+            <div class="error">Опишите продукт или услугу</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">09</div>
+          <div>
+            <label for="site_url">Сайт (если есть)</label>
+            <input id="site_url" name="site_url" placeholder="https://" />
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">10</div>
+          <div>
+            <label for="usp">Чем вы лучше конкурентов</label>
+            <textarea id="usp" name="usp"></textarea>
+          </div>
+        </div>
+
+        <div class="section-title">Аудитория</div>
+        <div class="field">
+          <div class="num">11</div>
+          <div>
+            <label for="audience_description">Кого хотим привлекать *</label>
+            <textarea id="audience_description" name="audience_description"></textarea>
+            <div class="error">Опишите аудиторию</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">12</div>
+          <div>
+            <label for="geo">География *</label>
+            <input id="geo" name="geo" placeholder="Город, регион" />
+            <div class="error">Укажите географию</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">13</div>
+          <div>
+            <label for="gender">Пол аудитории</label>
+            <select id="gender" name="gender">
+              <option value="">Любой</option>
+              <option value="мужской">Мужской</option>
+              <option value="женский">Женский</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="section-title">Бюджет</div>
+        <div class="field">
+          <div class="num">14</div>
+          <div>
+            <label for="budget">Бюджет на рекламу *</label>
+            <input id="budget" name="budget" placeholder="например, 50000 ₽ или «готов обсудить»" />
+            <div class="error">Укажите бюджет</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="num">15</div>
+          <div>
+            <label for="term">Срок / период *</label>
+            <input id="term" name="term" placeholder="например, 1 месяц" />
+            <div class="error">Укажите срок</div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn--primary">Отправить бриф</button>
+      </form>
+
+      <div class="result" role="status" aria-live="polite"></div>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,117 @@
+:root {
+  --ink: #0b1221;
+  --paper: #f7f8fa;
+  --surface: #ffffff;
+  --accent: #2a6bff;
+  --muted: #5b6678;
+  --line: #e3e7ee;
+  --success: #12a594;
+  --danger: #e5484d;
+  --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); }
+
+.topbar {
+  background: var(--ink);
+  color: #fff;
+  padding: 16px 24px;
+}
+.topbar .brand {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.topbar .brand span { color: var(--accent); }
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
+.wrap--wide { max-width: 1080px; }
+
+h1 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 12px; }
+h2 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
+.lead { font-size: 18px; color: var(--muted); margin: 0 0 32px; }
+.eyebrow { font-family: var(--mono); font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* Hero (landing) */
+.hero { padding: 56px 0 24px; }
+.cards { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; margin-top: 24px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 24px;
+}
+.card h3 { margin: 0 0 6px; font-size: 20px; }
+.card p { color: var(--muted); margin: 0 0 16px; }
+
+/* Form fields with mono number markers (signature) */
+.field { display: grid; grid-template-columns: 40px 1fr; gap: 12px; margin-bottom: 20px; align-items: start; }
+.field .num { font-family: var(--mono); color: var(--accent); font-size: 15px; padding-top: 30px; }
+.field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.field .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.field input, .field select, .field textarea {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.field textarea { min-height: 76px; resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.field.invalid input, .field.invalid select, .field.invalid textarea { border-color: var(--danger); }
+.field .error { color: var(--danger); font-size: 12px; margin-top: 4px; display: none; }
+.field.invalid .error { display: block; }
+
+fieldset { border: 0; padding: 0; margin: 0 0 8px; }
+.section-title { font-family: var(--mono); font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 28px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+
+.btn {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 12px 20px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-decoration: none;
+  display: inline-block;
+}
+.btn--primary { background: var(--accent); color: #fff; }
+.btn--primary:hover { background: #1f59e0; }
+.btn--ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; color: var(--muted); font-size: 14px; }
+.result { border-radius: 10px; padding: 16px; margin-top: 20px; display: none; }
+.result.show { display: block; }
+.result.ok { background: rgba(18,165,148,0.1); border: 1px solid var(--success); color: #0c6b60; }
+.result.err { background: rgba(229,72,77,0.08); border: 1px solid var(--danger); color: #a3262b; }
+
+@media (max-width: 640px) {
+  h1 { font-size: 30px; }
+  .cards { grid-template-columns: 1fr; }
+  .field { grid-template-columns: 28px 1fr; gap: 8px; }
+  .field .num { padding-top: 28px; font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
