@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from core.api.v1 import briefs
+
 router = APIRouter(prefix="/api/v1", tags=["v1"])
+router.include_router(briefs.router)
 
 
 @router.get("/ping")
