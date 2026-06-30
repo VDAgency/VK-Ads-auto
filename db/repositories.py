@@ -5,7 +5,23 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Client, Stat
+from db.models import Brief, Client, Stat
+
+
+async def get_client(session: AsyncSession, account_id: int, client_id: int) -> Client | None:
+    """Получить клиента тенанта по id."""
+    stmt = select(Client).where(Client.account_id == account_id, Client.id == client_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_client_briefs(session: AsyncSession, account_id: int, client_id: int) -> list[Brief]:
+    """Брифы клиента (свежие первыми)."""
+    stmt = (
+        select(Brief)
+        .where(Brief.account_id == account_id, Brief.client_id == client_id)
+        .order_by(Brief.id.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def save_stat(
