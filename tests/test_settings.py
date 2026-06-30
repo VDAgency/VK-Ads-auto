@@ -41,17 +41,27 @@ def test_token_fields_default_empty() -> None:
     assert settings.vk_ads_access_token.get_secret_value() == ""
     assert settings.vk_ads_refresh_token.get_secret_value() == ""
     assert settings.vk_ads_token_type == "Bearer"
-    assert settings.operator_telegram_id is None
+    assert settings.operator_telegram_ids == frozenset()
 
 
 def test_tokens_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("VK_ADS_ACCESS_TOKEN", "vk-access")
-    monkeypatch.setenv("OPERATOR_TELEGRAM_ID", "12345")
     settings = Settings(_env_file=None)
     assert settings.bot_token.get_secret_value() == "test-bot-token"
     assert settings.vk_ads_access_token.get_secret_value() == "vk-access"
-    assert settings.operator_telegram_id == 12345
+
+
+def test_operator_ids_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPERATOR_TELEGRAM_IDS", "5389520473, 5481870843")
+    settings = Settings(_env_file=None)
+    assert settings.operator_telegram_ids == frozenset({5389520473, 5481870843})
+
+
+def test_is_operator() -> None:
+    settings = Settings(_env_file=None, operator_telegram_ids=frozenset({111, 222}))
+    assert settings.is_operator(111) is True
+    assert settings.is_operator(999) is False
 
 
 def test_secret_not_in_repr() -> None:
