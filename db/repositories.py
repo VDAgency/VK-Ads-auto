@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import or_, select
+from datetime import UTC, datetime
+from typing import cast
+
+from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Brief, Client, Discount, Referral, Stat
+from db.models import Brief, BriefInvite, Client, Discount, Referral, Stat
 
 
 async def create_referral(
@@ -126,3 +129,116 @@ async def create_client(
     session.add(client)
     await session.flush()
     return client
+
+
+# ============================================================================
+# BriefInvite (см. spec docs/superpowers/specs/2026-07-13-brief-userbot-delivery-design.md)
+# ============================================================================
+
+
+async def create_brief_invite(
+    session: AsyncSession,
+    account_id: int,
+    operator_id: int,
+    token: str,
+    variant: str,
+    contact_type: str,
+    contact_value: str,
+    channel: str,
+    client_id: int | None = None,
+) -> BriefInvite:
+    """Создать инвайт в статусе pending. Токен должен быть уже сгенерирован сервисом."""
+    invite = BriefInvite(
+        account_id=account_id,
+        operator_id=operator_id,
+        token=token,
+        variant=variant,
+        contact_type=contact_type,
+        contact_value=contact_value,
+        channel=channel,
+        client_id=client_id,
+        status="pending",
+    )
+    session.add(invite)
+    await session.flush()
+    return invite
+
+
+async def find_brief_invite_by_token(
+    session: AsyncSession,
+    token: str,
+) -> BriefInvite | None:
+    """Найти инвайт по токену. Скоуп тенанта не нужен — токен уникален глобально."""
+    stmt = select(BriefInvite).where(BriefInvite.token == token)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def find_last_failed_invite(
+    session: AsyncSession,
+    account_id: int,
+    operator_id: int,
+    contact_value: str,
+) -> BriefInvite | None:
+    """Найти самый свежий failed-инвайт того же оператора по тому же контакту.
+
+    Нужен для supersede-логики: при повторной ошибочной отправке предыдущий failed
+    получит статус `superseded`, чтобы не копить мусор.
+    """
+    stmt = (
+        select(BriefInvite)
+        .where(
+            BriefInvite.account_id == account_id,
+            BriefInvite.operator_id == operator_id,
+            BriefInvite.contact_value == contact_value,
+            BriefInvite.status == "failed",
+        )
+        .order_by(BriefInvite.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def mark_invite_sent(session: AsyncSession, invite_id: int) -> None:
+    """Пометить инвайт доставленным (channel: telegram/email/manual)."""
+    await session.execute(
+        update(BriefInvite)
+        .where(BriefInvite.id == invite_id)
+        .values(status="sent", delivered_at=datetime.now(UTC), error=None)
+    )
+
+
+async def mark_invite_failed(
+    session: AsyncSession,
+    invite_id: int,
+    error: str,
+) -> None:
+    """Пометить инвайт failed с кодом ошибки (напр. username_not_occupied)."""
+    await session.execute(
+        update(BriefInvite).where(BriefInvite.id == invite_id).values(status="failed", error=error)
+    )
+
+
+async def mark_invite_superseded(session: AsyncSession, invite_id: int) -> None:
+    """Пометить старый failed-инвайт заменённым — не показываем оператору дальше."""
+    await session.execute(
+        update(BriefInvite).where(BriefInvite.id == invite_id).values(status="superseded")
+    )
+
+
+async def mark_invite_received_if_sent(session: AsyncSession, invite_id: int) -> bool:
+    """Атомарный переход `sent → received` (защита от двойного POST /briefs).
+
+    Возвращает True, если ровно эта строка обновилась. False — если инвайт был
+    в другом статусе (уже received, failed, superseded) → вызов клиента вернёт 409.
+    """
+    # cast: session.execute() возвращает Result[Any], но для DML это CursorResult
+    # с полем rowcount — известное ограничение типизации SQLAlchemy async.
+    result = cast(
+        CursorResult[tuple[int, ...]],
+        await session.execute(
+            update(BriefInvite)
+            .where(BriefInvite.id == invite_id, BriefInvite.status == "sent")
+            .values(status="received", received_at=datetime.now(UTC))
+        ),
+    )
+    return bool(result.rowcount)
