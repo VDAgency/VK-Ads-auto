@@ -69,7 +69,9 @@ class Brief(TenantMixin, Base):
     """Бриф клиента: сырой ответ формы + вариант (физлицо/сообщество) + статус.
 
     Структурированный разбор делает `services.brief_parser`; здесь хранится исходный
-    `payload` (как пришёл с веб-формы/бота) и связь с клиентом по контактам.
+    `payload` (как пришёл с веб-формы/бота) и связь с клиентом по контактам. Поле
+    `invite_id` заполняется, если бриф пришёл по токен-ссылке, которую оператор
+    заранее отправил через `BriefInvite` (см. spec 2026-07-13).
     """
 
     __tablename__ = "brief"
@@ -80,7 +82,39 @@ class Brief(TenantMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="received")
     source: Mapped[str] = mapped_column(String(32), default="web")  # web | bot
     payload: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    invite_id: Mapped[int | None] = mapped_column(
+        ForeignKey("brief_invite.id"), index=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BriefInvite(TenantMixin, Base):
+    """Отправленное клиенту приглашение заполнить бриф (см. spec 2026-07-13).
+
+    Один инвайт — одна отправка. Токен уникален и вшит в URL формы; при приёме
+    брифа мы находим инвайт по токену и метим его `received`. Статусы: `pending`
+    (создан, доставка ещё не начата), `sent` (доставлен через канал), `failed`
+    (канал сорвался, оператор получил fallback-текст), `received` (клиент прислал
+    бриф), `superseded` (заменён более новым инвайтом того же клиента с той же
+    ошибкой). См. §4 спеки для статус-машины.
+    """
+
+    __tablename__ = "brief_invite"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    variant: Mapped[str] = mapped_column(String(32))  # individual | community
+    contact_type: Mapped[str] = mapped_column(String(16))  # email | phone | telegram
+    contact_value: Mapped[str] = mapped_column(String(255), index=True)
+    channel: Mapped[str] = mapped_column(String(16))  # telegram | email | manual
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # pending | sent | failed | received | superseded
+    error: Mapped[str | None] = mapped_column(String(500), default=None)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("operator.id"), index=True)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("client.id"), index=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class Stat(TenantMixin, Base):
