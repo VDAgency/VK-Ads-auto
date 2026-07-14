@@ -11,7 +11,9 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from config.settings import get_settings
 
-from bot.handlers import send_brief, start
+from bot.handlers import help as help_handler
+from bot.handlers import link_userbot, pending, send_brief, start, stats
+from bot.menu import setup_bot_commands
 
 
 def build_dispatcher() -> Dispatcher:
@@ -19,6 +21,10 @@ def build_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.include_router(start.router)
     dispatcher.include_router(send_brief.router)
+    dispatcher.include_router(pending.router)
+    dispatcher.include_router(stats.router)
+    dispatcher.include_router(link_userbot.router)
+    dispatcher.include_router(help_handler.router)
     return dispatcher
 
 
@@ -28,6 +34,7 @@ async def run() -> None:
     if not token:
         raise RuntimeError("BOT_TOKEN не задан — бот не запускается")
     bot = Bot(token=token)
+    await setup_bot_commands(bot)
     dispatcher = build_dispatcher()
     await dispatcher.start_polling(bot)
 

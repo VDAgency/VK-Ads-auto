@@ -31,6 +31,9 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Бот ходит за данными во внутренний API ядра (сервис `api` в этой сети).
+      CORE_BASE_URL: http://api:8000
     depends_on:
       - api
       - redis

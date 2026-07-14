@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     # Ключ Fernet (base64, 32 байта) для шифрования StringSession Анастасии.
     userbot_secret_key: SecretStr = SecretStr("")
 
+    # Внутренний API ядра для тонких клиентов (бот ходит сюда, не в БД, §1.3 CLAUDE.md).
+    # Дефолт — имя сервиса ядра в docker-compose; локально задаётся через env.
+    core_base_url: str = "http://api:8000"
+
+    # Мок-гейт статистики (§7 spec 2026-07-15). Демо-данные показываем, пока нет
+    # реальных метрик, не истёк срок и клиентов меньше порога. Как только любое
+    # условие нарушено — гейт закрывается, моки исчезают сами.
+    mock_until: str = "2026-12-31"  # дата отключения демо (ISO, env: MOCK_UNTIL)
+    mock_max_clients: int = 5  # порог реальных клиентов (env: MOCK_MAX_CLIENTS)
+
     # SMTP (доставка ссылки на бриф по email) — см. spec 2026-07-13 §5, §11.
     smtp_host: str = ""
     smtp_port: int = 465
