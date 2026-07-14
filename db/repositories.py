@@ -8,7 +8,7 @@ from typing import cast
 from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Brief, BriefInvite, Client, Discount, Referral, Stat
+from db.models import Brief, BriefInvite, Client, Discount, Operator, Referral, Stat
 
 
 async def create_referral(
@@ -46,6 +46,33 @@ async def create_discount(
     session.add(discount)
     await session.flush()
     return discount
+
+
+async def get_operator_by_id(session: AsyncSession, operator_id: int) -> Operator | None:
+    """Получить оператора по id (для уведомления по его telegram_id)."""
+    stmt = select(Operator).where(Operator.id == operator_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_or_create_operator(
+    session: AsyncSession,
+    account_id: int,
+    telegram_id: int,
+) -> Operator:
+    """Найти оператора тенанта по telegram_id или создать нового.
+
+    `POST /invites` приходит от бота с `operator_telegram_id`; для FK `invite.operator_id`
+    нужен операторский id в БД. Оператор — доверенный (проверка доступа на стороне бота).
+    """
+    stmt = select(Operator).where(
+        Operator.account_id == account_id, Operator.telegram_id == telegram_id
+    )
+    operator = (await session.execute(stmt)).scalar_one_or_none()
+    if operator is None:
+        operator = Operator(account_id=account_id, telegram_id=telegram_id)
+        session.add(operator)
+        await session.flush()
+    return operator
 
 
 async def get_client(session: AsyncSession, account_id: int, client_id: int) -> Client | None:

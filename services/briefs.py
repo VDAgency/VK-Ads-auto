@@ -10,12 +10,28 @@ from collections.abc import Mapping
 from datetime import datetime
 
 from config.settings import get_settings
-from db.models import Brief
-from db.repositories import create_client, find_client_by_contacts, get_client
+from db.models import Brief, BriefInvite
+from db.repositories import (
+    create_client,
+    find_client_by_contacts,
+    get_client,
+    mark_invite_received_if_sent,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_parser import BriefVariant, parse_brief
 from services.referral import register_referral, resolve_ref_code
+
+
+class InviteNotActiveError(Exception):
+    """Инвайт найден, но не в статусе `sent` (уже received/failed/superseded).
+
+    Вызывающий роутер отвечает 409 — повтор или устаревшая ссылка.
+    """
+
+
+class InviteReceiveConflictError(Exception):
+    """Гонка: инвайт перестал быть `sent` между проверкой и атомарным переходом."""
 
 
 async def _maybe_register_referral(
@@ -39,12 +55,17 @@ async def intake_brief(
     payload: Mapping[str, str],
     source: str = "web",
     ref_code: str | None = None,
+    invite: BriefInvite | None = None,
 ) -> Brief:
     """Принять бриф: разобрать, привязать/создать клиента, сохранить.
 
     Бросает `BriefValidationError`, если не хватает обязательных полей.
     Клиент ищется по совпадению любого из контактов (email/phone/telegram).
     Если клиент новый и пришёл по реф-коду — фиксируем реферал и скидку рефереру.
+
+    Если бриф пришёл по токен-ссылке (`invite` задан), связываем его с инвайтом
+    и атомарно метим инвайт `received` (`sent → received`). Если инвайт уже не
+    `sent` (гонка двойного POST) — `InviteReceiveConflictError`, роутер отдаёт 409.
     """
     parsed = parse_brief(payload, variant)
     contact = parsed.contact
@@ -66,6 +87,12 @@ async def intake_brief(
     if ref_code and is_new_client:
         await _maybe_register_referral(session, account_id, ref_code, client.id)
 
+    if invite is not None:
+        received = await mark_invite_received_if_sent(session, invite.id)
+        if not received:
+            await session.rollback()
+            raise InviteReceiveConflictError
+
     brief = Brief(
         account_id=account_id,
         client_id=client.id,
@@ -73,6 +100,7 @@ async def intake_brief(
         status="received",
         source=source,
         payload=dict(payload),
+        invite_id=invite.id if invite is not None else None,
     )
     session.add(brief)
     await session.commit()

@@ -39,10 +39,27 @@ def delivery_channel(contact: Contact) -> DeliveryChannel:
     return DeliveryChannel.MANUAL
 
 
-def compose_invite(variant: BriefVariant, base_url: str) -> str:
-    """Текст-приглашение для клиента со ссылкой на бриф."""
-    url = brief_url(variant, base_url)
+def brief_url_with_token(variant: BriefVariant, token: str, base_url: str) -> str:
+    """Ссылка на форму брифа с вшитым токеном инвайта (`?t=...`).
+
+    Форма читает `t` из query и присылает его в `POST /api/v1/briefs`, чтобы
+    ядро связало бриф с инвайтом и пометило его `received` (spec §4, §7).
+    """
+    return f"{brief_url(variant, base_url)}?t={token}"
+
+
+def _invite_text(url: str) -> str:
     return (
         "Здравствуйте! Для запуска рекламы заполните, пожалуйста, короткий бриф "
         f"(пара минут): {url}"
     )
+
+
+def compose_invite(variant: BriefVariant, base_url: str) -> str:
+    """Текст-приглашение для клиента со ссылкой на бриф (без токена)."""
+    return _invite_text(brief_url(variant, base_url))
+
+
+def invite_text_with_token(variant: BriefVariant, token: str, base_url: str) -> str:
+    """Текст-приглашение со ссылкой, содержащей токен инвайта."""
+    return _invite_text(brief_url_with_token(variant, token, base_url))
