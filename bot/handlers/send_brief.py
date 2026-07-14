@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from config.settings import get_settings
@@ -17,7 +17,7 @@ from services.brief_parser import BriefVariant
 from services.contact import ContactParseError, detect_contact
 
 from bot.access import OperatorOnly
-from bot.keyboards import variant_keyboard
+from bot.keyboards import BTN_SEND_BRIEF, variant_keyboard
 from bot.states import SendBrief
 
 router = Router(name="send_brief")
@@ -31,7 +31,7 @@ _CHANNEL_HINT = {
 }
 
 
-@router.message(Command("send_brief"))
+@router.message(or_f(Command("send_brief"), F.text == BTN_SEND_BRIEF))
 async def start_send_brief(message: Message, state: FSMContext) -> None:
     """Начать сценарий: спросить вариант брифа."""
     await state.set_state(SendBrief.choosing_variant)
