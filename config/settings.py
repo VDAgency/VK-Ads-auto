@@ -51,6 +51,19 @@ class Settings(BaseSettings):
     vk_ads_refresh_token: SecretStr = SecretStr("")
     vk_ads_token_type: str = "Bearer"
 
+    # Userbot (Telethon-сервис доставки в Telegram) — см. spec 2026-07-13 §6.
+    # Пустой BASE_URL = сервис не сконфигурирован; адаптер вернёт userbot_unreachable.
+    userbot_base_url: str = ""
+    # Ключ Fernet (base64, 32 байта) для шифрования StringSession Анастасии.
+    userbot_secret_key: SecretStr = SecretStr("")
+
+    # SMTP (доставка ссылки на бриф по email) — см. spec 2026-07-13 §5, §11.
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from_name: str = "VK Ads Auto"
+
     @field_validator("operator_telegram_ids", mode="before")
     @classmethod
     def _parse_operator_ids(cls, value: object) -> object:
