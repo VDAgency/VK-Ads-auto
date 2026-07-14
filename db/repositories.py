@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import CursorResult, or_, select, update
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Brief, BriefInvite, Client, Discount, Referral, Stat
@@ -223,6 +223,52 @@ async def mark_invite_superseded(session: AsyncSession, invite_id: int) -> None:
     await session.execute(
         update(BriefInvite).where(BriefInvite.id == invite_id).values(status="superseded")
     )
+
+
+async def count_clients(session: AsyncSession, account_id: int) -> int:
+    """Сколько клиентов у тенанта — вход мок-гейта (§7)."""
+    stmt = select(func.count()).select_from(Client).where(Client.account_id == account_id)
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def list_stat_campaign_ids(session: AsyncSession, account_id: int) -> list[str]:
+    """Уникальные `campaign_id`, по которым есть срезы `Stat` (реальные кабинеты)."""
+    stmt = (
+        select(Stat.campaign_id)
+        .where(Stat.account_id == account_id)
+        .group_by(Stat.campaign_id)
+        .order_by(Stat.campaign_id)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def aggregate_cabinet_stats(
+    session: AsyncSession,
+    account_id: int,
+    campaign_id: str,
+    *,
+    since: datetime | None = None,
+) -> dict[str, float]:
+    """Суммарные метрики кабинета (кампании) с момента `since` (или за всё время).
+
+    Возвращает нули, если срезов нет — вызывающий решает, показывать ли мок.
+    """
+    conditions = [Stat.account_id == account_id, Stat.campaign_id == campaign_id]
+    if since is not None:
+        conditions.append(Stat.captured_at >= since)
+    stmt = select(
+        func.coalesce(func.sum(Stat.shows), 0.0),
+        func.coalesce(func.sum(Stat.clicks), 0.0),
+        func.coalesce(func.sum(Stat.spent), 0.0),
+        func.coalesce(func.sum(Stat.results), 0.0),
+    ).where(*conditions)
+    row = (await session.execute(stmt)).one()
+    return {
+        "shows": float(row[0]),
+        "clicks": float(row[1]),
+        "spent": float(row[2]),
+        "results": float(row[3]),
+    }
 
 
 async def list_pending_invites(

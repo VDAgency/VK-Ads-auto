@@ -32,6 +32,32 @@ class InviteItem:
     waiting_days: int
 
 
+@dataclass(frozen=True, slots=True)
+class CabinetItem:
+    """Карточка кабинета (зеркало `CabinetItem` ядра)."""
+
+    id: str
+    name: str
+    status: str
+    launched_at: str
+    is_mock: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CabinetStats:
+    """Метрики кабинета за период (зеркало `StatsOut` ядра)."""
+
+    cabinet_id: str
+    period: str
+    shows: float
+    clicks: float
+    spent: float
+    results: float
+    ctr: float
+    cpc: float
+    is_mock: bool
+
+
 def _base_url() -> str:
     return get_settings().core_base_url.rstrip("/")
 
@@ -61,3 +87,15 @@ async def get_pending() -> list[InviteItem]:
 async def get_recent() -> list[InviteItem]:
     """Инвайты, по которым бриф пришёл за последнюю неделю."""
     return _to_invites(await _get("/invites", {"status": "recent"}))
+
+
+async def get_cabinets() -> list[CabinetItem]:
+    """Список рекламных кабинетов (реальные или демо)."""
+    payload = await _get("/cabinets")
+    return [CabinetItem(**item) for item in payload.get("items", [])]
+
+
+async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
+    """Метрики кабинета за период (`all`/`month`/`week`)."""
+    payload = await _get(f"/cabinets/{cabinet_id}/stats", {"period": period})
+    return CabinetStats(**payload)

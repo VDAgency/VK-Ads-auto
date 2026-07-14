@@ -39,3 +39,29 @@ def variant_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def cabinets_keyboard(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Список кабинетов инлайн-кнопками. `items` = [(cabinet_id, подпись)]."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"cabinet:{cid}")]
+            for cid, label in items
+        ]
+    )
+
+
+# Подписи периодов статистики (callback `stats:{cabinet_id}:{period}`).
+_PERIOD_LABELS = [("all", "С запуска"), ("month", "Месяц"), ("week", "Неделя")]
+
+
+def stats_period_keyboard(cabinet_id: str) -> InlineKeyboardMarkup:
+    """Переключатель периода метрик кабинета."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=label, callback_data=f"stats:{cabinet_id}:{period}")
+                for period, label in _PERIOD_LABELS
+            ]
+        ]
+    )
