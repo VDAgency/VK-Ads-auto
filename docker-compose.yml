@@ -34,6 +34,29 @@ services:
     depends_on:
       - api
       - redis
+      - userbot
+
+  # Сервис доставки в Telegram (Telethon). Порт наружу не публикуется — только
+  # внутри compose-сети (ядро ходит по http://userbot:8001). Сессия — в ./secrets.
+  userbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.userbot
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./secrets:/secrets
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   postgres:
     image: postgres:16-alpine
