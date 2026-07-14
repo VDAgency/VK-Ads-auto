@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,18 @@ _TIMEOUT = httpx.Timeout(10.0)
 
 class CoreUnavailable(RuntimeError):
     """Ядро недоступно (сеть/таймаут/5xx) — показать заглушку оператору."""
+
+
+class UserbotUnavailable(RuntimeError):
+    """Юзербот-сервис не сконфигурирован или недоступен — работаем в мок-режиме."""
+
+
+class UserbotAuthError(RuntimeError):
+    """Юзербот отверг код/пароль (400) — показать оператору причину, дать повтор."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,3 +112,78 @@ async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
     """Метрики кабинета за период (`all`/`month`/`week`)."""
     payload = await _get(f"/cabinets/{cabinet_id}/stats", {"period": period})
     return CabinetStats(**payload)
+
+
+# --- Юзербот (Telethon-сервис доставки, spec §9) ----------------------------
+#
+# Ходим напрямую в userbot-сервис (свой BASE_URL), не через ядро. Пустой
+# `USERBOT_BASE_URL` = сервис не сконфигурирован → `UserbotUnavailable`
+# (хендлер уходит в мок-режим). 400 от auth-эндпоинтов = неверный код/пароль.
+
+
+@dataclass(frozen=True, slots=True)
+class UserbotHealth:
+    """Состояние авторизации юзербота (зеркало `/health`)."""
+
+    authorized: bool
+    phone: str | None = None
+
+
+def _userbot_base_url() -> str:
+    return get_settings().userbot_base_url.rstrip("/")
+
+
+def userbot_configured() -> bool:
+    """Задан ли `USERBOT_BASE_URL` — иначе хендлер работает в мок-режиме."""
+    return bool(_userbot_base_url())
+
+
+async def _userbot_request(
+    method: str, path: str, json: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Запрос к userbot-сервису; сеть/5xx → `UserbotUnavailable`, 400 → `UserbotAuthError`."""
+    base = _userbot_base_url()
+    if not base:
+        raise UserbotUnavailable("userbot_base_url is empty")
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.request(method, f"{base}{path}", json=json)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise UserbotUnavailable(str(exc)) from exc
+    if response.status_code == 400:
+        detail = "unknown"
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", "unknown"))
+        raise UserbotAuthError(detail)
+    if response.status_code >= 500:
+        raise UserbotUnavailable(f"userbot {response.status_code}")
+    result: dict[str, Any] = response.json()
+    return result
+
+
+async def userbot_status() -> UserbotHealth:
+    """Опрос `/health` юзербота: авторизован ли, под каким номером."""
+    payload = await _userbot_request("GET", "/health")
+    return UserbotHealth(
+        authorized=bool(payload.get("authorized", False)),
+        phone=payload.get("phone"),
+    )
+
+
+async def userbot_start_auth(phone: str) -> str:
+    """`/auth/start` — вернуть `phone_code_hash` для последующего ввода кода."""
+    payload = await _userbot_request("POST", "/auth/start", {"phone": phone})
+    return str(payload["phone_code_hash"])
+
+
+async def userbot_submit_code(phone: str, code: str, phone_code_hash: str) -> bool:
+    """`/auth/code` — вернуть `needs_password` (нужен ли ввод пароля 2FA)."""
+    payload = await _userbot_request(
+        "POST", "/auth/code", {"phone": phone, "code": code, "phone_code_hash": phone_code_hash}
+    )
+    return bool(payload.get("needs_password", False))
+
+
+async def userbot_submit_password(password: str) -> None:
+    """`/auth/password` — завершить авторизацию при включённом 2FA."""
+    await _userbot_request("POST", "/auth/password", {"password": password})
