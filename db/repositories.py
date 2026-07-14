@@ -225,6 +225,40 @@ async def mark_invite_superseded(session: AsyncSession, invite_id: int) -> None:
     )
 
 
+async def list_pending_invites(
+    session: AsyncSession,
+    account_id: int,
+) -> list[BriefInvite]:
+    """Инвайты, доставленные клиенту, но ещё не вернувшиеся брифом (`sent`).
+
+    Сортировка: самые старые сверху — их дольше всех ждём.
+    """
+    stmt = (
+        select(BriefInvite)
+        .where(BriefInvite.account_id == account_id, BriefInvite.status == "sent")
+        .order_by(BriefInvite.delivered_at.asc().nullslast(), BriefInvite.id.asc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def list_recent_received_invites(
+    session: AsyncSession,
+    account_id: int,
+    since: datetime,
+) -> list[BriefInvite]:
+    """Инвайты, по которым бриф пришёл начиная с момента `since` (свежие сверху)."""
+    stmt = (
+        select(BriefInvite)
+        .where(
+            BriefInvite.account_id == account_id,
+            BriefInvite.status == "received",
+            BriefInvite.received_at >= since,
+        )
+        .order_by(BriefInvite.received_at.desc(), BriefInvite.id.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def mark_invite_received_if_sent(session: AsyncSession, invite_id: int) -> bool:
     """Атомарный переход `sent → received` (защита от двойного POST /briefs).
 

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # Ключ Fernet (base64, 32 байта) для шифрования StringSession Анастасии.
     userbot_secret_key: SecretStr = SecretStr("")
 
+    # Внутренний API ядра для тонких клиентов (бот ходит сюда, не в БД, §1.3 CLAUDE.md).
+    # Дефолт — имя сервиса ядра в docker-compose; локально задаётся через env.
+    core_base_url: str = "http://api:8000"
+
     # SMTP (доставка ссылки на бриф по email) — см. spec 2026-07-13 §5, §11.
     smtp_host: str = ""
     smtp_port: int = 465
