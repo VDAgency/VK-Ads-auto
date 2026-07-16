@@ -1,4 +1,4 @@
-"""SessionStore — round-trip шифрования и отказ при неверном ключе (spec §6, §10)."""
+"""SessionStore — шифрование по операторам, изоляция, list_senders (spec §6, §10)."""
 
 from pathlib import Path
 
@@ -12,45 +12,72 @@ def _key() -> str:
 
 
 def test_round_trip_save_then_load(tmp_path: Path) -> None:
-    key = _key()
-    path = tmp_path / "sub" / "anastasia.session.enc"
-    store = SessionStore(key, str(path))
+    store = SessionStore(_key(), str(tmp_path / "sub"))
 
-    store.save("1AbCdEf-string-session")
+    store.save(111, "1AbCdEf-string-session")
 
-    assert store.load() == "1AbCdEf-string-session"
+    assert store.load(111) == "1AbCdEf-string-session"
 
 
-def test_load_missing_file_returns_none(tmp_path: Path) -> None:
-    store = SessionStore(_key(), str(tmp_path / "absent.enc"))
-    assert store.load() is None
-    assert store.exists() is False
+def test_load_missing_sender_returns_none(tmp_path: Path) -> None:
+    store = SessionStore(_key(), str(tmp_path))
+    assert store.load(111) is None
+    assert store.exists(111) is False
+
+
+def test_two_senders_are_isolated(tmp_path: Path) -> None:
+    store = SessionStore(_key(), str(tmp_path))
+    store.save(111, "session-of-first")
+    store.save(222, "session-of-second")
+
+    assert store.load(111) == "session-of-first"
+    assert store.load(222) == "session-of-second"
+    assert (tmp_path / "111.session.enc").exists()
+    assert (tmp_path / "222.session.enc").exists()
 
 
 def test_saved_file_is_encrypted_not_plaintext(tmp_path: Path) -> None:
-    path = tmp_path / "s.enc"
-    SessionStore(_key(), str(path)).save("secret-session-value")
-    raw = path.read_bytes()
+    SessionStore(_key(), str(tmp_path)).save(111, "secret-session-value")
+    raw = (tmp_path / "111.session.enc").read_bytes()
     assert b"secret-session-value" not in raw
 
 
 def test_wrong_key_cannot_decrypt(tmp_path: Path) -> None:
-    path = tmp_path / "s.enc"
-    SessionStore(_key(), str(path)).save("session-data")
+    SessionStore(_key(), str(tmp_path)).save(111, "session-data")
 
-    other = SessionStore(_key(), str(path))
+    other = SessionStore(_key(), str(tmp_path))
     with pytest.raises(InvalidToken):
-        other.load()
+        other.load(111)
 
 
 def test_save_overwrites_previous_session(tmp_path: Path) -> None:
-    path = tmp_path / "s.enc"
-    store = SessionStore(_key(), str(path))
-    store.save("first")
-    store.save("second")
-    assert store.load() == "second"
+    store = SessionStore(_key(), str(tmp_path))
+    store.save(111, "first")
+    store.save(111, "second")
+    assert store.load(111) == "second"
 
 
 def test_invalid_key_rejected_on_construction(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
-        SessionStore("not-a-valid-fernet-key", str(tmp_path / "s.enc"))
+        SessionStore("not-a-valid-fernet-key", str(tmp_path))
+
+
+def test_list_senders_returns_saved_ids(tmp_path: Path) -> None:
+    store = SessionStore(_key(), str(tmp_path))
+    store.save(222, "b")
+    store.save(111, "a")
+    assert store.list_senders() == [111, 222]
+
+
+def test_list_senders_skips_foreign_files(tmp_path: Path) -> None:
+    store = SessionStore(_key(), str(tmp_path))
+    store.save(111, "a")
+    # Посторонние файлы в каталоге не должны ломать перечисление.
+    (tmp_path / "garbage.session.enc").write_bytes(b"junk")
+    (tmp_path / "readme.txt").write_text("not a session")
+    assert store.list_senders() == [111]
+
+
+def test_list_senders_empty_when_dir_missing(tmp_path: Path) -> None:
+    store = SessionStore(_key(), str(tmp_path / "absent"))
+    assert store.list_senders() == []

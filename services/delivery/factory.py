@@ -16,11 +16,17 @@ from services.delivery.router import DeliveryRouter
 from services.delivery.telegram import TelegramUserbotDelivery
 
 
-def build_delivery_router(settings: Settings | None = None) -> DeliveryRouter:
-    """Собрать роутер доставки с адаптерами, сконфигурированными из настроек."""
+def build_delivery_router(
+    settings: Settings | None = None, *, sender_id: int | None = None
+) -> DeliveryRouter:
+    """Собрать роутер доставки с адаптерами, сконфигурированными из настроек.
+
+    `sender_id` — Telegram ID оператора-инициатора: сообщение в Telegram уходит
+    от его аккаунта (сессии в userbot-сервисе ключуются по операторам).
+    """
     cfg = settings or get_settings()
     return DeliveryRouter(
-        telegram=TelegramUserbotDelivery(cfg.userbot_base_url),
+        telegram=TelegramUserbotDelivery(cfg.userbot_base_url, sender_id=sender_id),
         email=SmtpDelivery(
             host=cfg.smtp_host,
             port=cfg.smtp_port,

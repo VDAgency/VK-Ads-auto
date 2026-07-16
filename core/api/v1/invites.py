@@ -104,7 +104,8 @@ async def create_invite_endpoint(
         BriefVariant(data.variant),
         contact,
         get_settings().public_base_url,
-        build_delivery_router(),
+        # Отправитель в Telegram — оператор, создающий инвайт (его сессия юзербота).
+        build_delivery_router(sender_id=data.operator_telegram_id),
     )
     await session.commit()
     return CreateInviteOut(

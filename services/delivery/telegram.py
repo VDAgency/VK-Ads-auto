@@ -2,7 +2,9 @@
 
 `userbot/` живёт отдельным контейнером в docker-compose и не смотрит наружу —
 только по внутренней compose-сети. Здесь мы только клиентская сторона: POST /send
-с телом `{username, text}`; маппинг ошибок Telethon в короткие коды из §9 спеки.
+с телом `{sender_id, username, text}`; маппинг ошибок Telethon в коды §9 спеки.
+`sender_id` — Telegram ID оператора, от чьего аккаунта уходит сообщение (сессия
+каждого оператора подключается отдельно через /link_userbot).
 
 При любом сбое возвращаем `DeliveryResult(ok=False, fallback_text=<оригинал>)`,
 чтобы бот сразу выдал оператору готовый текст для ручной пересылки.
@@ -26,6 +28,7 @@ _ERROR_MESSAGES = {
     "privacy_restricted": "Telegram: клиент запретил сообщения от незнакомцев.",
     "peer_flood": "Telegram: юзербот временно ограничен (флуд-лимит).",
     "session_expired": "Юзербот разлогинен — перепривяжите через /link_userbot.",
+    "sender_not_authorized": "Ваш юзербот не подключён — выполните /link_userbot.",
     "userbot_unreachable": "Сервис отправки недоступен.",
 }
 
@@ -33,20 +36,28 @@ _ERROR_MESSAGES = {
 class TelegramUserbotDelivery:
     """Отправляет DM клиенту через сервис userbot (Telethon)."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, sender_id: int | None = None) -> None:
         # Пустой base_url = userbot не сконфигурирован → любой send падает
-        # с userbot_unreachable (обрабатывается в send()).
+        # с userbot_unreachable; sender_id=None = неизвестен отправитель →
+        # sender_not_authorized (обрабатывается в send()).
         self._base_url = base_url.rstrip("/")
+        self._sender_id = sender_id
 
     async def send(self, contact: Contact, invite_text: str) -> DeliveryResult:
         if not self._base_url:
             return self._failed("userbot_unreachable", invite_text)
+        if self._sender_id is None:
+            return self._failed("sender_not_authorized", invite_text)
 
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.post(
                     f"{self._base_url}/send",
-                    json={"username": contact.value, "text": invite_text},
+                    json={
+                        "sender_id": self._sender_id,
+                        "username": contact.value,
+                        "text": invite_text,
+                    },
                 )
         except httpx.HTTPError:
             return self._failed("userbot_unreachable", invite_text)
