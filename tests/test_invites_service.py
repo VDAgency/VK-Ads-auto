@@ -36,6 +36,18 @@ class _OkAdapter:
         return DeliveryResult(ok=True, channel=self._channel)
 
 
+class _NamedOkAdapter:
+    """Успешная доставка, вернувшая имя получателя (как Telegram-канал)."""
+
+    def __init__(self, channel: DeliveryChannel, name: str) -> None:
+        self._channel = channel
+        self._name = name
+
+    async def send(self, contact: Contact, invite_text: str) -> DeliveryResult:
+        del contact, invite_text
+        return DeliveryResult(ok=True, channel=self._channel, recipient_name=self._name)
+
+
 class _FailAdapter:
     def __init__(self, channel: DeliveryChannel, error: str) -> None:
         self._channel = channel
@@ -122,6 +134,25 @@ def test_create_invite_telegram_fail_returns_fallback() -> None:
     assert status == "failed"
     assert error == "username_not_occupied"
     assert fallback is not None and fallback.startswith("Здравствуйте")
+
+
+def test_create_invite_stores_recipient_name() -> None:
+    async def scenario(session: AsyncSession) -> str | None:
+        contact = Contact(ContactType.TELEGRAM, "@cryptosamara")
+        router = DeliveryRouter(
+            telegram=_NamedOkAdapter(DeliveryChannel.TELEGRAM, "Вячеслав"),
+            email=_OkAdapter(DeliveryChannel.EMAIL),
+            manual=_OkAdapter(DeliveryChannel.MANUAL),
+        )
+        result = await create_invite(
+            session, 1, 555, BriefVariant.INDIVIDUAL, contact, BASE_URL, router
+        )
+        await session.commit()
+        invite = await find_brief_invite_by_token(session, result.token)
+        assert invite is not None
+        return invite.contact_name
+
+    assert asyncio.run(_with_db(scenario)) == "Вячеслав"
 
 
 def test_create_invite_supersedes_previous_failed() -> None:

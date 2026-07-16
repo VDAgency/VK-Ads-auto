@@ -39,8 +39,11 @@ class SendRequest(BaseModel):
 
 @router.post("/send")
 async def send(body: SendRequest, client: Client) -> JSONResponse:
-    error = await client.send(body.sender_id, body.username, body.text)
+    error, display_name = await client.send(body.sender_id, body.username, body.text)
     if error is None:
-        return JSONResponse({"ok": True})
+        payload: dict[str, object] = {"ok": True}
+        if display_name:
+            payload["display_name"] = display_name
+        return JSONResponse(payload)
     status = _STATUS_BY_ERROR.get(error, 502)
     return JSONResponse({"ok": False, "error": error}, status_code=status)

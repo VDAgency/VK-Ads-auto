@@ -63,6 +63,18 @@ def test_pending_lists_only_sent_with_waiting_days() -> None:
     assert result == [("a@b.c", 3), ("d@e.f", 1)]
 
 
+def test_pending_view_carries_contact_name() -> None:
+    async def scenario(session: AsyncSession) -> str | None:
+        invite = await create_brief_invite(
+            session, 1, 10, "tn", "individual", "telegram", "@cs", "telegram"
+        )
+        await mark_invite_sent(session, invite.id, contact_name="Вячеслав")
+        views = await list_pending(session, 1, now=NOW)
+        return views[0].contact_name
+
+    assert asyncio.run(_with_db(scenario)) == "Вячеслав"
+
+
 def test_pending_excludes_received() -> None:
     async def scenario(session: AsyncSession) -> list[str]:
         received_id = await _make_sent(session, "t1", "got@it.c", NOW - timedelta(days=2))

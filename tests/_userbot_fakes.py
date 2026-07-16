@@ -29,12 +29,16 @@ class FakeTelethon:
         needs_2fa: bool = False,
         send_error: Exception | None = None,
         phone: str | None = "+79990001122",
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> None:
         self.session = _FakeSession()
         self._authorized = authorized
         self._needs_2fa = needs_2fa
         self._send_error = send_error
         self._phone = phone
+        self._first_name = first_name
+        self._last_name = last_name
         self.connected = False
         self.sent_messages: list[tuple[str, str]] = []
         self.code_requests: list[str] = []
@@ -81,6 +85,17 @@ class FakeTelethon:
             raise self._send_error
         self.sent_messages.append((entity, message))
         return object()
+
+    async def get_entity(self, entity: str) -> object:
+        return type(
+            "User",
+            (),
+            {
+                "first_name": self._first_name,
+                "last_name": self._last_name,
+                "username": entity.lstrip("@"),
+            },
+        )()
 
     async def get_me(self) -> object:
         return type("Me", (), {"phone": self._phone})()

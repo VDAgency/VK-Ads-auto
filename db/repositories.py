@@ -219,12 +219,23 @@ async def find_last_failed_invite(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def mark_invite_sent(session: AsyncSession, invite_id: int) -> None:
-    """Пометить инвайт доставленным (channel: telegram/email/manual)."""
+async def mark_invite_sent(
+    session: AsyncSession, invite_id: int, contact_name: str | None = None
+) -> None:
+    """Пометить инвайт доставленным (channel: telegram/email/manual).
+
+    `contact_name` — имя получателя, добытое каналом при отправке (Telegram);
+    None для email/phone.
+    """
     await session.execute(
         update(BriefInvite)
         .where(BriefInvite.id == invite_id)
-        .values(status="sent", delivered_at=datetime.now(UTC), error=None)
+        .values(
+            status="sent",
+            delivered_at=datetime.now(UTC),
+            error=None,
+            contact_name=contact_name,
+        )
     )
 
 

@@ -35,6 +35,8 @@ class DeliveryResult:
     channel: DeliveryChannel
     fallback_text: str | None = None
     error: str | None = None
+    # Имя получателя, если канал смог его определить (Telegram first/last name).
+    recipient_name: str | None = None
 
 
 class DeliveryError(Exception):

@@ -18,6 +18,7 @@ class InviteView:
     """Строка трекинга для рендера в канале (бот/веб)."""
 
     contact: str
+    contact_name: str | None
     variant: str
     channel: str
     sent_at: datetime | None
@@ -49,6 +50,7 @@ async def list_pending(
     return [
         InviteView(
             contact=inv.contact_value,
+            contact_name=inv.contact_name,
             variant=inv.variant,
             channel=inv.channel,
             sent_at=inv.delivered_at,
@@ -73,6 +75,7 @@ async def list_recent(
     return [
         InviteView(
             contact=inv.contact_value,
+            contact_name=inv.contact_name,
             variant=inv.variant,
             channel=inv.channel,
             sent_at=inv.delivered_at,
