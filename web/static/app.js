@@ -27,12 +27,16 @@ async function submitBrief(form) {
   const result = document.querySelector(".result");
   const btn = form.querySelector('button[type="submit"]');
   if (btn) btn.disabled = true;
-  const refCode = new URLSearchParams(location.search).get("ref");
+  // Токен инвайта (?t=) — по нему ядро находит приглашение, метит его «received»
+  // и уведомляет оператора. ref (?ref=) — реферальная ссылка (Блок 2).
+  const params = new URLSearchParams(location.search);
+  const refCode = params.get("ref");
+  const token = params.get("t");
   try {
     const resp = await fetch("/api/v1/briefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ variant: variant, payload: payload, ref_code: refCode }),
+      body: JSON.stringify({ variant: variant, payload: payload, ref_code: refCode, token: token }),
     });
     if (resp.status === 201) {
       showResult(result, "ok", "Бриф отправлен. Спасибо — мы свяжемся с вами.");
