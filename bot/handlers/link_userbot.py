@@ -37,8 +37,7 @@ _MOCK_NOTICE = (
 )
 _ERROR_HINT = {
     "phone_code_invalid": "Неверный код. Попробуйте ещё раз командой /link_userbot.",
-    "phone_code_expired": "Код истёк. Запросите новый: /link_userbot.",
-    "password_hash_invalid": "Неверный пароль. Повторите: /link_userbot.",
+    "password_invalid": "Неверный пароль. Повторите: /link_userbot.",
 }
 _UNAVAILABLE = "Сервис юзербота недоступен, попробуйте позже."
 
@@ -58,7 +57,9 @@ async def _delete_secret(message: Message) -> None:
 
 @router.message(or_f(Command("link_userbot"), Command("link")))
 async def start_link(message: Message, state: FSMContext) -> None:
-    """Начать сценарий: показать статус и запросить телефон (или уйти в мок)."""
+    """Начать сценарий: показать статус СВОЕЙ сессии и запросить телефон (или мок)."""
+    if message.from_user is None:
+        return
     if not api_client.userbot_configured():
         await message.answer(_MOCK_NOTICE)
         await state.set_state(LinkUserbot.entering_phone)
@@ -66,21 +67,23 @@ async def start_link(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        health = await api_client.userbot_status()
+        health = await api_client.userbot_status(message.from_user.id)
     except UserbotUnavailable:
         await message.answer(_UNAVAILABLE)
         return
     if health.authorized:
-        await message.answer(f"Юзер-бот уже подключён (номер {health.phone}).")
+        await message.answer(f"Ваш юзер-бот уже подключён (номер {health.phone}).")
         return
 
     await state.set_state(LinkUserbot.entering_phone)
-    await message.answer("Введите номер телефона юзер-бота (формат +7...):")
+    await message.answer("Введите номер телефона вашего аккаунта (формат +7...):")
 
 
 @router.message(LinkUserbot.entering_phone, F.text)
 async def enter_phone(message: Message, state: FSMContext) -> None:
     """Принять телефон, запросить код (в мок-режиме — сымитировать)."""
+    if message.from_user is None:
+        return
     phone = (message.text or "").strip()
     if not api_client.userbot_configured():
         await state.update_data(phone=phone)
@@ -89,7 +92,7 @@ async def enter_phone(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        phone_code_hash = await api_client.userbot_start_auth(phone)
+        phone_code_hash = await api_client.userbot_start_auth(message.from_user.id, phone)
     except UserbotUnavailable:
         await state.clear()
         await message.answer(_UNAVAILABLE)
@@ -102,6 +105,8 @@ async def enter_phone(message: Message, state: FSMContext) -> None:
 @router.message(LinkUserbot.entering_code, F.text)
 async def enter_code(message: Message, state: FSMContext) -> None:
     """Принять код, удалить его из чата; при 2FA — запросить пароль."""
+    if message.from_user is None:
+        return
     code = (message.text or "").strip()
     await _delete_secret(message)
     logger.info("link_userbot: received code %s", _redact(code))
@@ -114,7 +119,7 @@ async def enter_code(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     try:
         needs_password = await api_client.userbot_submit_code(
-            data["phone"], code, data["phone_code_hash"]
+            message.from_user.id, data["phone"], code, data["phone_code_hash"]
         )
     except UserbotAuthError as exc:
         await state.clear()
@@ -136,6 +141,8 @@ async def enter_code(message: Message, state: FSMContext) -> None:
 @router.message(LinkUserbot.entering_password, F.text)
 async def enter_password(message: Message, state: FSMContext) -> None:
     """Принять пароль 2FA, удалить его из чата, завершить авторизацию."""
+    if message.from_user is None:
+        return
     password = (message.text or "").strip()
     await _delete_secret(message)
     logger.info("link_userbot: received password %s", _redact(password))
@@ -146,7 +153,7 @@ async def enter_password(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        await api_client.userbot_submit_password(password)
+        await api_client.userbot_submit_password(message.from_user.id, password)
     except UserbotAuthError as exc:
         await state.clear()
         await message.answer(_ERROR_HINT.get(exc.code, f"Ошибка авторизации: {exc.code}"))

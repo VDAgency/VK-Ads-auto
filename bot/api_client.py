@@ -21,6 +21,10 @@ class CoreUnavailable(RuntimeError):
     """Ядро недоступно (сеть/таймаут/5xx) — показать заглушку оператору."""
 
 
+class ContactNotRecognized(RuntimeError):
+    """Ядро не распознало контакт (422) — оператору нужен корректный ввод."""
+
+
 class UserbotUnavailable(RuntimeError):
     """Юзербот-сервис не сконфигурирован или недоступен — работаем в мок-режиме."""
 
@@ -43,6 +47,17 @@ class InviteItem:
     sent_at: str | None
     received_at: str | None
     waiting_days: int
+
+
+@dataclass(frozen=True, slots=True)
+class InviteCreated:
+    """Итог создания инвайта (зеркало `CreateInviteOut` ядра, сценарии §8.1)."""
+
+    invite_id: int
+    status: str  # sent | failed
+    channel: str  # telegram | email | manual
+    fallback_text: str | None
+    error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,16 +129,52 @@ async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
     return CabinetStats(**payload)
 
 
+# Создание инвайта включает доставку (userbot до 15с / SMTP до 20с) — таймаут
+# заметно больше обычного _TIMEOUT.
+_INVITE_TIMEOUT = httpx.Timeout(30.0)
+
+
+async def create_invite(variant: str, contact: str, operator_telegram_id: int) -> InviteCreated:
+    """`POST /invites`: токен, запись BriefInvite, доставка выбранным каналом.
+
+    422 (нераспознанный контакт) → `ContactNotRecognized`; сеть/5xx → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/invites"
+    body = {
+        "variant": variant,
+        "contact": contact,
+        "operator_telegram_id": operator_telegram_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_INVITE_TIMEOUT) as client:
+            response = await client.post(url, json=body)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 422:
+        raise ContactNotRecognized("contact not recognized")
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    payload = response.json()
+    return InviteCreated(
+        invite_id=int(payload["invite_id"]),
+        status=str(payload["status"]),
+        channel=str(payload["channel"]),
+        fallback_text=payload.get("fallback_text"),
+        error=payload.get("error"),
+    )
+
+
 # --- Юзербот (Telethon-сервис доставки, spec §9) ----------------------------
 #
 # Ходим напрямую в userbot-сервис (свой BASE_URL), не через ядро. Пустой
 # `USERBOT_BASE_URL` = сервис не сконфигурирован → `UserbotUnavailable`
 # (хендлер уходит в мок-режим). 400 от auth-эндпоинтов = неверный код/пароль.
+# Сессии — по операторам: во все вызовы передаём sender_id (Telegram ID оператора).
 
 
 @dataclass(frozen=True, slots=True)
 class UserbotHealth:
-    """Состояние авторизации юзербота (зеркало `/health`)."""
+    """Состояние авторизации сессии оператора (зеркало `/health?sender_id=`)."""
 
     authorized: bool
     phone: str | None = None
@@ -161,29 +212,45 @@ async def _userbot_request(
     return result
 
 
-async def userbot_status() -> UserbotHealth:
-    """Опрос `/health` юзербота: авторизован ли, под каким номером."""
-    payload = await _userbot_request("GET", "/health")
+async def userbot_status(sender_id: int) -> UserbotHealth:
+    """Опрос `/health?sender_id=`: авторизована ли сессия оператора, номер."""
+    payload = await _userbot_request("GET", f"/health?sender_id={sender_id}")
     return UserbotHealth(
         authorized=bool(payload.get("authorized", False)),
         phone=payload.get("phone"),
     )
 
 
-async def userbot_start_auth(phone: str) -> str:
+async def userbot_health_all() -> dict[int, bool]:
+    """Состояние всех сессий `{sender_id: authorized}` (для фонового поллера)."""
+    payload = await _userbot_request("GET", "/health")
+    sessions = payload.get("sessions", [])
+    return {int(item["sender_id"]): bool(item.get("authorized", False)) for item in sessions}
+
+
+async def userbot_start_auth(sender_id: int, phone: str) -> str:
     """`/auth/start` — вернуть `phone_code_hash` для последующего ввода кода."""
-    payload = await _userbot_request("POST", "/auth/start", {"phone": phone})
+    payload = await _userbot_request(
+        "POST", "/auth/start", {"sender_id": sender_id, "phone": phone}
+    )
     return str(payload["phone_code_hash"])
 
 
-async def userbot_submit_code(phone: str, code: str, phone_code_hash: str) -> bool:
+async def userbot_submit_code(sender_id: int, phone: str, code: str, phone_code_hash: str) -> bool:
     """`/auth/code` — вернуть `needs_password` (нужен ли ввод пароля 2FA)."""
     payload = await _userbot_request(
-        "POST", "/auth/code", {"phone": phone, "code": code, "phone_code_hash": phone_code_hash}
+        "POST",
+        "/auth/code",
+        {
+            "sender_id": sender_id,
+            "phone": phone,
+            "code": code,
+            "phone_code_hash": phone_code_hash,
+        },
     )
     return bool(payload.get("needs_password", False))
 
 
-async def userbot_submit_password(password: str) -> None:
+async def userbot_submit_password(sender_id: int, password: str) -> None:
     """`/auth/password` — завершить авторизацию при включённом 2FA."""
-    await _userbot_request("POST", "/auth/password", {"password": password})
+    await _userbot_request("POST", "/auth/password", {"sender_id": sender_id, "password": password})
