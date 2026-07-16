@@ -30,6 +30,15 @@ def brief_url(variant: BriefVariant, base_url: str) -> str:
     return base_url.rstrip("/") + _BRIEF_PATH[variant]
 
 
+def brief_url_with_token(variant: BriefVariant, token: str, base_url: str) -> str:
+    """Ссылка на форму брифа с токеном инвайта (`?t=<token>`).
+
+    Токен связывает отправку и приход: при приёме брифа форма вернёт его в payload,
+    ядро найдёт инвайт и пометит `received` (spec 2026-07-13 §4).
+    """
+    return f"{brief_url(variant, base_url)}?t={token}"
+
+
 def delivery_channel(contact: Contact) -> DeliveryChannel:
     """Определить канал доставки по типу контакта."""
     if contact.type is ContactType.EMAIL:
@@ -39,10 +48,18 @@ def delivery_channel(contact: Contact) -> DeliveryChannel:
     return DeliveryChannel.MANUAL
 
 
-def compose_invite(variant: BriefVariant, base_url: str) -> str:
-    """Текст-приглашение для клиента со ссылкой на бриф."""
-    url = brief_url(variant, base_url)
+def _invite_body(url: str) -> str:
     return (
         "Здравствуйте! Для запуска рекламы заполните, пожалуйста, короткий бриф "
         f"(пара минут): {url}"
     )
+
+
+def compose_invite(variant: BriefVariant, base_url: str) -> str:
+    """Текст-приглашение для клиента со ссылкой на бриф (без токена)."""
+    return _invite_body(brief_url(variant, base_url))
+
+
+def invite_text_with_token(variant: BriefVariant, token: str, base_url: str) -> str:
+    """Текст-приглашение со ссылкой, содержащей токен инвайта."""
+    return _invite_body(brief_url_with_token(variant, token, base_url))

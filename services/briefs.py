@@ -11,11 +11,30 @@ from datetime import datetime
 
 from config.settings import get_settings
 from db.models import Brief
-from db.repositories import create_client, find_client_by_contacts, get_client
+from db.repositories import (
+    create_client,
+    find_brief_invite_by_token,
+    find_client_by_contacts,
+    get_client,
+    mark_invite_received_if_sent,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_parser import BriefVariant, parse_brief
+from services.notifier import notify_operator_brief_received
 from services.referral import register_referral, resolve_ref_code
+
+
+class InviteTokenError(Exception):
+    """Токен инвайта не найден или инвайт неактивен.
+
+    `code`: `not_found` (нет такого токена) | `inactive` (инвайт не в статусе,
+    допускающем приём — например, уже received или superseded).
+    """
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 async def _maybe_register_referral(
@@ -39,13 +58,27 @@ async def intake_brief(
     payload: Mapping[str, str],
     source: str = "web",
     ref_code: str | None = None,
+    token: str | None = None,
 ) -> Brief:
     """Принять бриф: разобрать, привязать/создать клиента, сохранить.
 
     Бросает `BriefValidationError`, если не хватает обязательных полей.
     Клиент ищется по совпадению любого из контактов (email/phone/telegram).
     Если клиент новый и пришёл по реф-коду — фиксируем реферал и скидку рефереру.
+
+    Если передан `token` — форма пришла по нашему инвайту: находим инвайт, проверяем
+    активность (бросаем `InviteTokenError` при not_found/inactive), связываем бриф с
+    инвайтом, атомарно метим инвайт `received` и уведомляем оператора.
     """
+    invite = None
+    if token is not None:
+        invite = await find_brief_invite_by_token(session, token)
+        if invite is None:
+            raise InviteTokenError("not_found")
+        if invite.status not in ("sent", "failed"):
+            # received (двойной сабмит) / superseded / pending (не доставлялся) — не принимаем.
+            raise InviteTokenError("inactive")
+
     parsed = parse_brief(payload, variant)
     contact = parsed.contact
 
@@ -73,8 +106,21 @@ async def intake_brief(
         status="received",
         source=source,
         payload=dict(payload),
+        invite_id=invite.id if invite is not None else None,
     )
     session.add(brief)
+
+    if invite is not None:
+        # Атомарный переход sent→received защищает от гонки двойного POST.
+        await mark_invite_received_if_sent(session, invite.id)
+
     await session.commit()
     await session.refresh(brief)
+
+    if invite is not None:
+        await notify_operator_brief_received(
+            client_name=parsed.full_name or contact.telegram or "клиент",
+            variant=variant.value,
+            contact_value=contact.email or contact.phone or contact.telegram,
+        )
     return brief
