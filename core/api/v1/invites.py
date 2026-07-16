@@ -9,10 +9,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
+from config.settings import get_settings
 from db.session import get_session
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from services.brief_parser import BriefVariant
+from services.contact import ContactParseError, detect_contact
+from services.delivery.factory import build_delivery_router
 from services.invite_tracking import InviteView, list_pending, list_recent
+from services.invites import create_invite
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/invites", tags=["invites"])
@@ -59,3 +64,53 @@ async def list_invites(
     else:
         views = await list_pending(session, DEFAULT_ACCOUNT_ID)
     return InvitesOut(items=[_to_item(v) for v in views])
+
+
+class CreateInviteIn(BaseModel):
+    """Запрос на создание инвайта: вариант брифа + контакт клиента + оператор."""
+
+    variant: Literal["individual", "community"]
+    contact: str
+    operator_telegram_id: int
+
+
+class CreateInviteOut(BaseModel):
+    """Итог создания инвайта для рендера оператору (сценарии §8.1 спеки)."""
+
+    invite_id: int
+    status: str  # sent | failed
+    channel: str  # telegram | email | manual
+    fallback_text: str | None = None
+    error: str | None = None
+
+
+@router.post("", status_code=201)
+async def create_invite_endpoint(
+    data: CreateInviteIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CreateInviteOut:
+    """Создать инвайт и попытаться доставить ссылку на бриф выбранным каналом."""
+    try:
+        contact = detect_contact(data.contact)
+    except ContactParseError as exc:
+        raise HTTPException(
+            status_code=422, detail="Не распознан контакт (email/телефон/@username)."
+        ) from exc
+
+    result = await create_invite(
+        session,
+        DEFAULT_ACCOUNT_ID,
+        data.operator_telegram_id,
+        BriefVariant(data.variant),
+        contact,
+        get_settings().public_base_url,
+        build_delivery_router(),
+    )
+    await session.commit()
+    return CreateInviteOut(
+        invite_id=result.invite_id,
+        status=result.status,
+        channel=result.channel,
+        fallback_text=result.fallback_text,
+        error=result.error,
+    )

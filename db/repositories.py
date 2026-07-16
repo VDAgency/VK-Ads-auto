@@ -8,7 +8,7 @@ from typing import cast
 from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Brief, BriefInvite, Client, Discount, Referral, Stat
+from db.models import Brief, BriefInvite, Client, Discount, Operator, Referral, Stat
 
 
 async def create_referral(
@@ -106,6 +106,27 @@ async def find_client_by_contacts(
         return None
     stmt = select(Client).where(Client.account_id == account_id, or_(*conditions)).limit(1)
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_or_create_operator(
+    session: AsyncSession,
+    account_id: int,
+    telegram_id: int,
+    full_name: str | None = None,
+) -> Operator:
+    """Найти оператора по telegram_id или создать. Нужен для FK инвайтов/задач.
+
+    Сидинга операторов нет: оператор материализуется при первом обращении из бота.
+    Скоуп тенанта в текущем этапе единый (см. briefs.py), telegram_id уникален глобально.
+    """
+    stmt = select(Operator).where(Operator.telegram_id == telegram_id)
+    operator = (await session.execute(stmt)).scalar_one_or_none()
+    if operator is not None:
+        return operator
+    operator = Operator(account_id=account_id, telegram_id=telegram_id, full_name=full_name)
+    session.add(operator)
+    await session.flush()
+    return operator
 
 
 async def create_client(
