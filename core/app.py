@@ -13,12 +13,28 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from services.notifier_telegram import register_telegram_notifier
+from starlette.responses import Response
+from starlette.types import Scope
 
 from core.api import health
 from core.api.v1 import router as v1_router
 
 # Каталог статики веба (лендинг + формы брифа). Корень репозитория / web / static.
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """StaticFiles с `Cache-Control: no-cache` — браузер всегда перепроверяет свежесть.
+
+    Формы/JS меняются при деплое; без no-cache браузер может отдавать старый JS
+    (например, форму брифа без токена `?t=`, из-за чего инвайт не метится received).
+    ETag/Last-Modified делают перепроверку дешёвой (304, если файл не менялся).
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @asynccontextmanager
@@ -37,7 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_router.router)
     # Статику монтируем ПОСЛЕ API — /health и /api/v1 имеют приоритет.
     if _STATIC_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="web")
+        app.mount("/", _NoCacheStaticFiles(directory=_STATIC_DIR, html=True), name="web")
     return app
 
 
