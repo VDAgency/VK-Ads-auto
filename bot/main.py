@@ -11,6 +11,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from config.settings import get_settings
 
+from bot import api_client, userbot_watch
 from bot.handlers import help as help_handler
 from bot.handlers import link_userbot, pending, send_brief, start, stats
 from bot.menu import setup_bot_commands
@@ -36,7 +37,16 @@ async def run() -> None:
     bot = Bot(token=token)
     await setup_bot_commands(bot)
     dispatcher = build_dispatcher()
-    await dispatcher.start_polling(bot)
+    # Фоновый health-check сессий юзербота (§9): баннер в /send_brief при
+    # неавторизованной сессии оператора. Без USERBOT_BASE_URL — не запускаем.
+    poller: asyncio.Task[None] | None = None
+    if api_client.userbot_configured():
+        poller = asyncio.create_task(userbot_watch.poll_forever())
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        if poller is not None:
+            poller.cancel()
 
 
 def main() -> None:
