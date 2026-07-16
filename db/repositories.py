@@ -337,20 +337,25 @@ async def list_recent_received_invites(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def mark_invite_received_if_sent(session: AsyncSession, invite_id: int) -> bool:
+async def mark_invite_received_if_sent(
+    session: AsyncSession, invite_id: int, contact_name: str | None = None
+) -> bool:
     """Атомарный переход `sent → received` (защита от двойного POST /briefs).
+
+    `contact_name` — имя клиента из присланного брифа (`full_name`): при приёме
+    записываем его в инвайт, чтобы список «Пришли за неделю» показывал имя.
 
     Возвращает True, если ровно эта строка обновилась. False — если инвайт был
     в другом статусе (уже received, failed, superseded) → вызов клиента вернёт 409.
     """
+    stmt = (
+        update(BriefInvite)
+        .where(BriefInvite.id == invite_id, BriefInvite.status == "sent")
+        .values(status="received", received_at=datetime.now(UTC))
+    )
+    if contact_name:
+        stmt = stmt.values(contact_name=contact_name)
     # cast: session.execute() возвращает Result[Any], но для DML это CursorResult
     # с полем rowcount — известное ограничение типизации SQLAlchemy async.
-    result = cast(
-        CursorResult[tuple[int, ...]],
-        await session.execute(
-            update(BriefInvite)
-            .where(BriefInvite.id == invite_id, BriefInvite.status == "sent")
-            .values(status="received", received_at=datetime.now(UTC))
-        ),
-    )
+    result = cast(CursorResult[tuple[int, ...]], await session.execute(stmt))
     return bool(result.rowcount)
