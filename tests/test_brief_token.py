@@ -27,10 +27,11 @@ async def _run(
     create_invite_row: bool,
     invite_sent: bool = True,
     posts: int = 1,
-) -> tuple[list[int], str | None]:
+) -> tuple[list[int], str | None, str | None]:
     """Поднять приложение на sqlite, при необходимости создать инвайт, сделать POST(ы).
 
-    Возвращает список статус-кодов ответов и итоговый статус инвайта (если был токен).
+    Возвращает статус-коды ответов, итоговый статус инвайта и его `contact_name`
+    (имя из брифа, записываемое при приёме) — если был токен.
     """
     engine = create_async_engine(
         "sqlite+aiosqlite://",
@@ -72,37 +73,41 @@ async def _run(
             codes.append(resp.status_code)
 
     invite_status: str | None = None
+    contact_name: str | None = None
     if token is not None:
         async with maker() as session:
             found = await find_brief_invite_by_token(session, token)
             invite_status = found.status if found else None
+            contact_name = found.contact_name if found else None
     await engine.dispose()
-    return codes, invite_status
+    return codes, invite_status, contact_name
 
 
 def test_brief_with_valid_token_marks_received() -> None:
-    codes, invite_status = asyncio.run(_run(token="tok123", create_invite_row=True))
+    codes, invite_status, contact_name = asyncio.run(_run(token="tok123", create_invite_row=True))
     assert codes == [201]
     assert invite_status == "received"
+    # Имя из брифа записано в инвайт — для списка «Пришли за неделю».
+    assert contact_name == "Иван Иванов"
 
 
 def test_brief_unknown_token_returns_404() -> None:
-    codes, _ = asyncio.run(_run(token="nonexistent", create_invite_row=False))
+    codes, _, _ = asyncio.run(_run(token="nonexistent", create_invite_row=False))
     assert codes == [404]
 
 
 def test_brief_double_submit_returns_409() -> None:
-    codes, invite_status = asyncio.run(_run(token="tok-dup", create_invite_row=True, posts=2))
+    codes, invite_status, _ = asyncio.run(_run(token="tok-dup", create_invite_row=True, posts=2))
     assert codes == [201, 409]
     assert invite_status == "received"
 
 
 def test_brief_pending_invite_returns_409() -> None:
     # Инвайт создан, но не доставлен (pending) — приём по нему не допускаем.
-    codes, _ = asyncio.run(_run(token="tok-pending", create_invite_row=True, invite_sent=False))
+    codes, _, _ = asyncio.run(_run(token="tok-pending", create_invite_row=True, invite_sent=False))
     assert codes == [409]
 
 
 def test_brief_without_token_still_works() -> None:
-    codes, _ = asyncio.run(_run(token=None, create_invite_row=False))
+    codes, _, _ = asyncio.run(_run(token=None, create_invite_row=False))
     assert codes == [201]

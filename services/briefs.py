@@ -112,7 +112,8 @@ async def intake_brief(
 
     if invite is not None:
         # Атомарный переход sent→received защищает от гонки двойного POST.
-        await mark_invite_received_if_sent(session, invite.id)
+        # Имя клиента из брифа пишем в инвайт — для списка «Пришли за неделю».
+        await mark_invite_received_if_sent(session, invite.id, contact_name=parsed.full_name)
 
     await session.commit()
     await session.refresh(brief)
