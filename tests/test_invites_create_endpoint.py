@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+from config.settings import Settings
 from core.app import create_app
 from db.base import Base
 from db.models import Account
@@ -17,6 +19,19 @@ from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+
+
+@pytest.fixture(autouse=True)
+def _unconfigured_channels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Каналы доставки в этих тестах НЕ сконфигурированы — независимо от локального `.env`.
+
+    Иначе тест зависит от окружения: с реальными SMTP/userbot-кредами в `.env` он
+    попытался бы реально коннектиться. Пустые настройки (`_env_file=None`) детерминированы.
+    """
+    monkeypatch.setattr(
+        "services.delivery.factory.get_settings",
+        lambda: Settings(_env_file=None),
+    )
 
 
 async def _post_invite(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
