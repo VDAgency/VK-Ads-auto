@@ -27,12 +27,13 @@ def build_delivery_router(
     cfg = settings or get_settings()
     return DeliveryRouter(
         telegram=TelegramUserbotDelivery(cfg.userbot_base_url, sender_id=sender_id),
+        # Ссылка на бриф — информационное письмо, уходит от отправителя info@.
         email=SmtpDelivery(
             host=cfg.smtp_host,
             port=cfg.smtp_port,
-            user=cfg.smtp_user,
-            password=cfg.smtp_password.get_secret_value(),
-            from_name=cfg.smtp_from_name,
+            user=cfg.smtp_info_user,
+            password=cfg.smtp_info_password.get_secret_value(),
+            from_name=cfg.smtp_info_from_name,
         ),
         manual=ManualDelivery(),
     )
