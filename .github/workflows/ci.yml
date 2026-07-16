@@ -52,7 +52,7 @@ jobs:
             set -e
             cd /opt/vk-ads-auto
             git pull --ff-only
-            docker compose up -d --build api postgres redis caddy bot
+            docker compose up -d --build api postgres redis caddy bot userbot
             # Применяем миграции БД (с ретраями до готовности postgres).
             for i in $(seq 1 10); do
               if docker compose exec -T api uv run alembic upgrade head; then echo "migrations OK"; break; fi

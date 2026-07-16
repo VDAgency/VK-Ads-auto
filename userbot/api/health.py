@@ -1,13 +1,15 @@
-"""Health юзербота: GET /health → {authorized, phone?} (spec §6).
+"""Health юзербота: GET /health → состояние сессий операторов (spec §6).
 
-Бот раз в 60с опрашивает этот эндпоинт; `authorized=false` → баннер при /send_brief.
+Без параметров — все сессии: `{sessions: [{sender_id, authorized, phone?}]}`.
+С `?sender_id=` — одна: `{sender_id, authorized, phone?}` (бот проверяет сессию
+вызвавшего оператора перед /send_brief; поллер раз в 60с берёт полный список).
 """
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from userbot.api import get_client
 from userbot.telethon_client import UserbotClient
@@ -18,5 +20,10 @@ Client = Annotated[UserbotClient, Depends(get_client)]
 
 
 @router.get("/health")
-async def health(client: Client) -> dict[str, object]:
+async def health(
+    client: Client,
+    sender_id: Annotated[int | None, Query()] = None,
+) -> dict[str, object]:
+    if sender_id is not None:
+        return await client.health_for(sender_id)
     return await client.health()

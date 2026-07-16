@@ -2,6 +2,7 @@
 
 Флоу: start (телефон → phone_code_hash) → code (при 2FA → needs_password) →
 password. Код/пароль в логи не пишем (§10) — маскирование на стороне бота.
+`sender_id` — Telegram ID оператора: каждый подключает свою сессию.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ Client = Annotated[UserbotClient, Depends(get_client)]
 
 
 class StartRequest(BaseModel):
+    sender_id: int
     phone: str
 
 
@@ -28,6 +30,7 @@ class StartResponse(BaseModel):
 
 
 class CodeRequest(BaseModel):
+    sender_id: int
     phone: str
     code: str
     phone_code_hash: str
@@ -39,6 +42,7 @@ class CodeResponse(BaseModel):
 
 
 class PasswordRequest(BaseModel):
+    sender_id: int
     password: str
 
 
@@ -48,14 +52,16 @@ class OkResponse(BaseModel):
 
 @router.post("/start", response_model=StartResponse)
 async def auth_start(body: StartRequest, client: Client) -> StartResponse:
-    phone_code_hash = await client.auth_start(body.phone)
+    phone_code_hash = await client.auth_start(body.sender_id, body.phone)
     return StartResponse(phone_code_hash=phone_code_hash)
 
 
 @router.post("/code", response_model=CodeResponse)
 async def auth_code(body: CodeRequest, client: Client) -> CodeResponse:
     try:
-        needs_password = await client.auth_code(body.phone, body.code, body.phone_code_hash)
+        needs_password = await client.auth_code(
+            body.sender_id, body.phone, body.code, body.phone_code_hash
+        )
     except AuthError as exc:
         raise HTTPException(status_code=400, detail=exc.code) from exc
     return CodeResponse(ok=True, needs_password=needs_password)
@@ -64,7 +70,7 @@ async def auth_code(body: CodeRequest, client: Client) -> CodeResponse:
 @router.post("/password", response_model=OkResponse)
 async def auth_password(body: PasswordRequest, client: Client) -> OkResponse:
     try:
-        await client.auth_password(body.password)
+        await client.auth_password(body.sender_id, body.password)
     except AuthError as exc:
         raise HTTPException(status_code=400, detail=exc.code) from exc
     return OkResponse(ok=True)

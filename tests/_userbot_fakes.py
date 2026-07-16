@@ -86,25 +86,39 @@ class FakeTelethon:
         return type("Me", (), {"phone": self._phone})()
 
 
+# Sender_id оператора по умолчанию в тестах (Telegram ID условного оператора).
+SENDER = 111
+
+
 def make_client(
     fake: FakeTelethon | None = None,
     *,
     tmp_path: str = "",
-    saved_session: bool = False,
+    saved_for: tuple[int, ...] = (),
+    fakes_by_sender: dict[int, FakeTelethon] | None = None,
+    pending_queue: list[FakeTelethon] | None = None,
 ) -> tuple[UserbotClient, FakeTelethon]:
     """Собрать `UserbotClient` с фейковым Telethon и реальным SessionStore в tmp.
 
-    `saved_session=True` заранее пишет сессию в store — как будто юзербот уже
-    авторизован (для тестов send/health).
+    - `saved_for` — sender_id, для которых заранее сохранить сессию (юзербот
+      «уже авторизован» для этих операторов).
+    - `fakes_by_sender` — отдельный фейк на каждого sender_id (тесты изоляции);
+      сессия пишется как `session-{sender_id}`, фабрика находит фейк по ней.
+    - `pending_queue` — фейки для auth-флоу (factory(None)) по порядку вызовов;
+      нужны для конкурентных логинов двух операторов.
+    - По умолчанию фабрика всегда отдаёт единственный общий `fake`.
     """
     fake = fake or FakeTelethon()
     key = Fernet.generate_key().decode("ascii")
-    path = (tmp_path or ".") + "/anastasia.session.enc"
-    store = SessionStore(key, path)
-    if saved_session:
-        store.save("preexisting-session")
+    store = SessionStore(key, tmp_path or ".")
+    for sender_id in saved_for:
+        store.save(sender_id, f"session-{sender_id}")
 
     def factory(session_str: str | None) -> TelethonProtocol:
+        if session_str is None and pending_queue:
+            return pending_queue.pop(0)
+        if fakes_by_sender and session_str and session_str.startswith("session-"):
+            return fakes_by_sender[int(session_str.removeprefix("session-"))]
         return fake
 
     typed_factory: ClientFactory = factory

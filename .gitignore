@@ -49,3 +49,6 @@ Thumbs.db
 
 # Internal docs — keep out of public repo (business/client info, plans)
 docs/
+
+# Claude Code local state (worktrees, session artifacts)
+.claude/

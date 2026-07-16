@@ -22,16 +22,17 @@ class UserbotSettings(BaseSettings):
         extra="ignore",
     )
 
-    # Telegram API-приложение Анастасии (my.telegram.org). Пустой api_id/api_hash =
-    # сервис не сконфигурирован — клиент не создаётся.
+    # Telegram API-приложение проекта (my.telegram.org); одно на все сессии
+    # операторов. Пустой api_id/api_hash = сервис не сконфигурирован.
     api_id: int = 0
     api_hash: SecretStr = SecretStr("")
 
     # Ключ Fernet (base64, 32 байта) для шифрования StringSession.
     secret_key: SecretStr = SecretStr("")
 
-    # Путь к зашифрованному файлу сессии (persistent volume, 0600).
-    session_path: str = "/secrets/anastasia.session.enc"
+    # Каталог зашифрованных сессий операторов: {sender_id}.session.enc
+    # (persistent volume, файлы 0600). По сессии на оператора.
+    sessions_dir: str = "/secrets"
 
 
 @lru_cache

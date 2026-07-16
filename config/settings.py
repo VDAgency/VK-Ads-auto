@@ -53,9 +53,8 @@ class Settings(BaseSettings):
 
     # Userbot (Telethon-сервис доставки в Telegram) — см. spec 2026-07-13 §6.
     # Пустой BASE_URL = сервис не сконфигурирован; адаптер вернёт userbot_unreachable.
+    # Остальные USERBOT_-переменные читает сам сервис (userbot/config.py), не ядро.
     userbot_base_url: str = ""
-    # Ключ Fernet (base64, 32 байта) для шифрования StringSession Анастасии.
-    userbot_secret_key: SecretStr = SecretStr("")
 
     # Внутренний API ядра для тонких клиентов (бот ходит сюда, не в БД, §1.3 CLAUDE.md).
     # Дефолт — имя сервиса ядра в docker-compose; локально задаётся через env.

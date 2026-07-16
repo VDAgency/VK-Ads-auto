@@ -27,17 +27,19 @@ _STATUS_BY_ERROR = {
     "privacy_restricted": 403,
     "peer_flood": 429,
     "session_expired": 401,
+    "sender_not_authorized": 401,
 }
 
 
 class SendRequest(BaseModel):
+    sender_id: int
     username: str
     text: str
 
 
 @router.post("/send")
 async def send(body: SendRequest, client: Client) -> JSONResponse:
-    error = await client.send(body.username, body.text)
+    error = await client.send(body.sender_id, body.username, body.text)
     if error is None:
         return JSONResponse({"ok": True})
     status = _STATUS_BY_ERROR.get(error, 502)

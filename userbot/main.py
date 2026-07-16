@@ -23,7 +23,7 @@ def build_client() -> UserbotClient:
     factory = default_client_factory(settings.api_id, settings.api_hash.get_secret_value())
     store = SessionStore(
         secret_key=settings.secret_key.get_secret_value(),
-        path=settings.session_path,
+        sessions_dir=settings.sessions_dir,
     )
     return UserbotClient(factory=factory, store=store)
 
