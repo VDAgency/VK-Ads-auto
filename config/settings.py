@@ -66,12 +66,17 @@ class Settings(BaseSettings):
     mock_until: str = "2026-12-31"  # дата отключения демо (ISO, env: MOCK_UNTIL)
     mock_max_clients: int = 5  # порог реальных клиентов (env: MOCK_MAX_CLIENTS)
 
-    # SMTP (доставка ссылки на бриф по email) — см. spec 2026-07-13 §5, §11.
+    # SMTP (доставка писем). Хост/порт общие (Beget), отправителей два:
+    # info@ — информационные письма (ссылка на бриф клиенту),
+    # support@ — технические (вход в кабинет/сброс пароля, задел под кабинет).
     smtp_host: str = ""
     smtp_port: int = 465
-    smtp_user: str = ""
-    smtp_password: SecretStr = SecretStr("")
-    smtp_from_name: str = "VK Ads Auto"
+    smtp_info_user: str = ""
+    smtp_info_password: SecretStr = SecretStr("")
+    smtp_info_from_name: str = "VK Ads Auto"
+    smtp_support_user: str = ""
+    smtp_support_password: SecretStr = SecretStr("")
+    smtp_support_from_name: str = "VK Ads Auto"
 
     @field_validator("operator_telegram_ids", mode="before")
     @classmethod
