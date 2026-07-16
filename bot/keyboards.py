@@ -51,6 +51,30 @@ def cabinets_keyboard(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     )
 
 
+def code_keypad() -> InlineKeyboardMarkup:
+    """Цифровая клавиатура для кода авторизации юзер-бота (/link_userbot).
+
+    Код входа НЕЛЬЗЯ отправлять сообщением: Telegram видит код в исходящем
+    сообщении аккаунта и блокирует вход (анти-фишинг), даже если код верный.
+    Кнопки передают цифры через callback_data — исходящих сообщений нет,
+    вход не блокируется.
+    """
+    digit_rows = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"]]
+    rows = [
+        [InlineKeyboardButton(text=digit, callback_data=f"code:d:{digit}") for digit in row]
+        for row in digit_rows
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(text="⌫", callback_data="code:del"),
+            InlineKeyboardButton(text="0", callback_data="code:d:0"),
+            InlineKeyboardButton(text="✅ Готово", callback_data="code:ok"),
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="✖ Отмена", callback_data="code:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # Подписи периодов статистики (callback `stats:{cabinet_id}:{period}`).
 _PERIOD_LABELS = [("all", "С запуска"), ("month", "Месяц"), ("week", "Неделя")]
 
