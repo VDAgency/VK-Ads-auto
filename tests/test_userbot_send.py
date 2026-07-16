@@ -13,9 +13,21 @@ def test_send_ok_returns_none(tmp_path: Path) -> None:
     async def scenario() -> None:
         fake = FakeTelethon(authorized=True)
         client, fake = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
-        error = await client.send(SENDER, "@ivanov", "привет, бриф тут")
+        error, name = await client.send(SENDER, "@ivanov", "привет, бриф тут")
         assert error is None
+        assert name is None  # у фейка имя не задано
         assert fake.sent_messages == [("@ivanov", "привет, бриф тут")]
+
+    asyncio.run(scenario())
+
+
+def test_send_ok_resolves_display_name(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        fake = FakeTelethon(authorized=True, first_name="Вячеслав", last_name="Д")
+        client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
+        error, name = await client.send(SENDER, "@cryptosamara", "text")
+        assert error is None
+        assert name == "Вячеслав Д"
 
     asyncio.run(scenario())
 
@@ -24,7 +36,7 @@ def test_send_without_session_returns_sender_not_authorized(tmp_path: Path) -> N
     async def scenario() -> None:
         # Оператор ещё ни разу не проходил /link_userbot — файла сессии нет.
         client, _ = make_client(tmp_path=str(tmp_path))
-        assert await client.send(SENDER, "@ivanov", "text") == "sender_not_authorized"
+        assert await client.send(SENDER, "@ivanov", "text") == ("sender_not_authorized", None)
 
     asyncio.run(scenario())
 
@@ -34,7 +46,7 @@ def test_send_dead_session_returns_session_expired(tmp_path: Path) -> None:
         # Сессия на диске есть, но клиент говорит is_user_authorized() == False.
         fake = FakeTelethon(authorized=False)
         client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
-        assert await client.send(SENDER, "@ivanov", "text") == "session_expired"
+        assert await client.send(SENDER, "@ivanov", "text") == ("session_expired", None)
 
     asyncio.run(scenario())
 
@@ -49,9 +61,9 @@ def test_send_uses_session_of_requested_sender_only(tmp_path: Path) -> None:
             saved_for=(111,),
             fakes_by_sender={111: fake_a},
         )
-        assert await client.send(111, "@ivanov", "text-a") is None
+        assert await client.send(111, "@ivanov", "text-a") == (None, None)
         assert fake_a.sent_messages == [("@ivanov", "text-a")]
-        assert await client.send(222, "@petrov", "text-b") == "sender_not_authorized"
+        assert await client.send(222, "@petrov", "text-b") == ("sender_not_authorized", None)
 
     asyncio.run(scenario())
 
@@ -67,8 +79,8 @@ def test_send_from_two_senders_uses_own_clients(tmp_path: Path) -> None:
             saved_for=(111, 222),
             fakes_by_sender={111: fake_a, 222: fake_b},
         )
-        assert await client.send(111, "@ivanov", "from-a") is None
-        assert await client.send(222, "@petrov", "from-b") is None
+        assert await client.send(111, "@ivanov", "from-a") == (None, None)
+        assert await client.send(222, "@petrov", "from-b") == (None, None)
         assert fake_a.sent_messages == [("@ivanov", "from-a")]
         assert fake_b.sent_messages == [("@petrov", "from-b")]
 
@@ -90,6 +102,6 @@ def test_send_maps_errors(tmp_path: Path, exc: Exception, expected: str) -> None
     async def scenario() -> None:
         fake = FakeTelethon(authorized=True, send_error=exc)
         client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
-        assert await client.send(SENDER, "@ivanov", "text") == expected
+        assert await client.send(SENDER, "@ivanov", "text") == (expected, None)
 
     asyncio.run(scenario())

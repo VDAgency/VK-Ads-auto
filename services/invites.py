@@ -84,7 +84,7 @@ async def create_invite(
     result: DeliveryResult = await router.route(contact).send(contact, invite_text)
 
     if result.ok:
-        await mark_invite_sent(session, invite.id)
+        await mark_invite_sent(session, invite.id, contact_name=result.recipient_name)
         status = "sent"
     else:
         # supersede предыдущего failed того же контакта — до пометки текущего failed,

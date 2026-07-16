@@ -106,6 +106,9 @@ class BriefInvite(TenantMixin, Base):
     variant: Mapped[str] = mapped_column(String(32))  # individual | community
     contact_type: Mapped[str] = mapped_column(String(16))  # email | phone | telegram
     contact_value: Mapped[str] = mapped_column(String(255), index=True)
+    # Имя получателя, добытое каналом в момент отправки (Telegram first/last name).
+    # None для email/phone и записей до появления фичи. Для читаемого «Ждём бриф».
+    contact_name: Mapped[str | None] = mapped_column(String(255), default=None)
     channel: Mapped[str] = mapped_column(String(16))  # telegram | email | manual
     status: Mapped[str] = mapped_column(String(16), default="pending")
     # pending | sent | failed | received | superseded

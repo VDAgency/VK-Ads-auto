@@ -58,6 +58,15 @@ def test_send_endpoint_ok(tmp_path: Path) -> None:
     assert resp.json() == {"ok": True}
 
 
+def test_send_endpoint_returns_display_name(tmp_path: Path) -> None:
+    fake = FakeTelethon(authorized=True, first_name="Вячеслав")
+    client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
+    with _app_with(client) as tc:
+        resp = tc.post("/send", json={"sender_id": SENDER, "username": "@cs", "text": "бриф"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "display_name": "Вячеслав"}
+
+
 def test_send_endpoint_username_not_occupied(tmp_path: Path) -> None:
     fake = FakeTelethon(authorized=True, send_error=errors.UsernameNotOccupiedError(request=None))
     client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))

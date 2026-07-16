@@ -69,7 +69,12 @@ class TelegramUserbotDelivery:
             return self._failed("userbot_unreachable", invite_text)
 
         if response.is_success and payload.get("ok") is True:
-            return DeliveryResult(ok=True, channel=DeliveryChannel.TELEGRAM)
+            name = payload.get("display_name")
+            return DeliveryResult(
+                ok=True,
+                channel=DeliveryChannel.TELEGRAM,
+                recipient_name=name if isinstance(name, str) and name else None,
+            )
 
         error_code = payload.get("error") or "userbot_unreachable"
         # Неизвестные коды сводим к userbot_unreachable — предсказуемый UX оператору.

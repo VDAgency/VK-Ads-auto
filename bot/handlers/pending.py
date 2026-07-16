@@ -1,9 +1,14 @@
 """Трекинг брифов: кто ещё не прислал и кто прислал недавно (команда №3).
 
 Тонкий хендлер: данные берём через `api_client` (HTTP к ядру), здесь только рендер.
+Строка списка: `N. Имя — @контакт — дата` (имя подтягивается из Telegram при
+отправке; для email/phone и старых записей имени нет — показываем только контакт).
+Дата — календарная относительно МСК: сегодня / вчера / ДД.ММ (в этом году) / ДД.ММ.ГГГГ.
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, or_f
@@ -17,47 +22,52 @@ from bot.keyboards import BTN_PENDING
 router = Router(name="pending")
 router.message.filter(OperatorOnly())
 
-_VARIANT_HINT = {"individual": "физлицо", "community": "ИП/бизнес"}
-_CHANNEL_HINT = {"telegram": "telegram", "email": "email", "manual": "телефон"}
+# Операторы в РФ — считаем «сегодня/вчера» по МСК (UTC+3, без переходов на DST).
+_MSK = timezone(timedelta(hours=3))
 
 
-def _waiting_phrase(days: int) -> str:
-    if days <= 0:
+def _date_label(iso: str | None, now: datetime) -> str:
+    """Календарная метка отправки/приёма: сегодня / вчера / ДД.ММ / ДД.ММ.ГГГГ."""
+    if not iso:
+        return ""
+    moment = datetime.fromisoformat(iso).astimezone(_MSK).date()
+    today = now.astimezone(_MSK).date()
+    if moment == today:
         return "сегодня"
-    if days == 1:
-        return "ждём 1 день"
-    if 2 <= days <= 4:
-        return f"ждём {days} дня"
-    return f"ждём {days} дней"
-
-
-def _received_phrase(days: int) -> str:
-    if days <= 0:
-        return "сегодня"
-    if days == 1:
+    if moment == today - timedelta(days=1):
         return "вчера"
-    return f"{days} дн. назад"
+    if moment.year == today.year:
+        return moment.strftime("%d.%m")
+    return moment.strftime("%d.%m.%Y")
 
 
-def _fmt_pending(item: InviteItem) -> str:
-    channel = _CHANNEL_HINT.get(item.channel, item.channel)
-    return f"• {item.contact}, {channel} — {_waiting_phrase(item.waiting_days)}"
+def _who(item: InviteItem) -> str:
+    """Читаемая часть строки: `Имя — @контакт` или просто контакт, если имени нет."""
+    if item.contact_name:
+        return f"{item.contact_name} — {item.contact}"
+    return item.contact
 
 
-def _fmt_recent(item: InviteItem) -> str:
-    channel = _CHANNEL_HINT.get(item.channel, item.channel)
-    return f"• {item.contact}, {channel}"
+def _fmt_line(idx: int, who: str, label: str) -> str:
+    tail = f" — {label}" if label else ""
+    return f"{idx}. {who}{tail}"
 
 
-def _render(pending: list[InviteItem], recent: list[InviteItem]) -> str:
+def _render(pending: list[InviteItem], recent: list[InviteItem], now: datetime) -> str:
     if not pending and not recent:
         return "Пока никого не ждём. Отправьте бриф — кнопка 📨 «Отправить бриф»."
 
     lines: list[str] = [f"📥 Ждём бриф ({len(pending)})"]
-    lines += [_fmt_pending(i) for i in pending] or ["— пусто"]
+    lines += [
+        _fmt_line(i, _who(item), _date_label(item.sent_at, now))
+        for i, item in enumerate(pending, start=1)
+    ] or ["— пусто"]
     lines.append("")
     lines.append(f"✅ Пришли за неделю ({len(recent)})")
-    lines += [_fmt_recent(i) for i in recent] or ["— пусто"]
+    lines += [
+        _fmt_line(i, _who(item), _date_label(item.received_at, now))
+        for i, item in enumerate(recent, start=1)
+    ] or ["— пусто"]
     return "\n".join(lines)
 
 
@@ -70,4 +80,4 @@ async def show_pending(message: Message) -> None:
     except CoreUnavailable:
         await message.answer("Сервис временно недоступен, попробуйте позже.")
         return
-    await message.answer(_render(pending, recent))
+    await message.answer(_render(pending, recent, datetime.now(_MSK)))

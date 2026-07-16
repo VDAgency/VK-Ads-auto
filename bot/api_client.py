@@ -47,6 +47,7 @@ class InviteItem:
     sent_at: str | None
     received_at: str | None
     waiting_days: int
+    contact_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

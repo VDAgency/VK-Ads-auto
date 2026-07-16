@@ -25,16 +25,29 @@ def test_send_ok_returns_delivered() -> None:
     async def scenario() -> None:
         with respx.mock() as router:
             route = router.post(f"{_URL}/send").mock(
-                return_value=httpx.Response(200, json={"ok": True})
+                return_value=httpx.Response(200, json={"ok": True, "display_name": "Вячеслав"})
             )
             result = await _delivery().send(_contact(), "text")
         assert result.ok is True
         assert result.channel is DeliveryChannel.TELEGRAM
         assert result.fallback_text is None
         assert result.error is None
+        # Имя получателя из Telegram прокидывается в результат доставки.
+        assert result.recipient_name == "Вячеслав"
         # Отправитель уходит в userbot-сервис: сообщение шлётся от его сессии.
         body = json.loads(route.calls.last.request.content)
         assert body == {"sender_id": _SENDER, "username": "@ivanov", "text": "text"}
+
+    asyncio.run(scenario())
+
+
+def test_send_ok_without_display_name() -> None:
+    async def scenario() -> None:
+        with respx.mock() as router:
+            router.post(f"{_URL}/send").mock(return_value=httpx.Response(200, json={"ok": True}))
+            result = await _delivery().send(_contact(), "text")
+        assert result.ok is True
+        assert result.recipient_name is None
 
     asyncio.run(scenario())
 

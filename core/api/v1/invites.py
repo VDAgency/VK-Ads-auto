@@ -29,6 +29,7 @@ class InviteItem(BaseModel):
     """Строка трекинга инвайта."""
 
     contact: str
+    contact_name: str | None = None
     variant: str
     channel: str
     sent_at: datetime | None
@@ -45,6 +46,7 @@ class InvitesOut(BaseModel):
 def _to_item(view: InviteView) -> InviteItem:
     return InviteItem(
         contact=view.contact,
+        contact_name=view.contact_name,
         variant=view.variant,
         channel=view.channel,
         sent_at=view.sent_at,

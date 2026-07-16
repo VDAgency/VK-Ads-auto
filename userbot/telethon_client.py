@@ -49,7 +49,16 @@ class TelethonProtocol(Protocol):
     ) -> object: ...
     async def sign_in_password(self, password: str) -> object: ...
     async def send_message(self, entity: str, message: str) -> object: ...
+    async def get_entity(self, entity: str) -> object: ...
     async def get_me(self) -> object: ...
+
+
+def _display_name(entity: object) -> str | None:
+    """Имя получателя из Telethon-сущности (first + last), или None если пусто."""
+    first = getattr(entity, "first_name", None) or ""
+    last = getattr(entity, "last_name", None) or ""
+    name = f"{first} {last}".strip()
+    return name or None
 
 
 class ClientFactory(Protocol):
@@ -154,22 +163,26 @@ class UserbotClient:
             raise AuthError("password_invalid") from exc
         self._finalize(sender_id, client)
 
-    async def send(self, sender_id: int, username: str, text: str) -> str | None:
-        """Отправить сообщение от имени оператора. `None` — успех; иначе код §9.
+    async def send(self, sender_id: int, username: str, text: str) -> tuple[str | None, str | None]:
+        """Отправить сообщение от имени оператора → `(error, display_name)`.
 
-        Нет сессии вовсе → `sender_not_authorized` (оператор ещё не проходил
-        /link_userbot); сессия есть, но умерла → `session_expired` (нужен релинк).
+        `error=None` — успех; `display_name` — имя получателя из Telegram (или None,
+        если не заполнено). Нет сессии вовсе → `sender_not_authorized` (оператор ещё
+        не проходил /link_userbot); сессия есть, но умерла → `session_expired`.
         """
         client = await self._get_client(sender_id)
         if client is None:
             if self._store.exists(sender_id):
-                return "session_expired"
-            return "sender_not_authorized"
+                return ("session_expired", None)
+            return ("sender_not_authorized", None)
         try:
+            # Резолвим сущность (для имени), затем отправляем — Telethon кеширует
+            # entity, повторной сетевой операции по username не будет.
+            entity = await client.get_entity(username)
             await client.send_message(username, text)
         except Exception as exc:  # noqa: BLE001 — любой сбой → код §9, наружу не бросаем
-            return map_send_error(exc)
-        return None
+            return (map_send_error(exc), None)
+        return (None, _display_name(entity))
 
     def _require_pending(self, sender_id: int) -> TelethonProtocol:
         client = self._pending.get(sender_id)
