@@ -69,11 +69,35 @@ class SmtpDelivery:
 
         return DeliveryResult(ok=True, channel=DeliveryChannel.EMAIL)
 
-    def _build_message(self, recipient: str, invite_text: str) -> EmailMessage:
+    async def send_email(self, recipient: str, subject: str, body: str) -> bool:
+        """Отправить произвольное письмо (напр. ссылку входа в кабинет).
+
+        True — успех; False — SMTP не сконфигурирован или ошибка отправки (без исключений).
+        """
+        if not self._host or not self._user:
+            return False
+        message = self._build_message(recipient, body, subject=subject)
+        try:
+            await aiosmtplib.send(
+                message,
+                hostname=self._host,
+                port=self._port,
+                username=self._user,
+                password=self._password,
+                use_tls=True,
+                timeout=_TIMEOUT,
+            )
+        except (aiosmtplib.SMTPException, OSError, TimeoutError):
+            return False
+        return True
+
+    def _build_message(
+        self, recipient: str, invite_text: str, subject: str = _SUBJECT
+    ) -> EmailMessage:
         message = EmailMessage()
         message["From"] = f"{self._from_name} <{self._user}>"
         message["To"] = recipient
-        message["Subject"] = _SUBJECT
+        message["Subject"] = subject
         message.set_content(invite_text)
         return message
 
