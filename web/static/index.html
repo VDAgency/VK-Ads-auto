@@ -338,54 +338,180 @@
     </footer>
 
     <!-- ================= Модалка входа в кабинет ================= -->
-    <div class="lp-modal" id="login-modal" role="dialog" aria-modal="true" aria-label="Вход в кабинет" hidden>
+    <div
+      class="lp-modal"
+      id="login-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lm-title"
+      hidden
+    >
       <div class="lp-modal__backdrop" data-close-login></div>
-      <div class="lp-modal__card" role="document">
-        <button class="lp-modal__close" type="button" aria-label="Закрыть" data-close-login>×</button>
-        <h2 class="lp-modal__title">Вход в кабинет</h2>
-        <p class="lp-modal__sub">Введите email и пароль от личного кабинета.</p>
 
-        <div class="form-field">
-          <label for="lm-email">Email</label>
-          <input id="lm-email" type="email" autocomplete="email" placeholder="you@example.com" />
-        </div>
-        <div class="form-field">
-          <label for="lm-password">Пароль</label>
-          <input id="lm-password" type="password" autocomplete="current-password" placeholder="Ваш пароль" />
-        </div>
-        <div class="result err" id="lm-error" hidden></div>
-        <button class="btn btn--primary lp-modal__submit" id="lm-login" type="button">Войти</button>
+      <div class="lp-modal__card">
+        <button class="lp-modal__close" type="button" aria-label="Закрыть окно" data-close-login>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+        </button>
 
-        <p class="lp-modal__forgot">
-          <a href="#" id="lm-forgot-toggle">Забыли пароль? Прислать ссылку на email</a>
-        </p>
-        <div id="lm-forgot" hidden>
+        <div class="lp-modal__head">
+          <span class="lp-badge lp-modal__badge" aria-hidden="true">ВК</span>
+          <span class="lp-modal__kicker">
+            <span class="lp-modal__live" aria-hidden="true"></span>Личный кабинет
+          </span>
+          <h2 class="lp-modal__title" id="lm-title">Вход в кабинет</h2>
+          <p class="lp-modal__sub">Статус ваших брифов и запущенных кампаний — в одном месте.</p>
+        </div>
+
+        <!-- Два реальных способа входа: по паролю или по ссылке на почту. -->
+        <div class="lp-seg" role="group" aria-label="Способ входа">
+          <button class="lp-seg__btn is-active" type="button" aria-pressed="true" data-login-mode="pw">
+            По паролю
+          </button>
+          <button class="lp-seg__btn" type="button" aria-pressed="false" data-login-mode="link">
+            По ссылке на почту
+          </button>
+        </div>
+
+        <!-- Способ 1 — email + пароль. -->
+        <form class="lp-modal__pane" id="lm-form-pw" novalidate>
+          <div class="form-field">
+            <label for="lm-email">Email</label>
+            <input
+              id="lm-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+              required
+            />
+          </div>
+          <div class="form-field">
+            <label for="lm-password">Пароль</label>
+            <div class="lp-input-wrap">
+              <input
+                id="lm-password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Ваш пароль"
+                required
+              />
+              <button
+                class="lp-eye"
+                type="button"
+                aria-label="Показать пароль"
+                aria-pressed="false"
+                data-toggle-password="lm-password"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="lp-modal__error" id="lm-error" role="alert" hidden></div>
+          <button class="lp-btn lp-btn--primary lp-modal__submit" id="lm-login" type="submit">
+            Войти
+          </button>
+        </form>
+
+        <!-- Способ 2 — ссылка для входа на почту (первый вход / забытый пароль). -->
+        <form class="lp-modal__pane" id="lm-form-link" novalidate hidden>
+          <p class="lp-modal__hint">
+            Пришлём ссылку для входа на вашу почту — подойдёт, если вы ещё не задавали пароль
+            или забыли его.
+          </p>
           <div class="form-field">
             <label for="lm-forgot-email">Email</label>
-            <input id="lm-forgot-email" type="email" autocomplete="email" placeholder="you@example.com" />
+            <input
+              id="lm-forgot-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+              required
+            />
           </div>
-          <button class="btn btn--ghost lp-modal__submit" id="lm-forgot-send" type="button">Прислать ссылку</button>
-          <div class="result" id="lm-forgot-msg" hidden></div>
-        </div>
+          <div class="lp-modal__msg" id="lm-forgot-msg" role="status" hidden></div>
+          <button class="lp-btn lp-btn--outline lp-modal__submit" id="lm-forgot-send" type="submit">
+            Прислать ссылку
+          </button>
+        </form>
+
+        <p class="lp-modal__foot">
+          Ещё не отправляли бриф?
+          <a href="/brief-individual.html">Заполнить бриф&nbsp;→</a>
+        </p>
       </div>
     </div>
 
-    <!-- Модалка входа: открытие/закрытие + логин + запрос ссылки. -->
+    <!-- Модалка входа: открытие/закрытие, ловушка фокуса, два способа входа. -->
     <script>
       (function () {
         var modal = document.getElementById("login-modal");
-        var err = document.getElementById("lm-error");
+        var card = modal.querySelector(".lp-modal__card");
+        var errBox = document.getElementById("lm-error");
+        var lastFocused = null;
+
+        function focusables() {
+          return Array.prototype.slice
+            .call(card.querySelectorAll("a[href], button:not([disabled]), input:not([disabled])"))
+            .filter(function (el) {
+              return el.offsetParent !== null;
+            });
+        }
+
+        function setMode(mode) {
+          var pw = mode === "pw";
+          document.getElementById("lm-form-pw").toggleAttribute("hidden", !pw);
+          document.getElementById("lm-form-link").toggleAttribute("hidden", pw);
+          modal.querySelectorAll("[data-login-mode]").forEach(function (btn) {
+            var on = btn.getAttribute("data-login-mode") === mode;
+            btn.classList.toggle("is-active", on);
+            btn.setAttribute("aria-pressed", on ? "true" : "false");
+          });
+          var first = document.getElementById(pw ? "lm-email" : "lm-forgot-email");
+          if (first) first.focus();
+        }
+
+        function hideError() {
+          errBox.setAttribute("hidden", "");
+        }
+        function showError(msg) {
+          errBox.textContent = msg;
+          errBox.removeAttribute("hidden");
+        }
+        function setLoading(btn, on, label) {
+          btn.disabled = on;
+          btn.classList.toggle("is-loading", on);
+          btn.textContent = label;
+        }
+
         function open() {
-          err.setAttribute("hidden", "");
+          lastFocused = document.activeElement;
+          hideError();
           modal.removeAttribute("hidden");
           document.body.style.overflow = "hidden";
+          setMode("pw");
           var em = document.getElementById("lm-email");
-          if (em) em.focus();
+          if (em)
+            setTimeout(function () {
+              em.focus();
+            }, 20);
         }
         function close() {
           modal.setAttribute("hidden", "");
           document.body.style.overflow = "";
+          if (lastFocused && lastFocused.focus) lastFocused.focus();
         }
+
         document.querySelectorAll("[data-open-login]").forEach(function (el) {
           el.addEventListener("click", function (e) {
             e.preventDefault();
@@ -398,44 +524,104 @@
         document.addEventListener("keydown", function (e) {
           if (e.key === "Escape" && !modal.hasAttribute("hidden")) close();
         });
-        // Открыть сразу по ?login=1 (редирект из cabinet.html без сессии).
-        if (new URLSearchParams(location.search).get("login") === "1") open();
-
-        document.getElementById("lm-login").addEventListener("click", async function () {
-          err.setAttribute("hidden", "");
-          var email = document.getElementById("lm-email").value.trim();
-          var password = document.getElementById("lm-password").value;
-          var res = await fetch("/api/v1/cabinet/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ email: email, password: password }),
-          });
-          if (res.ok) {
-            location.href = "/cabinet.html";
-          } else {
-            err.textContent = "Неверный email или пароль.";
-            err.removeAttribute("hidden");
+        // Ловушка фокуса: Tab по кругу внутри карточки (не уходим на фон).
+        card.addEventListener("keydown", function (e) {
+          if (e.key !== "Tab") return;
+          var f = focusables();
+          if (!f.length) return;
+          var first = f[0];
+          var last = f[f.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
           }
         });
 
-        document.getElementById("lm-forgot-toggle").addEventListener("click", function (e) {
-          e.preventDefault();
-          document.getElementById("lm-forgot").removeAttribute("hidden");
-        });
-        document.getElementById("lm-forgot-send").addEventListener("click", async function () {
-          var email = document.getElementById("lm-forgot-email").value.trim();
-          var res = await fetch("/api/v1/cabinet/request-link", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: email }),
+        // Переключатель способа входа.
+        modal.querySelectorAll("[data-login-mode]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            setMode(btn.getAttribute("data-login-mode"));
           });
+        });
+
+        // Показать / скрыть пароль.
+        modal.querySelectorAll("[data-toggle-password]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var input = document.getElementById(btn.getAttribute("data-toggle-password"));
+            var show = input.type === "password";
+            input.type = show ? "text" : "password";
+            btn.setAttribute("aria-pressed", show ? "true" : "false");
+            btn.setAttribute("aria-label", show ? "Скрыть пароль" : "Показать пароль");
+            btn.classList.toggle("is-on", show);
+          });
+        });
+
+        // Открыть сразу по ?login=1 (редирект из cabinet.html без сессии).
+        if (new URLSearchParams(location.search).get("login") === "1") open();
+
+        // Способ 1 — вход по паролю (Enter в форме тоже отправляет).
+        document.getElementById("lm-form-pw").addEventListener("submit", async function (e) {
+          e.preventDefault();
+          hideError();
+          var btn = document.getElementById("lm-login");
+          var email = document.getElementById("lm-email").value.trim();
+          var password = document.getElementById("lm-password").value;
+          if (!email || !password) {
+            showError("Введите email и пароль.");
+            return;
+          }
+          setLoading(btn, true, "Входим…");
+          try {
+            var res = await fetch("/api/v1/cabinet/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({ email: email, password: password }),
+            });
+            if (res.ok) {
+              location.href = "/cabinet.html";
+              return;
+            }
+            showError(
+              res.status === 429
+                ? "Слишком много попыток. Подождите минуту и попробуйте снова."
+                : "Неверный email или пароль."
+            );
+          } catch (_) {
+            showError("Не удалось связаться с сервером. Проверьте соединение.");
+          }
+          setLoading(btn, false, "Войти");
+        });
+
+        // Способ 2 — ссылка для входа на почту.
+        document.getElementById("lm-form-link").addEventListener("submit", async function (e) {
+          e.preventDefault();
+          var btn = document.getElementById("lm-forgot-send");
+          var email = document.getElementById("lm-forgot-email").value.trim();
           var msg = document.getElementById("lm-forgot-msg");
-          msg.removeAttribute("hidden");
-          msg.className = res.ok ? "result ok show" : "result err show";
-          msg.textContent = res.ok
+          msg.setAttribute("hidden", "");
+          if (!email) return;
+          setLoading(btn, true, "Отправляем…");
+          var ok = false;
+          try {
+            var res = await fetch("/api/v1/cabinet/request-link", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: email }),
+            });
+            ok = res.ok;
+          } catch (_) {
+            ok = false;
+          }
+          msg.className = "lp-modal__msg " + (ok ? "is-ok" : "is-err");
+          msg.textContent = ok
             ? "Если аккаунт с таким email есть, мы отправили ссылку для входа."
             : "Не удалось отправить. Попробуйте позже.";
+          msg.removeAttribute("hidden");
+          setLoading(btn, false, "Прислать ссылку");
         });
       })();
     </script>

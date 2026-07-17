@@ -101,10 +101,13 @@ def test_landing_has_login_modal() -> None:
     client = TestClient(create_app())
     body = client.get("/").text
     assert 'id="login-modal"' in body
+    assert 'aria-labelledby="lm-title"' in body  # корректная связка dialog↔заголовок
     assert "data-open-login" in body  # ссылки открывают модалку
     assert "/api/v1/cabinet/login" in body
-    assert "/api/v1/cabinet/request-link" in body  # «забыли пароль» в модалке
+    assert "/api/v1/cabinet/request-link" in body  # вход по ссылке на почту
     assert "form-field" in body  # полноширинные поля ввода
+    assert "data-login-mode" in body  # сегментный переключатель способов входа
+    assert "data-toggle-password" in body  # показать/скрыть пароль
 
 
 def test_landing_css_has_modal_styles() -> None:
@@ -112,6 +115,8 @@ def test_landing_css_has_modal_styles() -> None:
     css = client.get("/landing.css").text
     assert ".lp-modal" in css
     assert "backdrop-filter" in css  # стеклянное затемнение
+    assert ".lp-seg" in css  # сегментный переключатель
+    assert ".lp-eye" in css  # кнопка показа пароля
 
 
 def test_admin_page_served_with_sections() -> None:
