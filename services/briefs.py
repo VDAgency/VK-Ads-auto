@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from datetime import datetime
 
 from config.settings import get_settings
-from db.models import Brief
+from db.models import Brief, Client
 from db.repositories import (
     create_client,
     find_brief_invite_by_token,
@@ -21,8 +21,8 @@ from db.repositories import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_parser import BriefVariant, parse_brief
-from services.notifier import notify_operator_brief_received
-from services.referral import register_referral, resolve_ref_code
+from services.notifier import notify_operator, notify_operator_brief_received
+from services.referral import referral_notification, register_referral, resolve_ref_code
 
 
 class InviteTokenError(Exception):
@@ -38,17 +38,25 @@ class InviteTokenError(Exception):
 
 
 async def _maybe_register_referral(
-    session: AsyncSession, account_id: int, ref_code: str, referred_client_id: int
-) -> None:
-    """Если реф-код валиден и реферер существует — зафиксировать реферал + скидку."""
+    session: AsyncSession, account_id: int, ref_code: str, referred: Client
+) -> tuple[str, str, int] | None:
+    """Если реф-код валиден и реферер существует — зафиксировать реферал + скидку.
+
+    Возвращает `(имя реферера, имя приведённого, %)` для уведомления оператору
+    (шлётся после commit), либо None, если реферал не зарегистрирован.
+    """
     referrer_id = resolve_ref_code(ref_code, get_settings().secret_key.get_secret_value())
-    if referrer_id is None or referrer_id == referred_client_id:
-        return
-    if await get_client(session, account_id, referrer_id) is None:
-        return
-    await register_referral(
-        session, account_id, referrer_id, referred_client_id, month=datetime.now().strftime("%Y-%m")
+    if referrer_id is None or referrer_id == referred.id:
+        return None
+    referrer = await get_client(session, account_id, referrer_id)
+    if referrer is None:
+        return None
+    discount = await register_referral(
+        session, account_id, referrer_id, referred.id, month=datetime.now().strftime("%Y-%m")
     )
+    if discount is None:
+        return None
+    return (referrer.full_name or "клиент", referred.full_name or "клиент", discount.percent)
 
 
 async def intake_brief(
@@ -96,8 +104,9 @@ async def intake_brief(
             telegram=contact.telegram,
         )
 
+    referral_info: tuple[str, str, int] | None = None
     if ref_code and is_new_client:
-        await _maybe_register_referral(session, account_id, ref_code, client.id)
+        referral_info = await _maybe_register_referral(session, account_id, ref_code, client)
 
     brief = Brief(
         account_id=account_id,
@@ -118,10 +127,15 @@ async def intake_brief(
     await session.commit()
     await session.refresh(brief)
 
-    if invite is not None:
-        await notify_operator_brief_received(
-            client_name=parsed.full_name or contact.telegram or "клиент",
-            variant=variant.value,
-            contact_value=contact.email or contact.phone or contact.telegram,
-        )
+    # Уведомления оператору — после commit (внешние side-effects, не в транзакции).
+    # Шлём по ЛЮБОМУ брифу: и по инвайту, и самостоятельному по реф-ссылке (Фаза 11).
+    await notify_operator_brief_received(
+        client_name=parsed.full_name or contact.telegram or "клиент",
+        variant=variant.value,
+        contact_value=contact.email or contact.phone or contact.telegram,
+    )
+    # Реферал — отдельное уведомление «X привёл Y, скидка Z%» (Фаза 10).
+    if referral_info is not None:
+        referrer_name, referred_name, percent = referral_info
+        await notify_operator(referral_notification(referrer_name, referred_name, percent))
     return brief

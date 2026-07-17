@@ -34,6 +34,17 @@ def reset_operator_notifier() -> None:
     _sender = None
 
 
+async def notify_operator(text: str) -> None:
+    """Отправить оператору произвольное сообщение (напр. о реферале). No-op без колбэка."""
+    if _sender is None:
+        logger.info("operator notifier not registered; skip notice")
+        return
+    try:
+        await _sender(text)
+    except Exception:  # noqa: BLE001 — уведомление не должно ронять вызывающую операцию
+        logger.exception("failed to send operator notice")
+
+
 def mask_pii(value: str) -> str:
     """Замаскировать ПДн для логов: оставить края, середину скрыть.
 
