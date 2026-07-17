@@ -67,3 +67,24 @@ def test_community_brief_form_served() -> None:
     response = client.get("/brief-community.html")
     assert response.status_code == 200
     assert 'data-variant="community"' in response.text
+
+
+def test_cabinet_page_has_auth_screens() -> None:
+    client = TestClient(create_app())
+    body = client.get("/cabinet.html").text
+    assert client.get("/cabinet.html").status_code == 200
+    # Экран установки пароля (первый вход) и вход по email+паролю.
+    assert "Задайте пароль для входа" in body
+    assert "/api/v1/cabinet/set-password" in body
+    assert "/api/v1/cabinet/login" in body
+    assert "/api/v1/cabinet/request-link" in body  # «забыли пароль»
+    assert "Запишите или запомните его" in body  # явная инструкция про пароль
+
+
+def test_brief_forms_mark_email_and_phone_required() -> None:
+    client = TestClient(create_app())
+    for form in ("/brief-individual.html", "/brief-community.html"):
+        body = client.get(form).text
+        assert "Email *" in body
+        assert "Телефон *" in body
+        assert "required" in body
