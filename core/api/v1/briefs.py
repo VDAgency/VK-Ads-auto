@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 from typing import Annotated, Literal
 
 from config.settings import get_settings
@@ -18,15 +16,8 @@ from services.auth_magiclink import generate_token
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
 from services.briefs import InviteTokenError, intake_brief
-from services.creative_store import save_creative
-from services.creative_validate import (
-    ImageCreative,
-    is_valid,
-    validate_image,
-    validate_text,
-    validate_video_size,
-)
-from services.launch_service import BriefNotFoundError, launch_from_creative
+from services.creative_intake import CreativeError, intake_creative
+from services.launch_service import BriefNotFoundError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.rate_limit import brief_rate_limit
@@ -127,11 +118,16 @@ class CreativeLaunchOut(BaseModel):
     message: str
 
 
-# Защитный предел размера тела (бот и так качает из Telegram файлы ≤20 МБ).
-_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+def creative_http_error(exc: CreativeError) -> HTTPException:
+    """Маппинг `CreativeError` в HTTP-ответ (общий для бота и админки)."""
+    if exc.code == "media_too_large":
+        return HTTPException(status_code=413, detail="media_too_large")
+    if exc.code == "invalid":
+        return HTTPException(status_code=422, detail={"issues": exc.issues})
+    return HTTPException(status_code=422, detail=exc.code)
 
 
-def _to_card_out(view: BriefCardView) -> BriefCardOut:
+def to_card_out(view: BriefCardView) -> BriefCardOut:
     return BriefCardOut(
         brief_id=view.brief_id,
         variant=view.variant,
@@ -194,7 +190,7 @@ async def get_brief_detail(
     view = await get_brief_card(session, DEFAULT_ACCOUNT_ID, brief_id)
     if view is None:
         raise HTTPException(status_code=404, detail="brief_not_found")
-    return _to_card_out(view)
+    return to_card_out(view)
 
 
 @router.patch("/{brief_id}")
@@ -208,7 +204,7 @@ async def edit_brief(
     if view is None:
         raise HTTPException(status_code=404, detail="brief_not_found")
     await session.commit()
-    card = _to_card_out(view)
+    card = to_card_out(view)
     return BriefEditOut(**card.model_dump(), unknown=unknown)
 
 
@@ -220,33 +216,19 @@ async def upload_creative(
 ) -> CreativeLaunchOut:
     """Принять креатив (триггер запуска РК): валидировать, сохранить, создать кампанию."""
     try:
-        raw = base64.b64decode(data.media_b64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="media_b64_invalid") from exc
-    if len(raw) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="media_too_large")
-
-    if data.media_type == "photo":
-        issues = validate_image(
-            ImageCreative(fmt="jpg", width=data.width, height=data.height, size_bytes=len(raw))
-        )
-    else:
-        issues = validate_video_size(len(raw))
-    issues += validate_text(data.title, data.body)
-    if not is_valid(issues):
-        raise HTTPException(status_code=422, detail={"issues": issues})
-
-    path = save_creative(brief_id, data.media_type, raw)
-    try:
-        outcome = await launch_from_creative(
+        outcome = await intake_creative(
             session,
             DEFAULT_ACCOUNT_ID,
             brief_id,
-            data.media_type,
-            path,
-            data.title or None,
-            data.body or None,
+            media_b64=data.media_b64,
+            media_type=data.media_type,
+            width=data.width,
+            height=data.height,
+            title=data.title,
+            body=data.body,
         )
+    except CreativeError as exc:
+        raise creative_http_error(exc) from exc
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
