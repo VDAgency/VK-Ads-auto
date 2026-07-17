@@ -16,7 +16,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Chromium + системные библиотеки для headless-запуска (--with-deps → apt).
-RUN uv run playwright install --with-deps chromium
+# `--no-sync`: playwright уже в окружении из предыдущего sync; без флага `uv run`
+# пытается досинхронизировать проект (нужен README.md, которого ещё нет на этом слое).
+RUN uv run --no-sync playwright install --with-deps chromium
 
 COPY . .
 RUN uv sync --frozen --no-dev
