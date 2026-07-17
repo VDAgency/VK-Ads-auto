@@ -325,6 +325,16 @@
   flex-wrap: wrap;
   gap: 14px;
 }
+.lp-hero__login {
+  margin: 18px 0 0;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.lp-hero__login a {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: underline;
+}
 .lp-trust {
   list-style: none;
   margin: 28px 0 0;

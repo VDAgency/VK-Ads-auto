@@ -23,6 +23,10 @@
         <div id="briefs"></div>
 
         <div class="card" id="referral" style="margin-top: 16px"></div>
+
+        <p style="margin-top: 20px">
+          <a href="#" id="logout">Выйти</a>
+        </p>
       </section>
 
       <!-- Первый вход: установка пароля -->
@@ -246,6 +250,11 @@
         show("login");
       }
 
+      async function logout() {
+        await fetch("/api/v1/cabinet/logout", { method: "POST", credentials: "same-origin" });
+        location.href = "/cabinet.html";
+      }
+
       async function init() {
         $("setpw-btn").addEventListener("click", setPassword);
         $("login-btn").addEventListener("click", login);
@@ -253,6 +262,10 @@
         $("forgot-toggle").addEventListener("click", (e) => {
           e.preventDefault();
           show("forgot-box");
+        });
+        $("logout").addEventListener("click", (e) => {
+          e.preventDefault();
+          logout();
         });
 
         const token = currentToken();
