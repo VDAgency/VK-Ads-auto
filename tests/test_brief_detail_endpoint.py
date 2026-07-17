@@ -19,6 +19,7 @@ T = TypeVar("T")
 _PAYLOAD = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/id1",
+    "vk_ad_cabinet_id": "13410929",
     "email": "v@example.com",
     "phone": "+79990000000",
     "geo": "Самара",
@@ -108,9 +109,9 @@ def test_get_brief_card_404_when_missing() -> None:
 
 def test_patch_brief_applies_edits_and_persists() -> None:
     async def scenario(client: AsyncClient) -> dict[str, Any]:
-        # Правка поля №1 (ФИО) и №7 (география).
+        # Правка поля №1 (ФИО) и №8 (география; после вставки ID кабинета сдвиг +1).
         patch = await client.patch(
-            "/api/v1/briefs/1", json={"edits": {"1": "Иван Петров", "7": "Москва"}}
+            "/api/v1/briefs/1", json={"edits": {"1": "Иван Петров", "8": "Москва"}}
         )
         assert patch.status_code == 200
         # Перечитываем карточку — правки сохранились в БД.

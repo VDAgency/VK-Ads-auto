@@ -141,7 +141,7 @@ def test_brief_detail_returns_card() -> None:
 
 def test_brief_edit_applies() -> None:
     async def scenario(client: AsyncClient) -> dict[str, Any]:
-        resp = await client.patch("/api/v1/admin/briefs/1", json={"edits": {"7": "Москва"}})
+        resp = await client.patch("/api/v1/admin/briefs/1", json={"edits": {"8": "Москва"}})
         assert resp.status_code == 200
         body: dict[str, Any] = resp.json()
         return body
