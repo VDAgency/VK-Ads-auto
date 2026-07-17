@@ -52,6 +52,18 @@ class UserbotAuthError(RuntimeError):
         self.code = code
 
 
+class KotbotUnavailable(RuntimeError):
+    """Kotbot-сервис не сконфигурирован или недоступен — работаем в мок-режиме."""
+
+
+class KotbotAuthError(RuntimeError):
+    """Kotbot-сервис отверг вход (400) — показать оператору подсказку по коду."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(frozen=True, slots=True)
 class InviteItem:
     """Строка трекинга брифа (зеркало `InviteItem` ядра)."""
@@ -419,3 +431,120 @@ async def userbot_submit_code(sender_id: int, phone: str, code: str, phone_code_
 async def userbot_submit_password(sender_id: int, password: str) -> None:
     """`/auth/password` — завершить авторизацию при включённом 2FA."""
     await _userbot_request("POST", "/auth/password", {"sender_id": sender_id, "password": password})
+
+
+# --- Kotbot (браузерная автоматизация kotbot.ru, spec 2026-07-17 §5) ---------
+#
+# Ходим напрямую в kotbot-сервис (свой BASE_URL), не через ядро. Пустой
+# `KOTBOT_BASE_URL` = сервис не сконфигурирован → `KotbotUnavailable`
+# (хендлер уходит в мок-режим). 400 от auth-эндпоинтов = код ошибки в detail.
+
+# Браузерный логин долгий (навигация + челлендж) — таймаут заметно больше обычного.
+_KOTBOT_AUTH_TIMEOUT = httpx.Timeout(120.0)
+
+
+@dataclass(frozen=True, slots=True)
+class KotbotStrategyHealth:
+    """Состояние одной стратегии входа (зеркало `/health.strategies.<name>`)."""
+
+    has_credentials: bool
+    has_state: bool
+    needs_reauth: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KotbotHealth:
+    """Агрегированное здоровье kotbot-сервиса (зеркало `GET /health`)."""
+
+    healthy: bool
+    email: KotbotStrategyHealth
+    vk: KotbotStrategyHealth
+
+
+@dataclass(frozen=True, slots=True)
+class KotbotAuthResult:
+    """Итог `/auth/start`: ok либо code_required с attempt_id и подсказкой."""
+
+    status: str  # "ok" | "code_required"
+    attempt_id: str | None
+    hint: str
+
+
+def _kotbot_base_url() -> str:
+    return get_settings().kotbot_base_url.rstrip("/")
+
+
+def kotbot_configured() -> bool:
+    """Задан ли `KOTBOT_BASE_URL` — иначе хендлер работает в мок-режиме."""
+    return bool(_kotbot_base_url())
+
+
+async def _kotbot_request(
+    method: str,
+    path: str,
+    json: dict[str, Any] | None = None,
+    *,
+    request_timeout: httpx.Timeout = _TIMEOUT,
+) -> dict[str, Any]:
+    """Запрос к kotbot-сервису; сеть/5xx → `KotbotUnavailable`, 400 → `KotbotAuthError`."""
+    base = _kotbot_base_url()
+    if not base:
+        raise KotbotUnavailable("kotbot_base_url is empty")
+    try:
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
+            response = await client.request(method, f"{base}{path}", json=json)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise KotbotUnavailable(str(exc)) from exc
+    if response.status_code == 400:
+        detail = "unknown"
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", "unknown"))
+        raise KotbotAuthError(detail)
+    if response.status_code >= 500:
+        raise KotbotUnavailable(f"kotbot {response.status_code}")
+    result: dict[str, Any] = response.json()
+    return result
+
+
+def _parse_strategy_health(payload: dict[str, Any]) -> KotbotStrategyHealth:
+    return KotbotStrategyHealth(
+        has_credentials=bool(payload.get("has_credentials", False)),
+        has_state=bool(payload.get("has_state", False)),
+        needs_reauth=bool(payload.get("needs_reauth", False)),
+    )
+
+
+async def kotbot_status() -> KotbotHealth:
+    """Опрос `GET /health`: агрегат healthy + состояние по стратегиям."""
+    payload = await _kotbot_request("GET", "/health")
+    strategies = payload.get("strategies", {})
+    return KotbotHealth(
+        healthy=bool(payload.get("healthy", False)),
+        email=_parse_strategy_health(strategies.get("email", {})),
+        vk=_parse_strategy_health(strategies.get("vk", {})),
+    )
+
+
+async def kotbot_start_auth(strategy: str, login: str, password: str) -> KotbotAuthResult:
+    """`/auth/start` — начать вход; ok либо code_required с attempt_id."""
+    payload = await _kotbot_request(
+        "POST",
+        "/auth/start",
+        {"strategy": strategy, "login": login, "password": password},
+        request_timeout=_KOTBOT_AUTH_TIMEOUT,
+    )
+    return KotbotAuthResult(
+        status=str(payload.get("status", "")),
+        attempt_id=payload.get("attempt_id"),
+        hint=str(payload.get("hint", "")),
+    )
+
+
+async def kotbot_submit_code(attempt_id: str, code: str) -> None:
+    """`/auth/code` — донести код подтверждения; успех = без исключений."""
+    await _kotbot_request(
+        "POST",
+        "/auth/code",
+        {"attempt_id": attempt_id, "code": code},
+        request_timeout=_KOTBOT_AUTH_TIMEOUT,
+    )

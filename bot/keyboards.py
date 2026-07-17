@@ -117,6 +117,17 @@ def code_keypad() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def kotbot_strategy_keyboard() -> InlineKeyboardMarkup:
+    """Выбор стратегии входа на kotbot.ru (/link_kotbot): почта / VK / отмена."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📧 Почта и пароль", callback_data="kotbot:email")],
+            [InlineKeyboardButton(text="🔵 VK-аккаунт", callback_data="kotbot:vk")],
+            [InlineKeyboardButton(text="Отмена", callback_data="kotbot:cancel")],
+        ]
+    )
+
+
 # Подписи периодов статистики (callback `stats:{cabinet_id}:{period}`).
 _PERIOD_LABELS = [("all", "С запуска"), ("month", "Месяц"), ("week", "Неделя")]
 

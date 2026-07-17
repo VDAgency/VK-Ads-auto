@@ -20,6 +20,15 @@ class LinkUserbot(StatesGroup):
     entering_password = State()  # ввод пароля 2FA (если включён)
 
 
+class LinkKotbot(StatesGroup):
+    """Сценарий «подключить kotbot»: стратегия → логин → пароль → код (spec 2026-07-17 §5)."""
+
+    choosing_strategy = State()  # выбор: почта+пароль / VK-аккаунт
+    entering_login = State()  # ввод логина (почта или логин VK)
+    entering_password = State()  # ввод пароля (сообщение сразу удаляется)
+    entering_code = State()  # ввод кода подтверждения (сообщение сразу удаляется)
+
+
 class EditBrief(StatesGroup):
     """Сценарий «внести правки в бриф»: правки формата `номер.значение` (PROJECT.md §4.1.6)."""
 

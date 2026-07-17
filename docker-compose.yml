@@ -64,6 +64,32 @@ services:
       timeout: 5s
       retries: 3
 
+  # Сервис браузерной автоматизации kotbot.ru (Playwright, spec 2026-07-17).
+  # Порт наружу не публикуется — только внутри compose-сети (бот и адаптер ядра
+  # ходят на http://kotbot:8002). Креды/storage_state — шифрованные файлы в
+  # ./secrets/kotbot; том креативов — только чтение (загрузка в кампании, K-PR3).
+  kotbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.kotbot
+    restart: unless-stopped
+    shm_size: "1gb"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./secrets:/secrets
+      - creatives:/data/creatives:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped

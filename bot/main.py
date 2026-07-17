@@ -11,11 +11,12 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from config.settings import get_settings
 
-from bot import api_client, userbot_watch
+from bot import api_client, kotbot_watch, userbot_watch
 from bot.handlers import (
     admin,
     brief_card,
     creative,
+    link_kotbot,
     link_userbot,
     pending,
     send_brief,
@@ -38,6 +39,7 @@ def build_dispatcher() -> Dispatcher:
     dispatcher.include_router(stats.router)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(link_userbot.router)
+    dispatcher.include_router(link_kotbot.router)
     dispatcher.include_router(help_handler.router)
     # Визитка для чужих — последней: ловит только не-операторские апдейты.
     dispatcher.include_router(stranger.router)
@@ -52,15 +54,18 @@ async def run() -> None:
     bot = Bot(token=token)
     await setup_bot_commands(bot)
     dispatcher = build_dispatcher()
-    # Фоновый health-check сессий юзербота (§9): баннер в /send_brief при
-    # неавторизованной сессии оператора. Без USERBOT_BASE_URL — не запускаем.
-    poller: asyncio.Task[None] | None = None
+    # Фоновые health-check-поллеры (без BASE_URL соответствующего сервиса — не
+    # запускаем): userbot — баннер в /send_brief при неавторизованной сессии;
+    # kotbot — уведомление операторам на переходе healthy→unhealthy.
+    pollers: list[asyncio.Task[None]] = []
     if api_client.userbot_configured():
-        poller = asyncio.create_task(userbot_watch.poll_forever())
+        pollers.append(asyncio.create_task(userbot_watch.poll_forever()))
+    if api_client.kotbot_configured():
+        pollers.append(asyncio.create_task(kotbot_watch.poll_forever(bot)))
     try:
         await dispatcher.start_polling(bot)
     finally:
-        if poller is not None:
+        for poller in pollers:
             poller.cancel()
 
 
