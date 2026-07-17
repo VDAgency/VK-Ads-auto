@@ -45,6 +45,16 @@ def test_landing_respects_reduced_motion() -> None:
     assert "prefers-reduced-motion" in client.get("/landing.css").text
 
 
+def test_instruction_page_served() -> None:
+    client = TestClient(create_app())
+    response = client.get("/instrukciya-vk-cabinet.html")
+    assert response.status_code == 200
+    # Ключевые ориентиры инструкции по созданию кабинета VK Реклама.
+    assert "ID кабинета" in response.text
+    assert "Рекламодатель" in response.text
+    assert "ads.vk.ru" in response.text
+
+
 def test_health_still_works_with_static_mount() -> None:
     client = TestClient(create_app())
     assert client.get("/health").json() == {"status": "ok"}
