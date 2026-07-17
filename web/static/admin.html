@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Админ-панель — VK-Ads-auto</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .adm-tiles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 16px 0;
+      }
+      .adm-tile {
+        flex: 1 1 140px;
+        border: 1px solid var(--line, #e3e7ee);
+        border-radius: 12px;
+        padding: 14px 16px;
+        background: var(--surface, #fff);
+      }
+      .adm-tile b {
+        display: block;
+        font-size: 26px;
+        line-height: 1.1;
+      }
+      .adm-tile span {
+        color: var(--muted, #5b6678);
+        font-size: 13px;
+      }
+      .adm-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .adm-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--line, #e3e7ee);
+        border-radius: 10px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        background: var(--surface, #fff);
+      }
+      .adm-row:hover {
+        border-color: var(--accent, #2a6bff);
+      }
+      .adm-row .muted {
+        color: var(--muted, #5b6678);
+        font-size: 13px;
+      }
+      .adm-badge {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #eef2fb;
+        color: #2a6bff;
+        white-space: nowrap;
+      }
+      .adm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 14px 0;
+      }
+      .adm-back {
+        display: inline-block;
+        margin-bottom: 8px;
+        cursor: pointer;
+        color: var(--muted, #5b6678);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar"><div class="brand">VK<span>·</span>Ads<span>·</span>auto · админ</div></header>
+
+    <main class="wrap">
+      <!-- Нужен вход -->
+      <section id="need-auth" hidden>
+        <div class="eyebrow">Админ-панель</div>
+        <h2>Вход только из бота</h2>
+        <p class="lead">
+          Откройте админку из Telegram-бота командой <strong>/admin</strong> — бот пришлёт
+          ссылку для входа (действует 15 минут).
+        </p>
+        <div class="result err" id="auth-error" hidden></div>
+      </section>
+
+      <!-- Приложение -->
+      <section id="app" hidden>
+        <div class="eyebrow">Админ-панель оператора</div>
+        <div class="adm-tiles" id="tiles"></div>
+
+        <div class="adm-nav">
+          <button class="btn" data-view="clients" type="button">Клиенты</button>
+          <button class="btn" data-view="recent" type="button">Пришли брифы</button>
+          <button class="btn" data-view="pending" type="button">Ждём брифы</button>
+          <button class="btn" data-view="campaigns" type="button">Кампании</button>
+          <button class="btn" id="logout" type="button">Выйти</button>
+        </div>
+
+        <div id="list"></div>
+        <div id="detail"></div>
+        <div class="result" id="msg" hidden></div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const show = (id) => $(id).removeAttribute("hidden");
+      const hide = (id) => $(id).setAttribute("hidden", "");
+      const STATUS_RU = {
+        received: "Принят",
+        parsed: "В работе",
+        prepared: "Готов к запуску",
+        launched: "Запущена",
+        failed: "Ошибка",
+      };
+      const VARIANT_RU = { individual: "Физлицо", community: "Бизнес" };
+
+      function esc(s) {
+        return String(s == null ? "" : s).replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]
+        );
+      }
+
+      async function api(path, opts) {
+        const res = await fetch("/api/v1/admin" + path, {
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          ...(opts || {}),
+        });
+        return res;
+      }
+
+      function flash(text, ok) {
+        const m = $("msg");
+        m.textContent = text;
+        m.className = "result show " + (ok ? "ok" : "err");
+        m.removeAttribute("hidden");
+      }
+
+      function clearDetail() {
+        $("detail").innerHTML = "";
+        $("msg").setAttribute("hidden", "");
+      }
+
+      // ---- Дашборд ----
+      async function loadOverview() {
+        const res = await api("/overview");
+        if (!res.ok) return;
+        const o = await res.json();
+        $("tiles").innerHTML = [
+          ["Клиенты", o.clients],
+          ["Ждём брифы", o.pending],
+          ["Пришли (неделя)", o.recent],
+          ["Кампании", o.campaigns],
+        ]
+          .map((t) => '<div class="adm-tile"><b>' + t[1] + "</b><span>" + t[0] + "</span></div>")
+          .join("");
+      }
+
+      // ---- Списки ----
+      async function showClients() {
+        clearDetail();
+        const res = await api("/clients");
+        const data = await res.json();
+        if (!data.items.length) {
+          $("list").innerHTML = '<p class="note">Клиентов пока нет.</p>';
+          return;
+        }
+        $("list").innerHTML = data.items
+          .map(
+            (c) =>
+              '<div class="adm-row" data-client="' +
+              c.id +
+              '"><div><strong>' +
+              esc(c.full_name || "Без имени") +
+              '</strong><div class="muted">' +
+              esc([c.email, c.phone, c.telegram].filter(Boolean).join(" · ")) +
+              '</div></div><span class="adm-badge">брифов: ' +
+              c.brief_count +
+              "</span></div>"
+          )
+          .join("");
+      }
+
+      async function showBriefs(status) {
+        clearDetail();
+        const res = await api("/briefs?status=" + status);
+        const data = await res.json();
+        if (!data.items.length) {
+          $("list").innerHTML = '<p class="note">Пусто.</p>';
+          return;
+        }
+        $("list").innerHTML = data.items
+          .map((b) => {
+            const who = b.contact_name ? b.contact_name + " — " + b.contact : b.contact;
+            const attr = b.brief_id ? ' data-brief="' + b.brief_id + '"' : "";
+            return (
+              '<div class="adm-row"' +
+              attr +
+              "><div><strong>" +
+              esc(who) +
+              '</strong><div class="muted">' +
+              esc(VARIANT_RU[b.variant] || b.variant) +
+              " · " +
+              esc(b.channel) +
+              '</div></div><span class="adm-badge">' +
+              (b.brief_id ? "открыть" : "ждём") +
+              "</span></div>"
+            );
+          })
+          .join("");
+      }
+
+      async function showCampaigns() {
+        clearDetail();
+        const res = await api("/campaigns");
+        const data = await res.json();
+        if (!data.items.length) {
+          $("list").innerHTML = '<p class="note">Кампаний пока нет.</p>';
+          return;
+        }
+        $("list").innerHTML = data.items
+          .map(
+            (c) =>
+              '<div class="adm-row"><div><strong>Кампания №' +
+              c.id +
+              " · " +
+              esc(c.client_name || "—") +
+              '</strong><div class="muted">бриф №' +
+              c.brief_id +
+              " · " +
+              esc(c.objective) +
+              '</div></div><span class="adm-badge">' +
+              esc(STATUS_RU[c.status] || c.status) +
+              "</span></div>"
+          )
+          .join("");
+      }
+
+      // ---- Детали ----
+      async function showClient(id) {
+        const res = await api("/clients/" + id);
+        if (!res.ok) return;
+        const c = await res.json();
+        const briefs = c.briefs.length
+          ? c.briefs
+              .map(
+                (b) =>
+                  '<div class="adm-row" data-brief="' +
+                  b.id +
+                  '"><div>Бриф №' +
+                  b.id +
+                  " · " +
+                  esc(VARIANT_RU[b.variant] || b.variant) +
+                  '</div><span class="adm-badge">' +
+                  esc(STATUS_RU[b.status] || b.status) +
+                  "</span></div>"
+              )
+              .join("")
+          : '<p class="note">Брифов нет.</p>';
+        $("list").innerHTML = "";
+        $("detail").innerHTML =
+          '<div class="adm-back" data-view="clients">← к клиентам</div>' +
+          '<div class="card"><h3>' +
+          esc(c.full_name || "Клиент") +
+          "</h3><p>" +
+          esc([c.email, c.phone, c.telegram].filter(Boolean).join("<br>")) +
+          '</p></div><div class="section-title">Брифы</div>' +
+          briefs;
+      }
+
+      function fieldsHtml(fields) {
+        return fields
+          .map((f) => "<div>" + f.n + ". " + esc(f.label) + ": " + esc(f.value || "—") + "</div>")
+          .join("");
+      }
+
+      async function showBrief(id) {
+        const res = await api("/briefs/" + id);
+        if (!res.ok) return;
+        renderBrief(await res.json());
+      }
+
+      function renderBrief(b) {
+        clearDetail();
+        $("list").innerHTML = "";
+        $("detail").innerHTML =
+          '<div class="adm-back" data-view="recent">← к брифам</div>' +
+          '<div class="card"><h3>Бриф №' +
+          b.brief_id +
+          " · " +
+          esc(VARIANT_RU[b.variant] || b.variant) +
+          " · " +
+          esc(STATUS_RU[b.status] || b.status) +
+          "</h3><p>👤 " +
+          esc(b.client.full_name || "—") +
+          "<br>" +
+          esc([b.client.email, b.client.phone, b.client.telegram].filter(Boolean).join(" · ")) +
+          '</p><div class="section-title">Поля</div>' +
+          fieldsHtml(b.fields) +
+          "<p>🖼 Креатив: " +
+          (b.has_creative ? "загружен" : "не загружен") +
+          "</p></div>" +
+          '<div class="adm-actions">' +
+          '<button class="btn" id="edit-toggle" type="button">✏️ Внести правки</button>' +
+          '<button class="btn btn--primary" id="creative-toggle" type="button">🖼 Загрузить креатив</button>' +
+          "</div>" +
+          '<div id="edit-box" hidden><p class="note">Формат: номер.значение, каждая с новой строки. Например:<br>1. Иван Петров<br>7. Москва</p>' +
+          '<textarea id="edits" rows="4" style="width:100%"></textarea>' +
+          '<button class="btn btn--primary" id="edit-send" type="button" style="margin-top:8px">Применить</button></div>' +
+          '<div id="creative-box" hidden style="margin-top:12px">' +
+          '<div class="field"><div><label>Фото или видео</label><input type="file" id="cr-file" accept="image/*,video/*" /></div></div>' +
+          '<div class="field"><div><label>Заголовок (до 40)</label><input id="cr-title" /></div></div>' +
+          '<div class="field"><div><label>Текст (до 220)</label><textarea id="cr-body" rows="3"></textarea></div></div>' +
+          '<button class="btn btn--primary" id="cr-send" type="button">Отправить (запустит РК)</button></div>';
+
+        $("edit-toggle").addEventListener("click", () => toggle("edit-box"));
+        $("creative-toggle").addEventListener("click", () => toggle("creative-box"));
+        $("edit-send").addEventListener("click", () => applyEdits(b.brief_id));
+        $("cr-send").addEventListener("click", () => uploadCreative(b.brief_id));
+      }
+
+      function toggle(id) {
+        const el = $(id);
+        if (el.hasAttribute("hidden")) el.removeAttribute("hidden");
+        else el.setAttribute("hidden", "");
+      }
+
+      function parseEdits(text) {
+        const edits = {};
+        text.split("\n").forEach((line) => {
+          const m = line.match(/^\s*(\d+)\s*\.\s*(.+?)\s*$/);
+          if (m) edits[m[1]] = m[2];
+        });
+        return edits;
+      }
+
+      async function applyEdits(id) {
+        const edits = parseEdits($("edits").value);
+        if (!Object.keys(edits).length) {
+          flash("Не понял правки. Формат: номер.значение", false);
+          return;
+        }
+        const res = await api("/briefs/" + id, {
+          method: "PATCH",
+          body: JSON.stringify({ edits: edits }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderBrief(data);
+          flash("Правки применены." + (data.unknown.length ? " Неизвестные номера: " + data.unknown.join(", ") : ""), true);
+        } else {
+          flash("Не удалось применить правки.", false);
+        }
+      }
+
+      function readFile(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function imageSize(file) {
+        return new Promise((resolve) => {
+          if (!file.type.startsWith("image/")) return resolve({ width: 0, height: 0 });
+          const img = new Image();
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => resolve({ width: 0, height: 0 });
+          img.src = URL.createObjectURL(file);
+        });
+      }
+
+      async function uploadCreative(id) {
+        const input = $("cr-file");
+        const file = input.files && input.files[0];
+        if (!file) {
+          flash("Выберите фото или видео.", false);
+          return;
+        }
+        flash("Загрузка…", true);
+        const mediaType = file.type.startsWith("video/") ? "video" : "photo";
+        const [b64, size] = await Promise.all([readFile(file), imageSize(file)]);
+        const res = await api("/briefs/" + id + "/creative", {
+          method: "POST",
+          body: JSON.stringify({
+            media_b64: b64,
+            media_type: mediaType,
+            width: size.width,
+            height: size.height,
+            title: $("cr-title").value,
+            body: $("cr-body").value,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          flash(data.message, true);
+          showBrief(id);
+        } else {
+          let reason = "Креатив не принят.";
+          try {
+            const d = (await res.json()).detail;
+            if (d && d.issues) reason = d.issues.join(" ");
+            else if (d && d.missing) reason = "Бриф неполный: " + d.missing.join(", ");
+          } catch (e) {}
+          flash(reason, false);
+        }
+      }
+
+      // ---- Роутинг кликов ----
+      function onClick(e) {
+        const view = e.target.closest("[data-view]");
+        if (view) return routeView(view.getAttribute("data-view"));
+        const client = e.target.closest("[data-client]");
+        if (client) return showClient(client.getAttribute("data-client"));
+        const brief = e.target.closest("[data-brief]");
+        if (brief) return showBrief(brief.getAttribute("data-brief"));
+      }
+
+      function routeView(view) {
+        if (view === "clients") return showClients();
+        if (view === "recent") return showBriefs("recent");
+        if (view === "pending") return showBriefs("pending");
+        if (view === "campaigns") return showCampaigns();
+      }
+
+      async function enterApp() {
+        hide("need-auth");
+        show("app");
+        await loadOverview();
+        await showClients();
+        document.addEventListener("click", onClick);
+        $("logout").addEventListener("click", async () => {
+          await api("/logout", { method: "POST" });
+          location.href = "/admin.html";
+        });
+      }
+
+      function showNeedAuth(msg) {
+        hide("app");
+        show("need-auth");
+        if (msg) {
+          $("auth-error").textContent = msg;
+          $("auth-error").removeAttribute("hidden");
+        }
+      }
+
+      async function init() {
+        const token = new URLSearchParams(location.search).get("token");
+        if (token) {
+          const res = await api("/authenticate", {
+            method: "POST",
+            body: JSON.stringify({ token: token }),
+          });
+          if (res.ok) {
+            // Убираем токен из URL и входим.
+            history.replaceState(null, "", "/admin.html");
+            return enterApp();
+          }
+          return showNeedAuth("Ссылка недействительна или истекла. Запросите новую в боте: /admin.");
+        }
+        const me = await api("/me");
+        if (me.ok) return enterApp();
+        showNeedAuth();
+      }
+
+      init();
+    </script>
+  </body>
+</html>

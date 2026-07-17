@@ -95,6 +95,20 @@ def test_cabinet_page_has_auth_screens() -> None:
     assert "Запишите или запомните его" in body  # явная инструкция про пароль
 
 
+def test_admin_page_served_with_sections() -> None:
+    client = TestClient(create_app())
+    resp = client.get("/admin.html")
+    assert resp.status_code == 200
+    body = resp.text
+    # Вход только из бота + вызовы админ-эндпоинтов + операторские действия.
+    assert "Вход только из бота" in body
+    assert "/api/v1/admin" in body  # база админ-API
+    assert "/authenticate" in body
+    assert "/overview" in body
+    assert "Внести правки" in body
+    assert "Загрузить креатив" in body
+
+
 def test_brief_forms_mark_email_and_phone_required() -> None:
     client = TestClient(create_app())
     for form in ("/brief-individual.html", "/brief-community.html"):
