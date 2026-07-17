@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base, TenantMixin
@@ -50,12 +50,15 @@ class IntegrationConfig(TenantMixin, Base):
 
 
 class Client(TenantMixin, Base):
-    """Клиент оператора. Идентифицируется по любому из 3 контактов (email/phone/telegram).
+    """Клиент оператора. Идентифицируется по контактам; email уникален в рамках тенанта.
 
     `is_self` — флаг «это сам оператор как клиент своей рекламы» (PROJECT.md §6).
+    Пароль (кабинет, spec 2026-07-17) — только хеш; `null` = ещё не установлен.
+    Уникальность `(account_id, email)`: NULL-email не конфликтуют (стандартная семантика).
     """
 
     __tablename__ = "client"
+    __table_args__ = (Index("uq_client_account_email", "account_id", "email", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name: Mapped[str | None] = mapped_column(String(255), default=None)
@@ -63,6 +66,8 @@ class Client(TenantMixin, Base):
     phone: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     telegram: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     is_self: Mapped[bool] = mapped_column(default=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
+    password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
