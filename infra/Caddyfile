@@ -4,5 +4,18 @@
 
 vk-ads-auto.ru, www.vk-ads-auto.ru {
 	encode gzip
-	reverse_proxy api:8000
+
+	# Операторские/трекинг-эндпоинты — только для бота (он ходит в api:8000 внутри
+	# compose-сети, минуя Caddy). Снаружи отдаём 404, чтобы не светить ПДн клиентов
+	# (карточка брифа, список инвайтов) и не давать мутации без авторизации (152-ФЗ,
+	# CLAUDE.md §1.3). Публичные остаются открытыми: POST /api/v1/briefs (веб-форма),
+	# /api/v1/cabinet/* (клиентский кабинет), /api/v1/admin/* (своя авторизация).
+	@operator_only path /api/v1/briefs/* /api/v1/invites /api/v1/cabinets /api/v1/cabinets/*
+	handle @operator_only {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy api:8000
+	}
 }
