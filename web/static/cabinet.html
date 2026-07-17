@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Кабинет клиента — VK-Ads-auto</title>
+    <title>Личный кабинет — VK-Ads-auto</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -11,54 +11,272 @@
 
     <main class="wrap">
       <div class="eyebrow">Личный кабинет</div>
-      <h2 id="greeting">Загрузка…</h2>
-      <p class="lead">Статус ваших брифов. Расход не показываем — только результат.</p>
 
-      <div id="briefs"></div>
-      <div class="result err" id="error" style="display: none"></div>
+      <!-- Просмотр кабинета -->
+      <section id="view" hidden>
+        <h2 id="greeting">Здравствуйте!</h2>
+        <p class="lead">Статус ваших брифов. Расход не показываем — только результат.</p>
+
+        <div class="card" id="profile" style="margin-bottom: 16px"></div>
+
+        <div class="section-title">Ваши брифы</div>
+        <div id="briefs"></div>
+
+        <div class="card" id="referral" style="margin-top: 16px"></div>
+      </section>
+
+      <!-- Первый вход: установка пароля -->
+      <section id="setpw" hidden>
+        <h2>Задайте пароль для входа</h2>
+        <p class="lead">
+          Придумайте пароль — по нему вы будете входить в кабинет.
+          <strong>Запишите или запомните его.</strong> Минимум 8 символов.
+        </p>
+        <div class="field">
+          <div>
+            <label for="pw1">Пароль</label>
+            <input id="pw1" type="password" autocomplete="new-password" />
+          </div>
+        </div>
+        <div class="field">
+          <div>
+            <label for="pw2">Повторите пароль</label>
+            <input id="pw2" type="password" autocomplete="new-password" />
+          </div>
+        </div>
+        <div class="result err" id="setpw-error" hidden></div>
+        <button id="setpw-btn" class="btn btn--primary" type="button">
+          Сохранить пароль и войти
+        </button>
+      </section>
+
+      <!-- Возвратный вход -->
+      <section id="login" hidden>
+        <h2>Вход в кабинет</h2>
+        <p class="lead">Введите email и пароль от личного кабинета.</p>
+        <div class="field">
+          <div>
+            <label for="login-email">Email</label>
+            <input id="login-email" type="email" autocomplete="email" />
+          </div>
+        </div>
+        <div class="field">
+          <div>
+            <label for="login-pw">Пароль</label>
+            <input id="login-pw" type="password" autocomplete="current-password" />
+          </div>
+        </div>
+        <div class="result err" id="login-error" hidden></div>
+        <button id="login-btn" class="btn btn--primary" type="button">Войти</button>
+
+        <p class="note" style="margin-top: 16px">
+          <a href="#" id="forgot-toggle">Забыли пароль? Прислать ссылку на email</a>
+        </p>
+        <div id="forgot-box" hidden>
+          <div class="field">
+            <div>
+              <label for="forgot-email">Email</label>
+              <input id="forgot-email" type="email" autocomplete="email" />
+            </div>
+          </div>
+          <button id="forgot-btn" class="btn" type="button">Прислать ссылку</button>
+          <div class="result" id="forgot-msg" hidden></div>
+        </div>
+      </section>
+
+      <div class="result err" id="error" hidden></div>
     </main>
 
     <script>
-      const STATUS_RU = { received: "Принят", parsed: "В работе", launched: "Запущена" };
+      const STATUS_RU = {
+        received: "Принят",
+        parsed: "В работе",
+        prepared: "Готов к запуску",
+        launched: "Запущена",
+      };
       const VARIANT_RU = { individual: "Физлицо", community: "Бизнес (ИП/ООО)" };
 
-      async function load() {
-        const token = new URLSearchParams(location.search).get("token");
-        const error = document.getElementById("error");
-        if (!token) {
-          error.style.display = "block";
-          error.textContent = "Нет токена. Откройте кабинет по ссылке из письма/сообщения.";
-          return;
-        }
-        const resp = await fetch("/api/v1/cabinet?token=" + encodeURIComponent(token));
-        if (!resp.ok) {
-          error.style.display = "block";
-          error.textContent = "Ссылка недействительна или истекла. Запросите новую.";
-          document.getElementById("greeting").textContent = "Доступ закрыт";
-          return;
-        }
-        const data = await resp.json();
-        document.getElementById("greeting").textContent =
-          data.full_name ? "Здравствуйте, " + data.full_name + "!" : "Здравствуйте!";
-        const box = document.getElementById("briefs");
-        if (!data.briefs.length) {
-          box.innerHTML = '<p class="note">Брифов пока нет.</p>';
-          return;
-        }
-        box.innerHTML = data.briefs
-          .map(
-            (b) =>
-              '<div class="card" style="margin-bottom:12px"><h3>Бриф №' +
-              b.id +
-              " · " +
-              (VARIANT_RU[b.variant] || b.variant) +
-              '</h3><p>Статус: ' +
-              (STATUS_RU[b.status] || b.status) +
-              "</p></div>"
-          )
-          .join("");
+      const $ = (id) => document.getElementById(id);
+      const show = (id) => $(id).removeAttribute("hidden");
+      const hide = (id) => $(id).setAttribute("hidden", "");
+
+      function showError(id, msg) {
+        const el = $(id);
+        el.textContent = msg;
+        el.removeAttribute("hidden");
       }
-      load();
+
+      function currentToken() {
+        return new URLSearchParams(location.search).get("token");
+      }
+
+      function esc(s) {
+        return String(s == null ? "" : s).replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]
+        );
+      }
+
+      function renderCabinet(data) {
+        $("greeting").textContent = data.full_name
+          ? "Здравствуйте, " + data.full_name + "!"
+          : "Здравствуйте!";
+
+        const contacts = [];
+        if (data.email) contacts.push("Email: " + esc(data.email));
+        if (data.phone) contacts.push("Телефон: " + esc(data.phone));
+        if (data.telegram) contacts.push("Telegram: " + esc(data.telegram));
+        $("profile").innerHTML =
+          "<h3>Профиль</h3>" +
+          (contacts.length ? "<p>" + contacts.join("<br>") + "</p>" : "<p class='note'>—</p>");
+
+        const box = $("briefs");
+        if (!data.briefs || !data.briefs.length) {
+          box.innerHTML = '<p class="note">Брифов пока нет.</p>';
+        } else {
+          box.innerHTML = data.briefs
+            .map(
+              (b) =>
+                '<div class="card" style="margin-bottom:12px"><h3>Бриф №' +
+                b.id +
+                " · " +
+                esc(VARIANT_RU[b.variant] || b.variant) +
+                "</h3><p>Статус: " +
+                esc(STATUS_RU[b.status] || b.status) +
+                "</p></div>"
+            )
+            .join("");
+        }
+
+        if (data.referral_url) {
+          $("referral").innerHTML =
+            "<h3>Пригласите клиента — получите скидку</h3>" +
+            "<p class='note'>Ваша реферальная ссылка:</p>" +
+            '<p><a href="' +
+            esc(data.referral_url) +
+            '">' +
+            esc(data.referral_url) +
+            "</a></p>";
+        } else {
+          hide("referral");
+        }
+
+        hide("setpw");
+        hide("login");
+        show("view");
+      }
+
+      async function loadCabinet() {
+        // По session-cookie (без токена в URL).
+        const resp = await fetch("/api/v1/cabinet", { credentials: "same-origin" });
+        if (resp.ok) {
+          renderCabinet(await resp.json());
+          return true;
+        }
+        return false;
+      }
+
+      async function setPassword() {
+        const pw1 = $("pw1").value;
+        const pw2 = $("pw2").value;
+        hide("setpw-error");
+        if (pw1.length < 8) {
+          showError("setpw-error", "Пароль должен быть не короче 8 символов.");
+          return;
+        }
+        if (pw1 !== pw2) {
+          showError("setpw-error", "Пароли не совпадают.");
+          return;
+        }
+        const resp = await fetch("/api/v1/cabinet/set-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ token: currentToken(), password: pw1 }),
+        });
+        if (resp.ok) {
+          // Пароль установлен, cookie-сессия выдана — открываем кабинет.
+          if (!(await loadCabinet())) {
+            showError("error", "Пароль сохранён. Обновите страницу для входа.");
+          }
+        } else if (resp.status === 401) {
+          showError("setpw-error", "Ссылка недействительна или истекла. Запросите новую.");
+        } else {
+          showError("setpw-error", "Не удалось сохранить пароль. Попробуйте позже.");
+        }
+      }
+
+      async function login() {
+        hide("login-error");
+        const resp = await fetch("/api/v1/cabinet/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            email: $("login-email").value.trim(),
+            password: $("login-pw").value,
+          }),
+        });
+        if (resp.ok) {
+          await loadCabinet();
+        } else {
+          showError("login-error", "Неверный email или пароль.");
+        }
+      }
+
+      async function requestLink() {
+        const email = $("forgot-email").value.trim();
+        const resp = await fetch("/api/v1/cabinet/request-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email }),
+        });
+        const msg = $("forgot-msg");
+        msg.removeAttribute("hidden");
+        // Ответ одинаков независимо от наличия аккаунта (не раскрываем существование).
+        msg.className = resp.ok ? "result ok show" : "result err show";
+        msg.textContent = resp.ok
+          ? "Если аккаунт с таким email есть, мы отправили ссылку для входа."
+          : "Не удалось отправить. Попробуйте позже.";
+      }
+
+      function showLogin() {
+        hide("view");
+        hide("setpw");
+        show("login");
+      }
+
+      async function init() {
+        $("setpw-btn").addEventListener("click", setPassword);
+        $("login-btn").addEventListener("click", login);
+        $("forgot-btn").addEventListener("click", requestLink);
+        $("forgot-toggle").addEventListener("click", (e) => {
+          e.preventDefault();
+          show("forgot-box");
+        });
+
+        const token = currentToken();
+        if (token) {
+          const resp = await fetch("/api/v1/cabinet?token=" + encodeURIComponent(token), {
+            credentials: "same-origin",
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (!data.password_set) {
+              hide("view");
+              show("setpw"); // первый вход — обязательная установка пароля
+            } else {
+              renderCabinet(data);
+            }
+          } else {
+            showLogin(); // токен недействителен/истёк — предложить вход
+          }
+        } else if (!(await loadCabinet())) {
+          showLogin(); // нет cookie — форма входа
+        }
+      }
+
+      init();
     </script>
   </body>
 </html>
