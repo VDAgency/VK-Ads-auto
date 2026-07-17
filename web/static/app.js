@@ -37,8 +37,21 @@ async function submitBrief(form) {
       body: JSON.stringify({ variant: variant, payload: payload, ref_code: refCode, token: token }),
     });
     if (resp.status === 201) {
-      showResult(result, "ok", "Бриф отправлен. Спасибо — мы свяжемся с вами.");
       form.reset();
+      // Авто-переброс в личный кабинет (magic-link из ответа). Если ссылки нет —
+      // показываем подтверждение (обратная совместимость).
+      let data = {};
+      try {
+        data = await resp.json();
+      } catch (e) {
+        data = {};
+      }
+      if (data && data.cabinet_url) {
+        showResult(result, "ok", "Бриф отправлен. Открываем ваш личный кабинет…");
+        location.href = data.cabinet_url;
+      } else {
+        showResult(result, "ok", "Бриф отправлен. Спасибо — мы свяжемся с вами.");
+      }
     } else if (resp.status === 422) {
       const data = await resp.json();
       const missing = (data.detail && data.detail.missing) || [];

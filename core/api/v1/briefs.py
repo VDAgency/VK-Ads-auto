@@ -10,9 +10,11 @@ import base64
 import binascii
 from typing import Annotated, Literal
 
+from config.settings import get_settings
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from services.auth_magiclink import generate_token
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
 from services.briefs import InviteTokenError, intake_brief
@@ -49,11 +51,16 @@ class BriefIn(BaseModel):
 
 
 class BriefOut(BaseModel):
-    """Результат приёма брифа."""
+    """Результат приёма брифа. `cabinet_url` — авто-переброс в кабинет (magic-link)."""
 
     brief_id: int
     client_id: int
     status: str
+    cabinet_url: str
+
+
+# Короткий TTL ссылки первого входа в кабинет (сутки) — не «неделя» дефолта magic-link.
+_CABINET_LINK_TTL = 24 * 3600
 
 
 class BriefClientOut(BaseModel):
@@ -165,7 +172,17 @@ async def submit_brief(
         raise HTTPException(status_code=status_code, detail=f"invite_{exc.code}") from exc
 
     assert brief.client_id is not None  # сервис всегда привязывает клиента
-    return BriefOut(brief_id=brief.id, client_id=brief.client_id, status=brief.status)
+    settings = get_settings()
+    token = generate_token(
+        brief.client_id, settings.secret_key.get_secret_value(), ttl_seconds=_CABINET_LINK_TTL
+    )
+    cabinet_url = f"{settings.public_base_url}/cabinet.html?token={token}"
+    return BriefOut(
+        brief_id=brief.id,
+        client_id=brief.client_id,
+        status=brief.status,
+        cabinet_url=cabinet_url,
+    )
 
 
 @router.get("/{brief_id}")

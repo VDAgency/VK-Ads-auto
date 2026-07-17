@@ -50,3 +50,17 @@ def test_submit_brief_missing_returns_422() -> None:
     code, data = asyncio.run(_post_brief({"variant": "individual", "payload": {"full_name": "x"}}))
     assert code == 422
     assert "missing" in data["detail"]
+
+
+def test_submit_brief_returns_valid_cabinet_url() -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from config.settings import get_settings
+    from services.auth_magiclink import verify_token
+
+    code, data = asyncio.run(_post_brief({"variant": "individual", "payload": VALID_INDIVIDUAL}))
+    assert code == 201
+    assert data["cabinet_url"]  # авто-переброс в кабинет (C4)
+    token = parse_qs(urlparse(data["cabinet_url"]).query)["token"][0]
+    # Токен ссылки — валидный magic-link на этого же клиента.
+    assert verify_token(token, get_settings().secret_key.get_secret_value()) == data["client_id"]
