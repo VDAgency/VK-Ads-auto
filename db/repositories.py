@@ -167,6 +167,25 @@ async def find_client_by_contacts(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def find_client_by_email(session: AsyncSession, account_id: int, email: str) -> Client | None:
+    """Найти клиента тенанта по email (для входа в кабинет по email+паролю)."""
+    stmt = select(Client).where(Client.account_id == account_id, Client.email == email).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def set_client_password(
+    session: AsyncSession, account_id: int, client_id: int, password_hash: str
+) -> Client | None:
+    """Установить хеш пароля клиента и отметить время установки. `None` — нет клиента."""
+    client = await get_client(session, account_id, client_id)
+    if client is None:
+        return None
+    client.password_hash = password_hash
+    client.password_set_at = datetime.now(UTC)
+    await session.flush()
+    return client
+
+
 async def get_or_create_operator(
     session: AsyncSession,
     account_id: int,
