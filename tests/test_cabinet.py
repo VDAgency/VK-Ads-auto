@@ -2,11 +2,14 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import pytest
+from config.settings import get_settings
 from core.app import create_app
 from db.base import Base
 from db.models import Account, Brief, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
+from services.auth_magiclink import generate_token
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -51,26 +54,58 @@ async def _run(scenario: Callable[[AsyncClient], Awaitable[T]]) -> T:
     return result
 
 
-def test_request_link_and_view_cabinet() -> None:
-    async def scenario(http: AsyncClient) -> tuple[int, int, dict[str, Any]]:
-        link_resp = await http.post("/api/v1/cabinet/request-link", json={"email": "i@e.com"})
-        token = link_resp.json()["magic_link"].split("token=")[1]
-        view_resp = await http.get("/api/v1/cabinet", params={"token": token})
-        return link_resp.status_code, view_resp.status_code, view_resp.json()
+def test_request_link_known_client_sends_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, str] = {}
 
-    link_code, view_code, view = asyncio.run(_run(scenario))
-    assert link_code == 201
-    assert view_code == 200
-    assert view["full_name"] == "Иван"
-    assert len(view["briefs"]) == 1
+    async def fake_send(email: str, magic_link: str, **kwargs: Any) -> bool:
+        sent["email"] = email
+        sent["link"] = magic_link
+        return True
+
+    monkeypatch.setattr("core.api.v1.cabinet.send_login_link", fake_send)
+
+    async def scenario(http: AsyncClient) -> tuple[int, dict[str, Any]]:
+        resp = await http.post("/api/v1/cabinet/request-link", json={"email": "i@e.com"})
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_run(scenario))
+    assert code == 200
+    assert body == {"ok": True}
+    assert sent["email"] == "i@e.com"
+    assert "token=" in sent["link"]
 
 
-def test_request_link_unknown_client() -> None:
-    async def scenario(http: AsyncClient) -> int:
+def test_request_link_unknown_client_no_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
+    async def fake_send(email: str, magic_link: str, **kwargs: Any) -> bool:
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("core.api.v1.cabinet.send_login_link", fake_send)
+
+    async def scenario(http: AsyncClient) -> tuple[int, dict[str, Any]]:
         resp = await http.post("/api/v1/cabinet/request-link", json={"email": "none@e.com"})
-        return resp.status_code
+        return resp.status_code, resp.json()
 
-    assert asyncio.run(_run(scenario)) == 404
+    code, body = asyncio.run(_run(scenario))
+    # Тот же ответ, что и для существующего клиента — наличие не раскрыто.
+    assert code == 200
+    assert body == {"ok": True}
+    assert calls["n"] == 0  # письмо неизвестному не отправлялось
+
+
+def test_view_cabinet_by_token() -> None:
+    async def scenario(http: AsyncClient) -> tuple[int, dict[str, Any]]:
+        token = generate_token(1, get_settings().secret_key.get_secret_value())
+        resp = await http.get("/api/v1/cabinet", params={"token": token})
+        return resp.status_code, resp.json()
+
+    code, view = asyncio.run(_run(scenario))
+    assert code == 200
+    assert view["full_name"] == "Иван"
+    assert view["email"] == "i@e.com"
+    assert len(view["briefs"]) == 1
 
 
 def test_view_with_invalid_token() -> None:

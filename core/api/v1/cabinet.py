@@ -24,6 +24,7 @@ from db.session import get_session
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from services.auth_magiclink import generate_token, verify_token
+from services.cabinet_email import send_login_link
 from services.password import hash_password, verify_password
 from services.referral import generate_ref_code
 from services.session_token import DEFAULT_TTL_SECONDS, generate_session, verify_session
@@ -36,6 +37,7 @@ router = APIRouter(prefix="/cabinet", tags=["cabinet"])
 DEFAULT_ACCOUNT_ID = 1
 _SESSION_COOKIE = "cabinet_session"
 _MIN_PASSWORD_LEN = 8
+_LOGIN_LINK_TTL = 24 * 3600  # ссылка входа/сброса — сутки
 
 
 class LinkRequest(BaseModel):
@@ -47,7 +49,8 @@ class LinkRequest(BaseModel):
 
 
 class LinkResponse(BaseModel):
-    magic_link: str
+    # Ответ одинаков независимо от наличия клиента — не раскрываем существование (C5).
+    ok: bool = True
 
 
 class SetPasswordRequest(BaseModel):
@@ -135,23 +138,27 @@ async def login(
     return OkResponse()
 
 
-@router.post("/request-link", status_code=201)
+@router.post("/request-link", dependencies=[Depends(cabinet_auth_rate_limit)])
 async def request_link(
     data: LinkRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> LinkResponse:
-    """Сгенерировать magic-link для клиента, найденного по контакту.
+    """Прислать ссылку для входа на email. Ответ одинаков, есть клиент или нет (не раскрываем).
 
-    Отправка письмом (support@) и сокрытие факта наличия клиента — в C5.
+    Если клиент найден и у него есть email — отправляем письмо со ссылкой (support@).
+    Ошибка отправки не влияет на ответ (best-effort), чтобы не раскрыть наличие клиента.
     """
     client = await find_client_by_contacts(
         session, DEFAULT_ACCOUNT_ID, data.email, data.phone, data.telegram
     )
-    if client is None:
-        raise HTTPException(status_code=404, detail="Клиент не найден")
-    settings = get_settings()
-    token = generate_token(client.id, settings.secret_key.get_secret_value())
-    return LinkResponse(magic_link=f"{settings.public_base_url}/cabinet.html?token={token}")
+    if client is not None and client.email:
+        settings = get_settings()
+        token = generate_token(
+            client.id, settings.secret_key.get_secret_value(), ttl_seconds=_LOGIN_LINK_TTL
+        )
+        magic_link = f"{settings.public_base_url}/cabinet.html?token={token}"
+        await send_login_link(client.email, magic_link)
+    return LinkResponse()
 
 
 @router.get("")
