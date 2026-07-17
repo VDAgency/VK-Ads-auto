@@ -26,7 +26,7 @@
         <nav class="lp-nav" aria-label="Основная навигация">
           <a class="lp-nav__link" href="#how">Как это работает</a>
           <a class="lp-nav__link" href="#features">Возможности</a>
-          <a class="lp-nav__link" href="/cabinet.html">Вход в кабинет</a>
+          <a class="lp-nav__link" href="/cabinet.html" data-open-login>Вход в кабинет</a>
           <a class="lp-nav__cta" href="#start">Заполнить бриф</a>
         </nav>
       </div>
@@ -75,7 +75,7 @@
             </div>
 
             <p class="lp-hero__login reveal reveal--d3">
-              Уже отправляли бриф? <a href="/cabinet.html">Войти в личный кабинет</a>
+              Уже отправляли бриф? <a href="/cabinet.html" data-open-login>Войти в личный кабинет</a>
             </p>
 
             <ul class="lp-trust reveal reveal--d3">
@@ -311,7 +311,7 @@
             <p class="lp-cta__note">
               Обычно ссылку на нужный бриф присылает таргетолог. Если вы попали сюда сами —
               выберите форму по типу продвижения. Уже отправляли бриф?
-              <a href="/cabinet.html">Войти в личный кабинет</a>.
+              <a href="/cabinet.html" data-open-login>Войти в личный кабинет</a>.
             </p>
           </div>
         </div>
@@ -336,6 +336,109 @@
         VK и не аффилирован с VK.
       </div>
     </footer>
+
+    <!-- ================= Модалка входа в кабинет ================= -->
+    <div class="lp-modal" id="login-modal" role="dialog" aria-modal="true" aria-label="Вход в кабинет" hidden>
+      <div class="lp-modal__backdrop" data-close-login></div>
+      <div class="lp-modal__card" role="document">
+        <button class="lp-modal__close" type="button" aria-label="Закрыть" data-close-login>×</button>
+        <h2 class="lp-modal__title">Вход в кабинет</h2>
+        <p class="lp-modal__sub">Введите email и пароль от личного кабинета.</p>
+
+        <div class="form-field">
+          <label for="lm-email">Email</label>
+          <input id="lm-email" type="email" autocomplete="email" placeholder="you@example.com" />
+        </div>
+        <div class="form-field">
+          <label for="lm-password">Пароль</label>
+          <input id="lm-password" type="password" autocomplete="current-password" placeholder="Ваш пароль" />
+        </div>
+        <div class="result err" id="lm-error" hidden></div>
+        <button class="btn btn--primary lp-modal__submit" id="lm-login" type="button">Войти</button>
+
+        <p class="lp-modal__forgot">
+          <a href="#" id="lm-forgot-toggle">Забыли пароль? Прислать ссылку на email</a>
+        </p>
+        <div id="lm-forgot" hidden>
+          <div class="form-field">
+            <label for="lm-forgot-email">Email</label>
+            <input id="lm-forgot-email" type="email" autocomplete="email" placeholder="you@example.com" />
+          </div>
+          <button class="btn btn--ghost lp-modal__submit" id="lm-forgot-send" type="button">Прислать ссылку</button>
+          <div class="result" id="lm-forgot-msg" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Модалка входа: открытие/закрытие + логин + запрос ссылки. -->
+    <script>
+      (function () {
+        var modal = document.getElementById("login-modal");
+        var err = document.getElementById("lm-error");
+        function open() {
+          err.setAttribute("hidden", "");
+          modal.removeAttribute("hidden");
+          document.body.style.overflow = "hidden";
+          var em = document.getElementById("lm-email");
+          if (em) em.focus();
+        }
+        function close() {
+          modal.setAttribute("hidden", "");
+          document.body.style.overflow = "";
+        }
+        document.querySelectorAll("[data-open-login]").forEach(function (el) {
+          el.addEventListener("click", function (e) {
+            e.preventDefault();
+            open();
+          });
+        });
+        document.querySelectorAll("[data-close-login]").forEach(function (el) {
+          el.addEventListener("click", close);
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && !modal.hasAttribute("hidden")) close();
+        });
+        // Открыть сразу по ?login=1 (редирект из cabinet.html без сессии).
+        if (new URLSearchParams(location.search).get("login") === "1") open();
+
+        document.getElementById("lm-login").addEventListener("click", async function () {
+          err.setAttribute("hidden", "");
+          var email = document.getElementById("lm-email").value.trim();
+          var password = document.getElementById("lm-password").value;
+          var res = await fetch("/api/v1/cabinet/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ email: email, password: password }),
+          });
+          if (res.ok) {
+            location.href = "/cabinet.html";
+          } else {
+            err.textContent = "Неверный email или пароль.";
+            err.removeAttribute("hidden");
+          }
+        });
+
+        document.getElementById("lm-forgot-toggle").addEventListener("click", function (e) {
+          e.preventDefault();
+          document.getElementById("lm-forgot").removeAttribute("hidden");
+        });
+        document.getElementById("lm-forgot-send").addEventListener("click", async function () {
+          var email = document.getElementById("lm-forgot-email").value.trim();
+          var res = await fetch("/api/v1/cabinet/request-link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email }),
+          });
+          var msg = document.getElementById("lm-forgot-msg");
+          msg.removeAttribute("hidden");
+          msg.className = res.ok ? "result ok show" : "result err show";
+          msg.textContent = res.ok
+            ? "Если аккаунт с таким email есть, мы отправили ссылку для входа."
+            : "Не удалось отправить. Попробуйте позже.";
+        });
+      })();
+    </script>
 
     <!-- Scroll-reveal: мягкое появление блоков при прокрутке (IntersectionObserver). -->
     <script>

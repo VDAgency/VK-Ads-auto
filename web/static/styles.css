@@ -80,6 +80,26 @@ h2 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
 .field .error { color: var(--danger); font-size: 12px; margin-top: 4px; display: none; }
 .field.invalid .error { display: block; }
 
+/* Полноширинное поле (кабинет/модалка): одна колонка, крупный читаемый ввод.
+   Отдельно от .field (там grid 40px 1fr под мономаркер .num для форм брифа). */
+.form-field { margin-bottom: 16px; }
+.form-field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.form-field input {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.form-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 fieldset { border: 0; padding: 0; margin: 0 0 8px; }
 .section-title { font-family: var(--mono); font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 28px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 
