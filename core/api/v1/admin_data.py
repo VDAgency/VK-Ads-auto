@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
+from config.settings import get_settings
 from db.repositories import (
     count_briefs_by_client,
     count_campaigns,
@@ -22,10 +23,13 @@ from db.repositories import (
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from services.brief_parser import BriefValidationError
+from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import apply_brief_edits, get_brief_card
+from services.contact import ContactParseError, detect_contact
 from services.creative_intake import CreativeError, intake_creative
+from services.delivery.factory import build_delivery_router
 from services.invite_tracking import InviteView, list_pending, list_recent
+from services.invites import create_invite
 from services.launch_service import BriefNotFoundError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,6 +112,23 @@ class CampaignRow(BaseModel):
 
 class CampaignsOut(BaseModel):
     items: list[CampaignRow]
+
+
+class AdminInviteIn(BaseModel):
+    """Отправка брифа клиенту из веб-админки: вариант + контакт (email/telegram/телефон)."""
+
+    variant: Literal["individual", "community"]
+    contact: str
+
+
+class AdminInviteOut(BaseModel):
+    """Итог отправки инвайта (зеркало `CreateInviteOut`, сценарии §8.1)."""
+
+    invite_id: int
+    status: str  # sent | failed
+    channel: str  # telegram | email | manual
+    fallback_text: str | None = None
+    error: str | None = None
 
 
 def _brief_item(view: InviteView) -> AdminBriefItem:
@@ -246,6 +267,42 @@ async def upload_creative(
         campaign_status=outcome.campaign_status,
         campaign_id=outcome.campaign_id,
         message=outcome.message,
+    )
+
+
+@router.post("/invites", status_code=201)
+async def send_invite(
+    data: AdminInviteIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    operator_id: Annotated[int, Depends(require_admin)],
+) -> AdminInviteOut:
+    """Отправить бриф клиенту из веба (зеркало бот-`/send_brief`).
+
+    Отправитель в Telegram — оператор из admin-сессии (его сессия юзербота). Веб-канал
+    полезен, когда Telegram недоступен: доставка идёт email/manual при неавторизованном юзерботе.
+    """
+    try:
+        contact = detect_contact(data.contact)
+    except ContactParseError as exc:
+        raise HTTPException(
+            status_code=422, detail="Не распознан контакт (email/телефон/@username)."
+        ) from exc
+    result = await create_invite(
+        session,
+        DEFAULT_ACCOUNT_ID,
+        operator_id,
+        BriefVariant(data.variant),
+        contact,
+        get_settings().public_base_url,
+        build_delivery_router(sender_id=operator_id),
+    )
+    await session.commit()
+    return AdminInviteOut(
+        invite_id=result.invite_id,
+        status=result.status,
+        channel=result.channel,
+        fallback_text=result.fallback_text,
+        error=result.error,
     )
 
 

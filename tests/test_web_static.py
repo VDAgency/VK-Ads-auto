@@ -126,6 +126,8 @@ def test_admin_page_served_with_sections() -> None:
     assert "/overview" in body
     assert "Внести правки" in body
     assert "Загрузить креатив" in body
+    assert "Отправить бриф" in body  # веб-отправка брифа клиенту
+    assert "/invites" in body  # вызов POST /api/v1/admin/invites
 
 
 def test_brief_forms_mark_email_and_phone_required() -> None:
