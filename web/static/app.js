@@ -8,12 +8,10 @@ function showResult(node, kind, message) {
 }
 
 function markMissing(form, missing) {
+  // Ядро возвращает имена незаполненных полей (email/phone — обязательны, spec §4.1).
   for (const key of missing) {
-    const names = key === "contact" ? ["email", "phone", "telegram"] : [key];
-    for (const name of names) {
-      const el = form.querySelector('[name="' + name + '"]');
-      if (el && el.closest(".field")) el.closest(".field").classList.add("invalid");
-    }
+    const el = form.querySelector('[name="' + key + '"]');
+    if (el && el.closest(".field")) el.closest(".field").classList.add("invalid");
   }
 }
 

@@ -299,14 +299,15 @@ def test_missing_required_raises() -> None:
     assert "budget" in exc.value.missing
 
 
-def test_at_least_one_contact_required() -> None:
+def test_email_and_phone_required() -> None:
     raw = _individual_raw()
     raw["email"] = ""
     raw["phone"] = ""
-    raw["telegram"] = ""
     with pytest.raises(BriefValidationError) as exc:
         parse_brief(raw, BriefVariant.INDIVIDUAL)
-    assert "contact" in exc.value.missing
+    # Идентификация кабинета по email → email И телефон обязательны (spec §4.1).
+    assert "email" in exc.value.missing
+    assert "phone" in exc.value.missing
 
 
 def test_community_requires_niche_and_org_type() -> None:
@@ -319,11 +320,20 @@ def test_community_requires_niche_and_org_type() -> None:
     assert "org_type" in exc.value.missing
 
 
-def test_one_contact_is_enough() -> None:
+def test_telegram_optional_when_email_and_phone_present() -> None:
     raw = _individual_raw()
-    raw["phone"] = ""
     raw["telegram"] = ""
-    # email остаётся — брифа достаточно для идентификации
+    # email + телефон на месте → бриф валиден, telegram опционален
     brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
     assert brief.contact.email == "ivanov@example.com"
-    assert brief.contact.phone is None
+    assert brief.contact.telegram is None
+
+
+def test_missing_phone_reported_even_with_email() -> None:
+    # Новая AND-семантика: наличие email НЕ компенсирует отсутствие телефона.
+    raw = _individual_raw()
+    raw["phone"] = ""
+    with pytest.raises(BriefValidationError) as exc:
+        parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert "phone" in exc.value.missing
+    assert "email" not in exc.value.missing
