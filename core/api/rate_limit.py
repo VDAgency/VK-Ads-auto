@@ -45,3 +45,16 @@ def brief_rate_limit(request: Request) -> None:
         return
     if not _brief_limiter.check(client.host):
         raise HTTPException(status_code=429, detail="Слишком много запросов, попробуйте позже.")
+
+
+# 10 запросов в минуту на IP — вход/установка пароля кабинета (защита от перебора).
+_cabinet_auth_limiter = SlidingWindowLimiter(max_requests=10, window_seconds=60.0)
+
+
+def cabinet_auth_rate_limit(request: Request) -> None:
+    """FastAPI-зависимость: 429 на частые попытки логина/установки пароля кабинета."""
+    client = request.client
+    if client is None:
+        return
+    if not _cabinet_auth_limiter.check(client.host):
+        raise HTTPException(status_code=429, detail="Слишком много попыток, попробуйте позже.")
