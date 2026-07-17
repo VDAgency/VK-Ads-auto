@@ -15,7 +15,7 @@ from bot.menu import bot_commands
 
 def test_menu_has_five_commands() -> None:
     commands = {c.command for c in bot_commands()}
-    assert commands == {"send_brief", "pending", "stats", "link_userbot", "help"}
+    assert commands == {"send_brief", "pending", "stats", "admin", "link_userbot", "help"}
 
 
 def test_menu_descriptions_non_empty() -> None:

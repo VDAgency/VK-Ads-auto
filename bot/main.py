@@ -12,7 +12,16 @@ from aiogram import Bot, Dispatcher
 from config.settings import get_settings
 
 from bot import api_client, userbot_watch
-from bot.handlers import brief_card, creative, link_userbot, pending, send_brief, start, stats
+from bot.handlers import (
+    admin,
+    brief_card,
+    creative,
+    link_userbot,
+    pending,
+    send_brief,
+    start,
+    stats,
+)
 from bot.handlers import help as help_handler
 from bot.menu import setup_bot_commands
 
@@ -26,6 +35,7 @@ def build_dispatcher() -> Dispatcher:
     dispatcher.include_router(brief_card.router)
     dispatcher.include_router(creative.router)
     dispatcher.include_router(stats.router)
+    dispatcher.include_router(admin.router)
     dispatcher.include_router(link_userbot.router)
     dispatcher.include_router(help_handler.router)
     return dispatcher
