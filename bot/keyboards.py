@@ -68,10 +68,27 @@ def recent_briefs_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup
 
 
 def brief_card_keyboard(brief_id: int) -> InlineKeyboardMarkup:
-    """Действия над карточкой брифа: внести правки (`edit:{id}`)."""
+    """Действия над карточкой брифа: правки (`edit:{id}`) и загрузка креатива (`creative:{id}`)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Внести правки", callback_data=f"edit:{brief_id}")],
+            [
+                InlineKeyboardButton(
+                    text="🖼 Загрузить креатив", callback_data=f"creative:{brief_id}"
+                )
+            ],
+        ]
+    )
+
+
+def creative_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Подтверждение отправки креатива (триггер запуска РК)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Отправить", callback_data="creative_send"),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="creative_cancel"),
+            ]
         ]
     )
 

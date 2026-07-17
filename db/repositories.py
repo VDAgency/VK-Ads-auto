@@ -9,7 +9,17 @@ from typing import cast
 from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Brief, BriefInvite, Client, Discount, Operator, Referral, Stat
+from db.models import (
+    Brief,
+    BriefInvite,
+    Campaign,
+    Client,
+    Creative,
+    Discount,
+    Operator,
+    Referral,
+    Stat,
+)
 
 
 async def create_referral(
@@ -68,6 +78,32 @@ async def list_client_briefs(session: AsyncSession, account_id: int, client_id: 
 async def get_brief(session: AsyncSession, account_id: int, brief_id: int) -> Brief | None:
     """Получить бриф тенанта по id (для операторской карточки)."""
     stmt = select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_creative_for_brief(
+    session: AsyncSession, account_id: int, brief_id: int
+) -> Creative | None:
+    """Последний загруженный креатив брифа (для статуса карточки)."""
+    stmt = (
+        select(Creative)
+        .where(Creative.account_id == account_id, Creative.brief_id == brief_id)
+        .order_by(Creative.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_latest_campaign_for_brief(
+    session: AsyncSession, account_id: int, brief_id: int
+) -> Campaign | None:
+    """Последняя кампания, созданная по брифу (для статуса карточки)."""
+    stmt = (
+        select(Campaign)
+        .where(Campaign.account_id == account_id, Campaign.brief_id == brief_id)
+        .order_by(Campaign.id.desc())
+        .limit(1)
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 

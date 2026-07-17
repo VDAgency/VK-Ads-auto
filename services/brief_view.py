@@ -12,7 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from db.models import Brief
-from db.repositories import get_brief, get_client
+from db.repositories import (
+    get_brief,
+    get_client,
+    get_creative_for_brief,
+    get_latest_campaign_for_brief,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_fields import apply_edits, numbered
@@ -53,6 +58,8 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         BriefFieldView(number=n, label=field.label, value=value)
         for n, field, value in numbered(brief.payload, brief.variant)
     ]
+    creative = await get_creative_for_brief(session, account_id, brief.id)
+    campaign = await get_latest_campaign_for_brief(session, account_id, brief.id)
     return BriefCardView(
         brief_id=brief.id,
         variant=brief.variant,
@@ -62,8 +69,8 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         client_phone=client.phone if client else None,
         client_telegram=client.telegram if client else None,
         fields=fields,
-        has_creative=False,
-        campaign_status=None,
+        has_creative=creative is not None,
+        campaign_status=campaign.status if campaign is not None else None,
     )
 
 

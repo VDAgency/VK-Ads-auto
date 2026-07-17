@@ -24,3 +24,10 @@ class EditBrief(StatesGroup):
     """Сценарий «внести правки в бриф»: правки формата `номер.значение` (PROJECT.md §4.1.6)."""
 
     entering_edits = State()  # ввод правок (много строк за раз)
+
+
+class UploadCreative(StatesGroup):
+    """Сценарий «загрузить креатив»: медиа → описание → отправка (триггер запуска РК)."""
+
+    waiting_media = State()  # ждём фото/видео
+    waiting_description = State()  # ждём заголовок + текст

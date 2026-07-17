@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     vk_ads_access_token: SecretStr = SecretStr("")
     vk_ads_refresh_token: SecretStr = SecretStr("")
     vk_ads_token_type: str = "Bearer"
+    # Боевое создание кабинетов/кампаний VK разрешено только после подтверждения
+    # агентского статуса ИП (CLAUDE.md §1.4). Пока False — запуск РК идёт заглушкой.
+    vk_agency_confirmed: bool = False
+
+    # Каталог хранения загруженных креативов (persistent volume РФ-сервера).
+    creatives_dir: str = "/data/creatives"
 
     # Userbot (Telethon-сервис доставки в Telegram) — см. spec 2026-07-13 §6.
     # Пустой BASE_URL = сервис не сконфигурирован; адаптер вернёт userbot_unreachable.
