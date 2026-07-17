@@ -881,3 +881,78 @@
     transform: none !important;
   }
 }
+
+/* ===== Модалка входа в кабинет ===== */
+.lp-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.lp-modal[hidden] {
+  display: none;
+}
+.lp-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 20, 50, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.lp-modal__card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border-radius: 18px;
+  padding: 28px 26px 26px;
+  box-shadow: 0 24px 60px rgba(6, 20, 50, 0.35);
+  animation: lp-modal-in 0.18s ease;
+}
+@keyframes lp-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.lp-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  border: none;
+  background: transparent;
+  font-size: 26px;
+  line-height: 1;
+  color: #8a94a6;
+  cursor: pointer;
+}
+.lp-modal__title {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+.lp-modal__sub {
+  margin: 0 0 18px;
+  color: #5b6678;
+  font-size: 15px;
+}
+.lp-modal__submit {
+  width: 100%;
+  margin-top: 4px;
+}
+.lp-modal__forgot {
+  margin: 16px 0 0;
+  font-size: 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-modal__card {
+    animation: none;
+  }
+}

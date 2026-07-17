@@ -83,16 +83,35 @@ def test_cabinet_page_has_logout() -> None:
     assert "/api/v1/cabinet/logout" in body
 
 
-def test_cabinet_page_has_auth_screens() -> None:
+def test_cabinet_page_has_setpassword_and_redirect() -> None:
     client = TestClient(create_app())
-    body = client.get("/cabinet.html").text
-    assert client.get("/cabinet.html").status_code == 200
-    # Экран установки пароля (первый вход) и вход по email+паролю.
+    resp = client.get("/cabinet.html")
+    assert resp.status_code == 200
+    body = resp.text
+    # Экран установки пароля (первый вход) с крупными полями + инструкция.
     assert "Задайте пароль для входа" in body
     assert "/api/v1/cabinet/set-password" in body
+    assert "Запишите или запомните его" in body
+    assert "form-field" in body  # полноширинные поля, а не grid .field
+    # Вход — через модалку на главной: неавторизованных редиректим туда.
+    assert "/?login=1" in body
+
+
+def test_landing_has_login_modal() -> None:
+    client = TestClient(create_app())
+    body = client.get("/").text
+    assert 'id="login-modal"' in body
+    assert "data-open-login" in body  # ссылки открывают модалку
     assert "/api/v1/cabinet/login" in body
-    assert "/api/v1/cabinet/request-link" in body  # «забыли пароль»
-    assert "Запишите или запомните его" in body  # явная инструкция про пароль
+    assert "/api/v1/cabinet/request-link" in body  # «забыли пароль» в модалке
+    assert "form-field" in body  # полноширинные поля ввода
+
+
+def test_landing_css_has_modal_styles() -> None:
+    client = TestClient(create_app())
+    css = client.get("/landing.css").text
+    assert ".lp-modal" in css
+    assert "backdrop-filter" in css  # стеклянное затемнение
 
 
 def test_admin_page_served_with_sections() -> None:
