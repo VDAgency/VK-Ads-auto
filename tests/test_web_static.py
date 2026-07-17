@@ -152,3 +152,13 @@ def test_brief_forms_mark_email_and_phone_required() -> None:
         assert "Email *" in body
         assert "Телефон *" in body
         assert "required" in body
+
+
+def test_brief_forms_have_vk_ad_cabinet_id_field() -> None:
+    client = TestClient(create_app())
+    for form in ("/brief-individual.html", "/brief-community.html"):
+        body = client.get(form).text
+        # Обязательное поле «ID кабинета VK Реклама» + ссылка на инструкцию.
+        assert "ID кабинета VK Реклама *" in body
+        assert 'name="vk_ad_cabinet_id"' in body
+        assert 'href="/instrukciya-vk-cabinet.html"' in body

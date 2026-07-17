@@ -15,6 +15,7 @@ T = TypeVar("T")
 VALID_INDIVIDUAL = {
     "full_name": "Иван Иванов",
     "object_url": "https://vk.com/ivan",
+    "vk_ad_cabinet_id": "13410929",
     "audience_description": "молодёжь 18-25",
     "geo": "Москва",
     "budget": "30000",

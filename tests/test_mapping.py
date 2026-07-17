@@ -6,6 +6,7 @@ from services.mapping import SOCIAL_ENGAGEMENT, build_campaign_spec
 BASE = {
     "full_name": "Иван",
     "object_url": "https://vk.com/ivan",
+    "vk_ad_cabinet_id": "13410929",
     "audience_description": "целевая аудитория",
     "geo": "Москва",
     "budget": "30000",

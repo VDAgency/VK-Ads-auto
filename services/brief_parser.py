@@ -118,6 +118,7 @@ class ParsedBrief:
     audience: Audience
     budget: Budget
     materials: Materials
+    vk_ad_cabinet_id: str | None = None
     competitors: list[str] = field(default_factory=list)
     extra: str | None = None
     # Поля варианта COMMUNITY (у физлица — None).
@@ -244,7 +245,15 @@ def split_competitors(value: str) -> list[str]:
 # --- основной разбор --------------------------------------------------------
 
 # Обязательные поля по варианту (BRIEF_SPEC §5.1). Контакт проверяется отдельно.
-_COMMON_REQUIRED = ("full_name", "object_url", "audience_description", "geo", "budget", "term")
+_COMMON_REQUIRED = (
+    "full_name",
+    "object_url",
+    "vk_ad_cabinet_id",
+    "audience_description",
+    "geo",
+    "budget",
+    "term",
+)
 _COMMUNITY_REQUIRED = ("niche", "org_type", "product_description")
 
 
@@ -321,6 +330,7 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
         audience=audience,
         budget=budget,
         materials=materials,
+        vk_ad_cabinet_id=get("vk_ad_cabinet_id") or None,
         competitors=split_competitors(get("competitors")),
         extra=get("extra") or None,
         company=biz("company"),

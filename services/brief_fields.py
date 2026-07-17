@@ -27,6 +27,7 @@ class BriefField:
 INDIVIDUAL_FIELDS: list[BriefField] = [
     BriefField("full_name", "Как обращаться"),
     BriefField("object_url", "Ссылка на страницу VK"),
+    BriefField("vk_ad_cabinet_id", "ID кабинета VK Реклама"),
     BriefField("email", "Email"),
     BriefField("phone", "Телефон"),
     BriefField("telegram", "Telegram"),
@@ -45,6 +46,7 @@ INDIVIDUAL_FIELDS: list[BriefField] = [
 COMMUNITY_FIELDS: list[BriefField] = [
     BriefField("full_name", "Контактное лицо"),
     BriefField("object_url", "Ссылка на сообщество VK"),
+    BriefField("vk_ad_cabinet_id", "ID кабинета VK Реклама"),
     BriefField("email", "Email"),
     BriefField("phone", "Телефон"),
     BriefField("telegram", "Telegram"),
