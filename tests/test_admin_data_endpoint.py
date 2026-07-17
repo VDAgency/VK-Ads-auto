@@ -6,7 +6,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-from config.settings import get_settings
+import pytest
+from config.settings import Settings, get_settings
 from core.app import create_app
 from db.base import Base
 from db.models import Account, Brief, Campaign, Client
@@ -19,6 +20,15 @@ from sqlalchemy.pool import StaticPool
 T = TypeVar("T")
 
 _SECRET = get_settings().secret_key.get_secret_value()
+
+
+@pytest.fixture(autouse=True)
+def _unconfigured_channels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Каналы доставки не сконфигурированы (детерминизм для `send_invite`, как в других тестах)."""
+    monkeypatch.setattr(
+        "services.delivery.factory.get_settings",
+        lambda: Settings(_env_file=None),
+    )
 
 
 async def _with_admin(scenario: Callable[[AsyncClient], Awaitable[T]], *, authed: bool = True) -> T:
@@ -159,4 +169,42 @@ def test_admin_endpoints_require_session() -> None:
         return resp.status_code
 
     # Без admin-cookie — 401.
+    assert asyncio.run(_with_admin(scenario, authed=False)) == 401
+
+
+def test_send_invite_creates_invite() -> None:
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/admin/invites",
+            json={"variant": "individual", "contact": "newclient@example.com"},
+        )
+        assert resp.status_code == 201, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    # Каналы не сконфигурированы → email отдаёт fallback (failed), но инвайт создан.
+    assert data["channel"] == "email"
+    assert data["invite_id"] >= 1
+    assert data["fallback_text"]
+
+
+def test_send_invite_bad_contact_422() -> None:
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post(
+            "/api/v1/admin/invites", json={"variant": "individual", "contact": "???"}
+        )
+        return resp.status_code
+
+    assert asyncio.run(_with_admin(scenario)) == 422
+
+
+def test_send_invite_requires_admin() -> None:
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post(
+            "/api/v1/admin/invites",
+            json={"variant": "individual", "contact": "x@example.com"},
+        )
+        return resp.status_code
+
     assert asyncio.run(_with_admin(scenario, authed=False)) == 401

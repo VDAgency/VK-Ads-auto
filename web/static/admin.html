@@ -95,6 +95,7 @@
         <div class="adm-tiles" id="tiles"></div>
 
         <div class="adm-nav">
+          <button class="btn btn--primary" data-view="send" type="button">📨 Отправить бриф</button>
           <button class="btn" data-view="clients" type="button">Клиенты</button>
           <button class="btn" data-view="recent" type="button">Пришли брифы</button>
           <button class="btn" data-view="pending" type="button">Ждём брифы</button>
@@ -426,7 +427,62 @@
         if (brief) return showBrief(brief.getAttribute("data-brief"));
       }
 
+      function flashLocal(id, text, ok) {
+        const m = $(id);
+        m.textContent = text;
+        m.className = "result show " + (ok ? "ok" : "err");
+        m.removeAttribute("hidden");
+      }
+
+      function showSendBrief() {
+        clearDetail();
+        $("detail").innerHTML = "";
+        $("list").innerHTML =
+          '<div class="card" style="max-width:520px"><h3>Отправить бриф клиенту</h3>' +
+          '<p class="note">Бот пришлёт клиенту ссылку на бриф. Веб-канал работает, даже если Telegram недоступен.</p>' +
+          '<div class="form-field"><label>Тип клиента</label>' +
+          '<label style="font-weight:normal;margin-right:16px"><input type="radio" name="sb-variant" value="individual" checked /> Физлицо</label>' +
+          '<label style="font-weight:normal"><input type="radio" name="sb-variant" value="community" /> Юрлицо / бизнес</label></div>' +
+          '<div class="form-field"><label for="sb-contact">Контакт клиента (email, @telegram или телефон)</label>' +
+          '<input id="sb-contact" placeholder="client@mail.ru / @username / +7..." /></div>' +
+          '<button class="btn btn--primary" id="sb-send" type="button">Отправить</button>' +
+          '<div class="result" id="sb-msg" hidden style="margin-top:12px;white-space:pre-wrap"></div></div>';
+        $("sb-send").addEventListener("click", sendBrief);
+      }
+
+      async function sendBrief() {
+        const contact = $("sb-contact").value.trim();
+        if (!contact) {
+          flashLocal("sb-msg", "Введите контакт клиента.", false);
+          return;
+        }
+        const variant = document.querySelector('input[name="sb-variant"]:checked').value;
+        const res = await api("/invites", {
+          method: "POST",
+          body: JSON.stringify({ variant: variant, contact: contact }),
+        });
+        if (res.status === 422) {
+          flashLocal("sb-msg", "Не распознан контакт. Введите email, @username или телефон.", false);
+          return;
+        }
+        if (!res.ok) {
+          flashLocal("sb-msg", "Не удалось отправить. Попробуйте позже.", false);
+          return;
+        }
+        const d = await res.json();
+        let text;
+        if (d.status === "sent" && (d.channel === "telegram" || d.channel === "email")) {
+          text = "✅ Отправлено через " + (d.channel === "telegram" ? "Telegram" : "email") + ". Ожидаем бриф.";
+        } else if (d.status === "sent" && d.channel === "manual") {
+          text = "📞 Автоотправка на телефон невозможна. Перешлите клиенту вручную:\n\n" + (d.fallback_text || "");
+        } else {
+          text = "⚠️ Не удалось отправить автоматически. Перешлите вручную:\n\n" + (d.fallback_text || "");
+        }
+        flashLocal("sb-msg", text, d.status === "sent");
+      }
+
       function routeView(view) {
+        if (view === "send") return showSendBrief();
         if (view === "clients") return showClients();
         if (view === "recent") return showBriefs("recent");
         if (view === "pending") return showBriefs("pending");
