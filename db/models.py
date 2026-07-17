@@ -144,13 +144,44 @@ class Creative(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Cabinet(TenantMixin, Base):
+    """Рекламный кабинет клиента на площадке (иерархия «Клиент 1:N Кабинет 1:N Кампания»).
+
+    `channel` — канал, которым кабинет создан: `kotbot` | `vk_api` | `stub`
+    (свободная строка, без enum — набор каналов расширяется).
+    `external_ref` — id или URL кабинета на площадке; None, пока площадка его не вернула.
+    `ad_object_url` — объект рекламы: сообщество или личная страница.
+    `status`: `creating` | `created` | `failed`.
+    Reuse-or-create по четвёрке (account_id, client_id, channel, ad_object_url) —
+    индекс `ix_cabinet_reuse` НЕ уникален: история пересозданий допустима,
+    актуальным считается самый свежий по id (см. `find_cabinet`).
+    """
+
+    __tablename__ = "cabinet"
+    __table_args__ = (
+        Index("ix_cabinet_reuse", "account_id", "client_id", "channel", "ad_object_url"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("client.id"), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(16))
+    external_ref: Mapped[str | None] = mapped_column(String(128), default=None)
+    ad_object_url: Mapped[str] = mapped_column(String(500))
+    ad_object_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    status: Mapped[str] = mapped_column(String(16), default="created")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Campaign(TenantMixin, Base):
     """Рекламная кампания, созданная по брифу.
 
     `status`: `prepared` (подготовлена; боевой запуск VK заблокирован агентским
-    статусом ИП, CLAUDE.md §1.4), `launched` (реально запущена в VK), `failed`.
+    статусом ИП, CLAUDE.md §1.4), `launched` (реально запущена), `moderation`
+    (на модерации площадки), `stopped` (остановлена), `failed`.
     `external_id` — id кампании во внешней площадке (или синтетический у заглушки).
     `spec_json` — сериализованная `CampaignSpec` (раскладка брифа).
+    `cabinet_id` — рекламный кабинет, в котором запущена кампания; NULL у строк,
+    созданных до появления таблицы `cabinet` (миграция 0009).
     """
 
     __tablename__ = "campaign"
@@ -158,6 +189,9 @@ class Campaign(TenantMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     brief_id: Mapped[int] = mapped_column(ForeignKey("brief.id"), index=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey("client.id"), index=True, default=None)
+    cabinet_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cabinet.id"), nullable=True, index=True, default=None
+    )
     status: Mapped[str] = mapped_column(String(16), default="prepared")
     objective: Mapped[str] = mapped_column(String(32))
     spec_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

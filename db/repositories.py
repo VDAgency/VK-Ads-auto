@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import (
     Brief,
     BriefInvite,
+    Cabinet,
     Campaign,
     Client,
     Creative,
@@ -465,3 +466,103 @@ async def mark_invite_received_if_sent(
     # с полем rowcount — известное ограничение типизации SQLAlchemy async.
     result = cast(CursorResult[tuple[int, ...]], await session.execute(stmt))
     return bool(result.rowcount)
+
+
+# ============================================================================
+# Cabinet + статусы Campaign
+# (K-PR2, spec docs/superpowers/specs/2026-07-17-kotbot-channel-design.md §6)
+# ============================================================================
+
+
+async def find_cabinet(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    channel: str,
+    ad_object_url: str,
+) -> Cabinet | None:
+    """Найти кабинет по reuse-четвёрке (точное совпадение); при дублях — самый свежий по id.
+
+    Основа правила reuse-or-create: перед созданием кабинета на площадке
+    сначала ищем уже существующий для того же клиента/канала/объекта рекламы.
+    """
+    stmt = (
+        select(Cabinet)
+        .where(
+            Cabinet.account_id == account_id,
+            Cabinet.client_id == client_id,
+            Cabinet.channel == channel,
+            Cabinet.ad_object_url == ad_object_url,
+        )
+        .order_by(Cabinet.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def create_cabinet_row(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    channel: str,
+    ad_object_url: str,
+    *,
+    ad_object_name: str | None = None,
+    external_ref: str | None = None,
+    status: str = "created",
+) -> Cabinet:
+    """Создать запись кабинета и получить её id (flush без commit)."""
+    cabinet = Cabinet(
+        account_id=account_id,
+        client_id=client_id,
+        channel=channel,
+        ad_object_url=ad_object_url,
+        ad_object_name=ad_object_name,
+        external_ref=external_ref,
+        status=status,
+    )
+    session.add(cabinet)
+    await session.flush()
+    return cabinet
+
+
+async def list_active_campaigns(session: AsyncSession, account_id: int) -> list[Campaign]:
+    """Активные кампании тенанта для синка статистики.
+
+    Активная = статус `launched` или `moderation` И есть `external_id`
+    (без внешнего id площадку спросить не о чем). Сортировка по id.
+    """
+    stmt = (
+        select(Campaign)
+        .where(
+            Campaign.account_id == account_id,
+            Campaign.status.in_(("launched", "moderation")),
+            Campaign.external_id.is_not(None),
+        )
+        .order_by(Campaign.id)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def set_campaign_status(
+    session: AsyncSession,
+    account_id: int,
+    campaign_id: int,
+    status: str,
+    *,
+    launched_at: datetime | None = None,
+) -> Campaign | None:
+    """Обновить статус кампании (и `launched_at`, если передан).
+
+    Возвращает кампанию или None, если не найдена либо принадлежит чужому
+    тенанту (скоуп по `account_id` — изоляция строк, CLAUDE.md §1.3).
+    """
+    stmt = select(Campaign).where(Campaign.account_id == account_id, Campaign.id == campaign_id)
+    campaign = (await session.execute(stmt)).scalar_one_or_none()
+    if campaign is None:
+        return None
+    campaign.status = status
+    if launched_at is not None:
+        campaign.launched_at = launched_at
+    await session.flush()
+    return campaign
