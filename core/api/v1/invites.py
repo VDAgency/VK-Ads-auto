@@ -35,6 +35,8 @@ class InviteItem(BaseModel):
     sent_at: datetime | None
     received_at: datetime | None
     waiting_days: int
+    # id присланного брифа (для открытия карточки в боте); None у ожидающих.
+    brief_id: int | None = None
 
 
 class InvitesOut(BaseModel):
@@ -52,6 +54,7 @@ def _to_item(view: InviteView) -> InviteItem:
         sent_at=view.sent_at,
         received_at=view.received_at,
         waiting_days=view.waiting_days,
+        brief_id=view.brief_id,
     )
 
 

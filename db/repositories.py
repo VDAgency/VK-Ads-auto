@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
 
@@ -62,6 +63,28 @@ async def list_client_briefs(session: AsyncSession, account_id: int, client_id: 
         .order_by(Brief.id.desc())
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_brief(session: AsyncSession, account_id: int, brief_id: int) -> Brief | None:
+    """Получить бриф тенанта по id (для операторской карточки)."""
+    stmt = select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_brief_ids_for_invites(
+    session: AsyncSession, account_id: int, invite_ids: Sequence[int]
+) -> dict[int, int]:
+    """Отображение `invite_id → brief_id` для присланных брифов (для кликабельного списка)."""
+    if not invite_ids:
+        return {}
+    stmt = select(Brief.invite_id, Brief.id).where(
+        Brief.account_id == account_id, Brief.invite_id.in_(invite_ids)
+    )
+    return {
+        invite_id: brief_id
+        for invite_id, brief_id in (await session.execute(stmt)).all()
+        if invite_id is not None
+    }
 
 
 async def save_stat(
