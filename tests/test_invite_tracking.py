@@ -119,3 +119,18 @@ def test_recent_excludes_still_pending() -> None:
         return len(views)
 
     assert asyncio.run(_with_db(scenario)) == 0
+
+
+def test_recent_carries_brief_id_when_brief_linked() -> None:
+    async def scenario(session: AsyncSession) -> int | None:
+        from db.models import Brief
+
+        invite_id = await _make_received(session, "t1", "got@it.c", NOW - timedelta(days=1))
+        brief = Brief(account_id=1, variant="individual", status="received", invite_id=invite_id)
+        session.add(brief)
+        await session.flush()
+        views = await list_recent(session, 1, now=NOW)
+        return views[0].brief_id
+
+    # brief_id из связанного Brief подставляется в строку recent (для кнопки в боте).
+    assert asyncio.run(_with_db(scenario)) is not None

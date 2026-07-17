@@ -9,13 +9,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from db.repositories import list_pending_invites, list_recent_received_invites
+from db.repositories import (
+    get_brief_ids_for_invites,
+    list_pending_invites,
+    list_recent_received_invites,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @dataclass(frozen=True, slots=True)
 class InviteView:
-    """Строка трекинга для рендера в канале (бот/веб)."""
+    """Строка трекинга для рендера в канале (бот/веб).
+
+    `brief_id` заполнен только у присланных брифов (`recent`) — по нему бот открывает
+    карточку; у ожидающих (`pending`) брифа ещё нет → `None`.
+    """
 
     contact: str
     contact_name: str | None
@@ -24,6 +32,7 @@ class InviteView:
     sent_at: datetime | None
     received_at: datetime | None
     waiting_days: int
+    brief_id: int | None = None
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -72,6 +81,7 @@ async def list_recent(
     now = now or datetime.now(UTC)
     since = now - timedelta(days=within_days)
     invites = await list_recent_received_invites(session, account_id, since)
+    brief_ids = await get_brief_ids_for_invites(session, account_id, [inv.id for inv in invites])
     return [
         InviteView(
             contact=inv.contact_value,
@@ -81,6 +91,7 @@ async def list_recent(
             sent_at=inv.delivered_at,
             received_at=inv.received_at,
             waiting_days=0,
+            brief_id=brief_ids.get(inv.id),
         )
         for inv in invites
     ]
