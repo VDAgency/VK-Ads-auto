@@ -13,3 +13,15 @@ class OperatorOnly(BaseFilter):
     async def __call__(self, event: Message | CallbackQuery) -> bool:
         user = event.from_user
         return user is not None and get_settings().is_operator(user.id)
+
+
+class NonOperator(BaseFilter):
+    """Пропускает всех, кто НЕ оператор — для визитки-приветствия чужим.
+
+    Дополняет `OperatorOnly`: операторские роутеры разбирают свои апдейты первыми,
+    не-операторские доходят до роутера-визитки (регистрируется последним).
+    """
+
+    async def __call__(self, event: Message | CallbackQuery) -> bool:
+        user = event.from_user
+        return user is not None and not get_settings().is_operator(user.id)

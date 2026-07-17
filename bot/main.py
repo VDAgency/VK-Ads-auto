@@ -21,6 +21,7 @@ from bot.handlers import (
     send_brief,
     start,
     stats,
+    stranger,
 )
 from bot.handlers import help as help_handler
 from bot.menu import setup_bot_commands
@@ -38,6 +39,8 @@ def build_dispatcher() -> Dispatcher:
     dispatcher.include_router(admin.router)
     dispatcher.include_router(link_userbot.router)
     dispatcher.include_router(help_handler.router)
+    # Визитка для чужих — последней: ловит только не-операторские апдейты.
+    dispatcher.include_router(stranger.router)
     return dispatcher
 
 
