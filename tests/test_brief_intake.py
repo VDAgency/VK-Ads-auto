@@ -21,6 +21,7 @@ VALID_INDIVIDUAL = {
     "term": "месяц",
     "target_type": "личная страница",
     "email": "ivan@example.com",
+    "phone": "+79990000001",
 }
 
 

@@ -66,7 +66,8 @@ class BriefValidationError(Exception):
 
 @dataclass(frozen=True)
 class Contact:
-    """Контакты идентификации клиента (BRIEF_SPEC §6.1). Достаточно любого одного."""
+    """Контакты идентификации клиента. Email и телефон обязательны (идентификация
+    кабинета — по email, spec кабинета §4.1); telegram — опционально."""
 
     email: str | None = None
     phone: str | None = None
@@ -254,8 +255,12 @@ def _collect_missing(raw: Mapping[str, str], variant: BriefVariant) -> list[str]
     if variant is BriefVariant.COMMUNITY:
         required.extend(_COMMUNITY_REQUIRED)
     missing = [key for key in required if not _clean(raw.get(key))]
-    if not any(_clean(raw.get(k)) for k in ("email", "phone", "telegram")):
-        missing.append("contact")
+    # Идентификация кабинета — по email, поэтому email И телефон обязательны
+    # (решение 2026-07-17, spec кабинета §4.1). Telegram — опционально.
+    if not _clean(raw.get("email")):
+        missing.append("email")
+    if not _clean(raw.get("phone")):
+        missing.append("phone")
     return missing
 
 

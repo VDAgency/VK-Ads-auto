@@ -35,22 +35,23 @@
         <div class="field">
           <div class="num">03</div>
           <div>
-            <label for="email">Email</label>
-            <input id="email" name="email" type="email" autocomplete="email" />
-            <div class="error">Нужен хотя бы один контакт</div>
+            <label for="email">Email *</label>
+            <input id="email" name="email" type="email" autocomplete="email" required />
+            <div class="error">Укажите email</div>
           </div>
         </div>
         <div class="field">
           <div class="num">04</div>
           <div>
-            <label for="phone">Телефон</label>
-            <input id="phone" name="phone" inputmode="tel" placeholder="+7..." />
+            <label for="phone">Телефон *</label>
+            <input id="phone" name="phone" inputmode="tel" placeholder="+7..." required />
+            <div class="error">Укажите телефон</div>
           </div>
         </div>
         <div class="field">
           <div class="num">05</div>
           <div>
-            <label for="telegram">Telegram</label>
+            <label for="telegram">Telegram (если есть)</label>
             <input id="telegram" name="telegram" placeholder="@username" />
           </div>
         </div>
