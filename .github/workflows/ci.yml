@@ -52,7 +52,7 @@ jobs:
             set -e
             cd /opt/vk-ads-auto
             git pull --ff-only
-            docker compose up -d --build api postgres redis caddy bot userbot
+            docker compose up -d --build api postgres redis caddy bot userbot kotbot
             # Caddy не пересоздаётся при изменении только примонтированного Caddyfile
             # (bind-mount), а hot-reload в этом окружении не всегда применяется —
             # поэтому перезапускаем caddy детерминированно (кратковременный блип).

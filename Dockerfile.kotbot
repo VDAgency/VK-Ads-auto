@@ -1,0 +1,26 @@
+# Образ сервиса kotbot (Playwright + FastAPI). Отдельный контейнер (spec §3, §11).
+# Порт наружу не публикуется — доступен только внутри compose-сети.
+# Браузер Chromium ставится ТОЛЬКО в этом образе (остальным сервисам не нужен).
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Сначала зависимости (кешируемый слой), затем браузер, затем код.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Chromium + системные библиотеки для headless-запуска (--with-deps → apt).
+RUN uv run playwright install --with-deps chromium
+
+COPY . .
+RUN uv sync --frozen --no-dev
+
+EXPOSE 8002
+
+CMD ["uv", "run", "uvicorn", "kotbot.main:app", "--host", "0.0.0.0", "--port", "8002"]
