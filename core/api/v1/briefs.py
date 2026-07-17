@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Annotated, Literal
 
 from db.session import get_session
@@ -14,6 +16,15 @@ from pydantic import BaseModel
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
 from services.briefs import InviteTokenError, intake_brief
+from services.creative_store import save_creative
+from services.creative_validate import (
+    ImageCreative,
+    is_valid,
+    validate_image,
+    validate_text,
+    validate_video_size,
+)
+from services.launch_service import BriefNotFoundError, launch_from_creative
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.rate_limit import brief_rate_limit
@@ -86,6 +97,33 @@ class BriefEditOut(BriefCardOut):
     unknown: list[int] = []
 
 
+class CreativeIn(BaseModel):
+    """Загрузка креатива под бриф: медиа (base64) + тип + метаданные + текст.
+
+    `width`/`height` — для валидации изображения (у бота они из Telegram; для видео
+    не используются). `media_b64` декодируется, размер берётся по факту байтов.
+    """
+
+    media_b64: str
+    media_type: Literal["photo", "video"]
+    width: int = 0
+    height: int = 0
+    title: str = ""
+    body: str = ""
+
+
+class CreativeLaunchOut(BaseModel):
+    """Итог приёма креатива и подготовки/запуска кампании."""
+
+    campaign_status: str  # prepared | launched
+    campaign_id: int
+    message: str
+
+
+# Защитный предел размера тела (бот и так качает из Telegram файлы ≤20 МБ).
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
 def _to_card_out(view: BriefCardView) -> BriefCardOut:
     return BriefCardOut(
         brief_id=view.brief_id,
@@ -155,3 +193,50 @@ async def edit_brief(
     await session.commit()
     card = _to_card_out(view)
     return BriefEditOut(**card.model_dump(), unknown=unknown)
+
+
+@router.post("/{brief_id}/creative", status_code=201)
+async def upload_creative(
+    brief_id: int,
+    data: CreativeIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CreativeLaunchOut:
+    """Принять креатив (триггер запуска РК): валидировать, сохранить, создать кампанию."""
+    try:
+        raw = base64.b64decode(data.media_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="media_b64_invalid") from exc
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="media_too_large")
+
+    if data.media_type == "photo":
+        issues = validate_image(
+            ImageCreative(fmt="jpg", width=data.width, height=data.height, size_bytes=len(raw))
+        )
+    else:
+        issues = validate_video_size(len(raw))
+    issues += validate_text(data.title, data.body)
+    if not is_valid(issues):
+        raise HTTPException(status_code=422, detail={"issues": issues})
+
+    path = save_creative(brief_id, data.media_type, raw)
+    try:
+        outcome = await launch_from_creative(
+            session,
+            DEFAULT_ACCOUNT_ID,
+            brief_id,
+            data.media_type,
+            path,
+            data.title or None,
+            data.body or None,
+        )
+    except BriefNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="brief_not_found") from exc
+    except BriefValidationError as exc:
+        raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    await session.commit()
+    return CreativeLaunchOut(
+        campaign_status=outcome.campaign_status,
+        campaign_id=outcome.campaign_id,
+        message=outcome.message,
+    )

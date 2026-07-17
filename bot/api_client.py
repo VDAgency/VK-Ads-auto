@@ -29,6 +29,17 @@ class BriefNotFound(RuntimeError):
     """Ядро не нашло бриф (404) — показать оператору «бриф не найден»."""
 
 
+class CreativeRejected(RuntimeError):
+    """Ядро отклонило креатив (422) — валидация медиа/текста или неполный бриф.
+
+    `reason` — уже человекочитаемая причина для оператора.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class UserbotUnavailable(RuntimeError):
     """Юзербот-сервис не сконфигурирован или недоступен — работаем в мок-режиме."""
 
@@ -89,6 +100,15 @@ class BriefCard:
     fields: list[BriefFieldItem]
     has_creative: bool
     campaign_status: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeResult:
+    """Итог приёма креатива и подготовки/запуска РК (зеркало `CreativeLaunchOut` ядра)."""
+
+    campaign_status: str
+    campaign_id: int
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +218,68 @@ async def update_brief(brief_id: int, edits: dict[int, str]) -> tuple[BriefCard,
     payload = response.json()
     unknown = [int(n) for n in payload.get("unknown", [])]
     return _parse_card(payload), unknown
+
+
+def _creative_reject_reason(detail: Any) -> str:
+    """Человекочитаемая причина отказа по 422-детали ядра."""
+    if isinstance(detail, dict):
+        issues = detail.get("issues")
+        if issues:
+            return " ".join(str(item) for item in issues)
+        missing = detail.get("missing")
+        if missing:
+            return (
+                "Бриф заполнен не полностью — не хватает полей: "
+                + ", ".join(str(item) for item in missing)
+                + ". Внесите правки и повторите."
+            )
+    return "Креатив не принят. Проверьте файл и текст."
+
+
+async def upload_creative(
+    brief_id: int,
+    media_b64: str,
+    media_type: str,
+    width: int,
+    height: int,
+    title: str,
+    body: str,
+) -> CreativeResult:
+    """`POST /briefs/{id}/creative`: отправить креатив (триггер запуска РК).
+
+    404 → `BriefNotFound`; 413/422 → `CreativeRejected`; сеть/5xx → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/briefs/{brief_id}/creative"
+    payload = {
+        "media_b64": media_b64,
+        "media_type": media_type,
+        "width": width,
+        "height": height,
+        "title": title,
+        "body": body,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_INVITE_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise BriefNotFound(str(brief_id))
+    if response.status_code == 413:
+        raise CreativeRejected("Файл слишком большой (до 20 МБ).")
+    if response.status_code == 422:
+        detail: Any = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        raise CreativeRejected(_creative_reject_reason(detail))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    data = response.json()
+    return CreativeResult(
+        campaign_status=str(data["campaign_status"]),
+        campaign_id=int(data["campaign_id"]),
+        message=str(data["message"]),
+    )
 
 
 async def get_cabinets() -> list[CabinetItem]:
