@@ -18,3 +18,9 @@ class LinkUserbot(StatesGroup):
     entering_phone = State()  # ввод номера телефона Анастасии
     entering_code = State()  # ввод кода из Telegram
     entering_password = State()  # ввод пароля 2FA (если включён)
+
+
+class EditBrief(StatesGroup):
+    """Сценарий «внести правки в бриф»: правки формата `номер.значение` (PROJECT.md §4.1.6)."""
+
+    entering_edits = State()  # ввод правок (много строк за раз)

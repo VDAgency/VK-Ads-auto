@@ -17,7 +17,7 @@ from aiogram.types import Message
 from bot import api_client
 from bot.access import OperatorOnly
 from bot.api_client import CoreUnavailable, InviteItem
-from bot.keyboards import BTN_PENDING
+from bot.keyboards import BTN_PENDING, recent_briefs_keyboard
 
 router = Router(name="pending")
 router.message.filter(OperatorOnly())
@@ -71,13 +71,23 @@ def _render(pending: list[InviteItem], recent: list[InviteItem], now: datetime) 
     return "\n".join(lines)
 
 
+def _recent_buttons(recent: list[InviteItem]) -> list[tuple[int, str]]:
+    """Кнопки открытия карточки — только у брифов с известным `brief_id`, с той же нумерацией."""
+    buttons: list[tuple[int, str]] = []
+    for index, item in enumerate(recent, start=1):
+        if item.brief_id is not None:
+            buttons.append((item.brief_id, f"{index}. {_who(item)}"))
+    return buttons
+
+
 @router.message(or_f(Command("pending"), F.text == BTN_PENDING))
 async def show_pending(message: Message) -> None:
-    """Показать, кого ждём и кто прислал бриф за последнюю неделю."""
+    """Показать, кого ждём и кто прислал бриф за последнюю неделю (с кнопками карточек)."""
     try:
         pending = await api_client.get_pending()
         recent = await api_client.get_recent()
     except CoreUnavailable:
         await message.answer("Сервис временно недоступен, попробуйте позже.")
         return
-    await message.answer(_render(pending, recent, datetime.now(_MSK)))
+    keyboard = recent_briefs_keyboard(_recent_buttons(recent))
+    await message.answer(_render(pending, recent, datetime.now(_MSK)), reply_markup=keyboard)

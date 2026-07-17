@@ -25,6 +25,10 @@ class ContactNotRecognized(RuntimeError):
     """Ядро не распознало контакт (422) — оператору нужен корректный ввод."""
 
 
+class BriefNotFound(RuntimeError):
+    """Ядро не нашло бриф (404) — показать оператору «бриф не найден»."""
+
+
 class UserbotUnavailable(RuntimeError):
     """Юзербот-сервис не сконфигурирован или недоступен — работаем в мок-режиме."""
 
@@ -60,6 +64,31 @@ class InviteCreated:
     channel: str  # telegram | email | manual
     fallback_text: str | None
     error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BriefFieldItem:
+    """Одно нумерованное поле карточки брифа (зеркало `BriefFieldOut` ядра)."""
+
+    n: int
+    label: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class BriefCard:
+    """Карточка брифа для оператора (зеркало `BriefCardOut` ядра)."""
+
+    brief_id: int
+    variant: str
+    status: str
+    client_name: str | None
+    client_email: str | None
+    client_phone: str | None
+    client_telegram: str | None
+    fields: list[BriefFieldItem]
+    has_creative: bool
+    campaign_status: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +146,58 @@ async def get_pending() -> list[InviteItem]:
 async def get_recent() -> list[InviteItem]:
     """Инвайты, по которым бриф пришёл за последнюю неделю."""
     return _to_invites(await _get("/invites", {"status": "recent"}))
+
+
+def _parse_card(payload: dict[str, Any]) -> BriefCard:
+    client = payload.get("client") or {}
+    return BriefCard(
+        brief_id=int(payload["brief_id"]),
+        variant=str(payload["variant"]),
+        status=str(payload["status"]),
+        client_name=client.get("full_name"),
+        client_email=client.get("email"),
+        client_phone=client.get("phone"),
+        client_telegram=client.get("telegram"),
+        fields=[
+            BriefFieldItem(n=int(f["n"]), label=str(f["label"]), value=str(f["value"]))
+            for f in payload.get("fields", [])
+        ],
+        has_creative=bool(payload.get("has_creative", False)),
+        campaign_status=payload.get("campaign_status"),
+    )
+
+
+async def get_brief(brief_id: int) -> BriefCard:
+    """`GET /briefs/{id}`: карточка брифа. 404 → `BriefNotFound`; сеть/5xx → `CoreUnavailable`."""
+    url = f"{_base_url()}/api/v1/briefs/{brief_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.get(url)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise BriefNotFound(str(brief_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    return _parse_card(response.json())
+
+
+async def update_brief(brief_id: int, edits: dict[int, str]) -> tuple[BriefCard, list[int]]:
+    """`PATCH /briefs/{id}`: применить правки, вернуть карточку + неизвестные номера."""
+    url = f"{_base_url()}/api/v1/briefs/{brief_id}"
+    body = {"edits": {str(number): value for number, value in edits.items()}}
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.patch(url, json=body)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise BriefNotFound(str(brief_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    payload = response.json()
+    unknown = [int(n) for n in payload.get("unknown", [])]
+    return _parse_card(payload), unknown
 
 
 async def get_cabinets() -> list[CabinetItem]:

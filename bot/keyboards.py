@@ -51,6 +51,31 @@ def cabinets_keyboard(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     )
 
 
+def recent_briefs_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup | None:
+    """Кнопки открытия присланных брифов. `items` = [(brief_id, подпись)].
+
+    Пустой список → `None` (нечего показывать). Подпись обрезается до 60 символов
+    (лимит текста инлайн-кнопки Telegram — 64 байта, берём с запасом).
+    """
+    if not items:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"📄 {label[:60]}", callback_data=f"brief:{brief_id}")]
+            for brief_id, label in items
+        ]
+    )
+
+
+def brief_card_keyboard(brief_id: int) -> InlineKeyboardMarkup:
+    """Действия над карточкой брифа: внести правки (`edit:{id}`)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Внести правки", callback_data=f"edit:{brief_id}")],
+        ]
+    )
+
+
 def code_keypad() -> InlineKeyboardMarkup:
     """Цифровая клавиатура для кода авторизации юзер-бота (/link_userbot).
 
