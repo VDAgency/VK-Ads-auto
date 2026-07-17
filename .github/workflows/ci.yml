@@ -53,6 +53,10 @@ jobs:
             cd /opt/vk-ads-auto
             git pull --ff-only
             docker compose up -d --build api postgres redis caddy bot userbot
+            # Caddy не пересоздаётся при изменении только примонтированного Caddyfile
+            # (bind-mount), а hot-reload в этом окружении не всегда применяется —
+            # поэтому перезапускаем caddy детерминированно (кратковременный блип).
+            docker compose restart caddy
             # Применяем миграции БД (с ретраями до готовности postgres).
             for i in $(seq 1 10); do
               if docker compose exec -T api uv run alembic upgrade head; then echo "migrations OK"; break; fi
