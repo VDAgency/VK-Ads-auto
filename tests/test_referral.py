@@ -66,3 +66,45 @@ def test_intake_with_ref_links_referral() -> None:
     referral_count, discount_count = asyncio.run(_with_db(scenario))
     assert referral_count == 1
     assert discount_count == 1
+
+
+def _capture_operator_messages(scenario: object) -> list[str]:
+    """Прогнать сценарий intake с перехватом уведомлений оператору."""
+    from services.notifier import register_operator_notifier, reset_operator_notifier
+
+    messages: list[str] = []
+
+    async def capture(text: str) -> None:
+        messages.append(text)
+
+    register_operator_notifier(capture)
+    try:
+        asyncio.run(_with_db(scenario))  # type: ignore[arg-type]
+    finally:
+        reset_operator_notifier()
+    return messages
+
+
+def test_intake_with_ref_notifies_operator_about_referral() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        referrer = await create_client(session, 1, "Реферер Рома", "ref@e.com", None, None)
+        await session.flush()
+        code = generate_ref_code(referrer.id, get_settings().secret_key.get_secret_value())
+        payload = {**VALID_INDIVIDUAL, "email": "brandnew@e.com", "full_name": "Новичок Ник"}
+        await intake_brief(session, 1, BriefVariant.INDIVIDUAL, payload, ref_code=code)
+
+    messages = _capture_operator_messages(scenario)
+    joined = " ".join(messages)
+    assert "прислал бриф" in joined  # уведомление о самом брифе (Фаза 11)
+    assert "привёл" in joined and "Реферер Рома" in joined  # уведомление о реферале (Фаза 10)
+
+
+def test_self_serve_brief_notifies_operator_without_referral() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        payload = {**VALID_INDIVIDUAL, "email": "solo@e.com", "full_name": "Соло Сэм"}
+        # Ни инвайта, ни реф-кода — самостоятельный бриф.
+        await intake_brief(session, 1, BriefVariant.INDIVIDUAL, payload)
+
+    messages = _capture_operator_messages(scenario)
+    assert any("прислал бриф" in m for m in messages)
+    assert not any("привёл" in m for m in messages)  # реферала нет
