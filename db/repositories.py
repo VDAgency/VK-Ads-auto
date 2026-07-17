@@ -81,6 +81,34 @@ async def get_brief(session: AsyncSession, account_id: int, brief_id: int) -> Br
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def list_clients(session: AsyncSession, account_id: int) -> list[Client]:
+    """Все клиенты тенанта (свежие первыми) — для админ-панели."""
+    stmt = select(Client).where(Client.account_id == account_id).order_by(Client.id.desc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def count_briefs_by_client(session: AsyncSession, account_id: int) -> dict[int, int]:
+    """Число брифов по каждому клиенту (`client_id → count`) — для списка клиентов."""
+    stmt = (
+        select(Brief.client_id, func.count())
+        .where(Brief.account_id == account_id, Brief.client_id.is_not(None))
+        .group_by(Brief.client_id)
+    )
+    return {cid: cnt for cid, cnt in (await session.execute(stmt)).all() if cid is not None}
+
+
+async def list_campaigns(session: AsyncSession, account_id: int) -> list[Campaign]:
+    """Все кампании тенанта (свежие первыми) — для админ-панели."""
+    stmt = select(Campaign).where(Campaign.account_id == account_id).order_by(Campaign.id.desc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def count_campaigns(session: AsyncSession, account_id: int) -> int:
+    """Число кампаний тенанта — для дашборда админки."""
+    stmt = select(func.count()).select_from(Campaign).where(Campaign.account_id == account_id)
+    return int((await session.execute(stmt)).scalar_one())
+
+
 async def get_creative_for_brief(
     session: AsyncSession, account_id: int, brief_id: int
 ) -> Creative | None:

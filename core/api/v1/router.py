@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from core.api.v1 import admin, briefs, cabinet, cabinets, invites
+from core.api.v1 import admin, admin_data, briefs, cabinet, cabinets, invites
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
 router.include_router(admin.router)
+router.include_router(admin_data.router)
 router.include_router(briefs.router)
 router.include_router(cabinet.router)
 router.include_router(cabinets.router)
