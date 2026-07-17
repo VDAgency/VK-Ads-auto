@@ -138,6 +138,13 @@ async def login(
     return OkResponse()
 
 
+@router.post("/logout")
+async def logout(response: Response) -> OkResponse:
+    """Выход из кабинета — очистить session-cookie."""
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return OkResponse()
+
+
 @router.post("/request-link", dependencies=[Depends(cabinet_auth_rate_limit)])
 async def request_link(
     data: LinkRequest,

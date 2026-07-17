@@ -152,3 +152,13 @@ def test_cabinet_without_auth_rejected() -> None:
         return resp.status_code
 
     assert asyncio.run(_with_client(scenario)) == 401
+
+
+def test_logout_clears_cookie() -> None:
+    async def scenario(client: AsyncClient) -> bool:
+        resp = await client.post("/api/v1/cabinet/logout")
+        assert resp.status_code == 200
+        # delete_cookie выставляет Set-Cookie с истёкшим сроком.
+        return "cabinet_session" in resp.headers.get("set-cookie", "")
+
+    assert asyncio.run(_with_client(scenario)) is True

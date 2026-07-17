@@ -69,6 +69,20 @@ def test_community_brief_form_served() -> None:
     assert 'data-variant="community"' in response.text
 
 
+def test_landing_has_cabinet_login_link() -> None:
+    client = TestClient(create_app())
+    body = client.get("/").text
+    assert 'href="/cabinet.html"' in body
+    assert "Вход в кабинет" in body
+
+
+def test_cabinet_page_has_logout() -> None:
+    client = TestClient(create_app())
+    body = client.get("/cabinet.html").text
+    assert 'id="logout"' in body
+    assert "/api/v1/cabinet/logout" in body
+
+
 def test_cabinet_page_has_auth_screens() -> None:
     client = TestClient(create_app())
     body = client.get("/cabinet.html").text
