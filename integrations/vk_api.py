@@ -77,6 +77,9 @@ _PROFILE_RE = re.compile(r"^id(\d+)$")
 
 _BASE_METRICS = ("shows", "clicks", "spent", "ctr", "cpc", "cpm")
 
+# Язык справочника регионов: VK отдаёт русские названия только по Accept-Language.
+REGIONS_LANGUAGE = "ru"
+
 
 @dataclass(frozen=True)
 class AdObject:
@@ -367,8 +370,16 @@ class VkApiAdapter(PlatformAdapter):
         return _parse_summary(response.json())
 
     async def _fetch_regions(self) -> list[dict[str, Any]]:
-        """Справочник регионов для резолва гео (`GET /regions.json`)."""
-        response = await self._request("GET", "/regions.json")
+        """Справочник регионов для резолва гео (`GET /regions.json`).
+
+        Заголовок `Accept-Language` переключает язык названий: без него VK отдаёт
+        английские имена («Tver»), с `ru` — русские («Тверь»), совпадающие с тем,
+        как гео пишут в брифе. Query-параметры `lang`/`locale` при этом
+        игнорируются (проверено живьём 2026-07-25).
+        """
+        response = await self._request(
+            "GET", "/regions.json", headers={"Accept-Language": REGIONS_LANGUAGE}
+        )
         response.raise_for_status()
         payload = response.json()
         items = payload.get("items", []) if isinstance(payload, dict) else payload

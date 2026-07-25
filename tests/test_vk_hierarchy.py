@@ -32,9 +32,9 @@ from pydantic import SecretStr
 from services.mapping import CampaignSpec
 
 _REGIONS: list[dict[str, Any]] = [
-    {"id": 188, "name": "Russia", "parent_id": None},
-    {"id": 5506, "name": "Moscow", "parent_id": 70},
-    {"id": 5560, "name": "Sankt-Peterburg", "parent_id": 72},
+    {"id": 188, "name": "Россия", "parent_id": None},
+    {"id": 5506, "name": "Москва", "parent_id": 70},
+    {"id": 5560, "name": "Санкт-Петербург", "parent_id": 72},
 ]
 
 T = TypeVar("T")

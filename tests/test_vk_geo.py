@@ -11,10 +11,12 @@ from integrations.vk_geo import RUSSIA_REGION_ID, VkGeoResolver
 
 # Фрагмент реального /regions.json: имена только английские (см. docs/VK_API_REFERENCE.md).
 _REGIONS: list[dict[str, Any]] = [
-    {"id": 188, "name": "Russia", "parent_id": None, "flags": []},
-    {"id": 70, "name": "Moscow Oblast", "parent_id": 188, "flags": []},
-    {"id": 5506, "name": "Moscow", "parent_id": 70, "flags": []},
-    {"id": 5560, "name": "Sankt-Peterburg", "parent_id": 72, "flags": []},
+    {"id": 188, "name": "Россия", "parent_id": None, "flags": []},
+    {"id": 70, "name": "Московская область", "parent_id": 188, "flags": []},
+    {"id": 5506, "name": "Москва", "parent_id": 70, "flags": []},
+    {"id": 5567, "name": "Тверь", "parent_id": 123, "flags": []},
+    {"id": 5580, "name": "Королёв", "parent_id": 70, "flags": []},
+    {"id": 5560, "name": "Санкт-Петербург", "parent_id": 72, "flags": []},
 ]
 
 
@@ -63,7 +65,7 @@ def test_conjunction_splits_and_duplicates_collapse() -> None:
 
 
 def test_english_name_passes_through() -> None:
-    assert _resolve("Moscow") == [5506]
+    assert _resolve("Москва") == [5506]
 
 
 def test_unknown_geo_falls_back_to_russia_with_warning(
