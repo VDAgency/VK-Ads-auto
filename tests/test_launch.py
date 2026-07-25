@@ -3,7 +3,7 @@ import asyncio
 from integrations.adapter import PlatformAdapter
 from services.brief_parser import Goal
 from services.goals import objective_for
-from services.launch import LaunchResult, launch_confirmation, run_campaign
+from services.launch import LaunchResult, daily_budget_rub, launch_confirmation, run_campaign
 from services.mapping import CampaignSpec
 
 
@@ -55,6 +55,35 @@ def test_run_campaign_uploads_creative_when_provided() -> None:
     assert ("upload_creative", "camp-1", "ad.png") in adapter.calls
 
 
+def test_run_campaign_without_autostart_does_not_launch() -> None:
+    adapter = _RecordingAdapter()
+    result = asyncio.run(run_campaign(adapter, "cab-1", SPEC, autostart=False))
+    assert result.launched is False
+    assert not any(call[0] == "launch" for call in adapter.calls)
+
+
 def test_confirmation_mentions_campaign_id() -> None:
     message = launch_confirmation(LaunchResult(campaign_id="camp-9", launched=True))
     assert "camp-9" in message
+
+
+def test_daily_budget_splits_brief_amount_over_term() -> None:
+    spec = CampaignSpec(
+        objective="socialengagement", name="n", object_url="u", geo_raw="Москва", budget_rub=30000
+    )
+    assert daily_budget_rub(spec) == 1000.0
+
+
+def test_daily_budget_is_none_when_budget_needs_discussion() -> None:
+    spec = CampaignSpec(
+        objective="socialengagement",
+        name="n",
+        object_url="u",
+        geo_raw="Москва",
+        needs_budget_discussion=True,
+    )
+    assert daily_budget_rub(spec) is None
+
+
+def test_daily_budget_is_none_without_amount() -> None:
+    assert daily_budget_rub(SPEC) is None

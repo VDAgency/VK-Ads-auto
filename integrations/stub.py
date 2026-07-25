@@ -1,10 +1,12 @@
 """Заглушка адаптера площадки: подготовка кампании без боевых мутаций VK.
 
-Боевое создание кабинетов/кампаний VK разрешено только после подтверждения
-агентского статуса ИП (CLAUDE.md §1.4). Пока статус не подтверждён или нет токена,
+Боевое создание кампаний VK включается флагом `vk_live_campaigns`, кабинетов —
+отдельным `vk_agency_confirmed` (CLAUDE.md §1.4). Пока флаг снят или нет токена,
 запуск идёт через эту заглушку: методы возвращают синтетические id и ничего не
 мутируют во внешних системах. Точка переключения на боевой `VkApiAdapter` —
-`services/launch_service.py::_select_adapter`.
+`services/launch_service.py::_build_adapters`.
+
+`health_check` всегда True: заглушка — гарантированный фолбэк роутера каналов.
 """
 
 from __future__ import annotations
@@ -25,6 +27,10 @@ class StubAdapter(PlatformAdapter):
         return f"stub-creative-{campaign_id}"
 
     async def launch(self, campaign_id: str) -> None:
+        return None
+
+    async def stop(self, campaign_id: str) -> None:
+        """Останавливать нечего: заглушка ничего не запускала во внешней системе."""
         return None
 
     async def get_stats(self, campaign_id: str) -> dict[str, float]:
