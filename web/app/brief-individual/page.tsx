@@ -1,164 +1,279 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { BriefForm, type BriefRow } from "@/components/BriefForm";
+
+import "../brief.css";
 
 export const metadata: Metadata = {
   title: "Бриф для физлица — VK-Ads-auto",
 };
 
-// Порядок строк = порядок web/static/brief-individual.html и, через него,
-// INDIVIDUAL_FIELDS в services/brief_fields.py. Менять только синхронно с ним.
+const BUDGET_OPTIONS = [
+  { value: "5 000 ₽", label: "5 000 ₽" },
+  { value: "10 000 ₽", label: "10 000 ₽" },
+  { value: "15 000 ₽", label: "15 000 ₽" },
+  { value: "20 000 ₽", label: "20 000 ₽" },
+  { value: "25 000 ₽", label: "25 000 ₽" },
+  { value: "30 000 ₽", label: "30 000 ₽" },
+  { value: "до 50 000 ₽", label: "до 50 000 ₽" },
+  { value: "готов обсудить", label: "Готов(а) обсудить" },
+];
+
+const TERM_OPTIONS = [
+  { value: "1 неделя", label: "1 неделя" },
+  { value: "2 недели", label: "2 недели" },
+  { value: "1 месяц", label: "1 месяц" },
+  { value: "нужна консультация", label: "Нужна консультация" },
+];
+
+// Значения материалов разбирает `parse_materials` в services/brief_parser.py
+// по ключевым словам «фото» / «видео» / «ничего нет» — менять только вместе с ним.
+const MATERIALS_OPTIONS = [
+  { value: "есть фото", label: "📸 Да, есть фото" },
+  { value: "есть видео", label: "🎬 Да, есть видео" },
+  { value: "есть фото и видео", label: "📸🎬 Есть и фото, и видео" },
+  { value: "ничего нет, нужна помощь", label: "❌ Ничего нет, нужна помощь" },
+];
+
+// Порядок строк = порядок INDIVIDUAL_FIELDS в services/brief_fields.py.
+// Менять только синхронно с ним: по этим номерам оператор правит сводку в боте.
 const ROWS: BriefRow[] = [
-  { kind: "section", title: "О вас и объекте" },
+  { kind: "section", num: 1, title: "Контактная информация" },
   {
     kind: "input",
-    num: "01",
     name: "full_name",
-    label: "Как к вам обращаться *",
+    label: "Как к вам обращаться",
+    placeholder: "Фамилия Имя Отчество",
     autoComplete: "name",
+    required: true,
     error: "Укажите имя",
   },
   {
-    kind: "input",
-    num: "02",
-    name: "object_url",
-    label: "Ссылка на вашу страницу VK *",
-    placeholder: "https://vk.com/id...",
-    error: "Укажите ссылку на страницу",
+    kind: "pair",
+    items: [
+      {
+        kind: "input",
+        name: "phone",
+        label: "Телефон / WhatsApp",
+        type: "tel",
+        inputMode: "tel",
+        placeholder: "+7 (___) ___-__-__",
+        autoComplete: "tel",
+        required: true,
+        error: "Укажите телефон",
+      },
+      {
+        kind: "input",
+        name: "telegram",
+        label: "Telegram",
+        placeholder: "@username",
+      },
+    ],
   },
   {
     kind: "input",
-    num: "03",
-    name: "vk_ad_cabinet_id",
-    label: "ID кабинета VK Реклама *",
-    inputMode: "numeric",
-    placeholder: "например, 13410929",
-    error: "Укажите ID кабинета VK Реклама",
-    hint: {
-      href: "/instrukciya-vk-cabinet.html",
-      text: "Как создать кабинет и найти ID — инструкция",
-    },
-  },
-
-  { kind: "section", title: "Контакты" },
-  {
-    kind: "input",
-    num: "04",
     name: "email",
-    label: "Email *",
+    label: "E-mail",
     type: "email",
+    placeholder: "your@email.ru",
     autoComplete: "email",
     required: true,
     error: "Укажите email",
   },
   {
     kind: "input",
-    num: "05",
-    name: "phone",
-    label: "Телефон *",
-    inputMode: "tel",
-    placeholder: "+7...",
+    name: "tax_id",
+    label: "ИНН",
+    hint: "Если есть — укажите для оформления документов",
+    placeholder: "Например: 7707083893",
+    inputMode: "numeric",
+  },
+
+  { kind: "section", num: 2, title: "Ваша страница ВКонтакте" },
+  {
+    kind: "input",
+    name: "object_url",
+    label: "Ссылка на личную страницу или сообщество ВК",
+    hint: "Скопируйте ссылку из адресной строки браузера или из приложения",
+    type: "url",
+    placeholder: "https://vk.com/your_page",
     required: true,
-    error: "Укажите телефон",
+    error: "Укажите ссылку на страницу",
+  },
+  {
+    kind: "instruction",
+    title: "📌 Как скопировать ссылку на свою страницу ВК",
+    steps: [
+      <>
+        Откройте приложение ВКонтакте или зайдите на <strong>vk.com</strong>
+      </>,
+      <>Перейдите в свой профиль (нажмите на аватарку или «Моя страница»)</>,
+      <>
+        В приложении: нажмите <strong>⋯</strong> (три точки) → <strong>«Копировать ссылку»</strong>
+      </>,
+      <>
+        В браузере: скопируйте адрес из строки сверху (начинается с <strong>vk.com/</strong>)
+      </>,
+      <>Вставьте ссылку в поле выше</>,
+    ],
   },
   {
     kind: "input",
-    num: "06",
-    name: "telegram",
-    label: "Telegram (если есть)",
-    placeholder: "@username",
+    name: "vk_ad_cabinet_id",
+    label: "ID кабинета VK Реклама",
+    hint: "Номер вашего рекламного кабинета — без него мы не сможем запустить кампанию",
+    inputMode: "numeric",
+    placeholder: "например, 13410929",
+    required: true,
+    error: "Укажите ID кабинета VK Реклама",
+    link: {
+      href: "/instrukciya-vk-cabinet.html",
+      text: "Как создать кабинет и найти ID — инструкция",
+    },
+  },
+  {
+    kind: "choices",
+    name: "target_type",
+    label: "Куда привлекаем подписчиков?",
+    required: true,
+    error: "Выберите вариант",
+    options: [
+      { value: "личная страница", label: "👤 Личная страница" },
+      { value: "сообщество", label: "👥 Сообщество / группа" },
+    ],
   },
 
-  { kind: "section", title: "Аудитория" },
+  { kind: "section", num: 3, title: "Кого хотите привлечь" },
   {
     kind: "textarea",
-    num: "07",
     name: "audience_description",
-    label: "Кого хотим привлекать *",
+    label: "Кто ваш идеальный подписчик?",
+    hint: "Опишите, каких людей вы хотите видеть в подписчиках",
+    placeholder: "Например: девушки 20–35, интересуются модой и красотой, живут в крупных городах…",
+    required: true,
     error: "Опишите аудиторию",
   },
   {
+    kind: "pair",
+    items: [
+      {
+        kind: "choices",
+        name: "gender",
+        label: "Пол",
+        options: [
+          { value: "мужской", label: "Мужской" },
+          { value: "женский", label: "Женский" },
+          { value: "любой", label: "Любой" },
+        ],
+      },
+      { kind: "age", label: "Возраст" },
+    ],
+  },
+  {
     kind: "input",
-    num: "08",
     name: "geo",
-    label: "География *",
-    placeholder: "Город, регион",
+    label: "География",
+    hint: "Из каких городов или регионов нужны подписчики? Если неважно — напишите «вся Россия»",
+    placeholder: "Москва, СПб / вся Россия",
+    required: true,
     error: "Укажите географию",
   },
+
+  { kind: "section", num: 4, title: "Бюджет и сроки" },
   {
     kind: "select",
-    num: "09",
-    name: "gender",
-    label: "Пол аудитории",
-    options: [
-      { value: "", label: "Любой" },
-      { value: "мужской", label: "Мужской" },
-      { value: "женский", label: "Женский" },
-    ],
-  },
-  { kind: "age", num: "10", label: "Возраст (от / до)" },
-
-  { kind: "section", title: "Бюджет и цель" },
-  {
-    kind: "input",
-    num: "11",
     name: "budget",
-    label: "Бюджет на рекламу *",
-    placeholder: "например, 30000 ₽ или «готов обсудить»",
+    label: "Рекламный бюджет",
+    hint: "Сумма, которую вы готовы вложить в рекламу (без учёта оплаты за настройку)",
+    placeholder: "Выберите бюджет",
+    required: true,
     error: "Укажите бюджет",
+    options: BUDGET_OPTIONS,
+  },
+  {
+    kind: "select",
+    name: "term",
+    label: "На какой срок планируете?",
+    placeholder: "Выберите срок",
+    required: true,
+    error: "Укажите срок",
+    options: TERM_OPTIONS,
+  },
+
+  { kind: "section", num: 5, title: "Рекламные материалы" },
+  {
+    kind: "choices",
+    name: "materials",
+    label: "Есть ли у вас фото или видео для рекламы?",
+    options: MATERIALS_OPTIONS,
   },
   {
     kind: "input",
-    num: "12",
-    name: "term",
-    label: "Срок / период *",
-    placeholder: "например, 1 месяц",
-    error: "Укажите срок",
-  },
-  {
-    kind: "select",
-    num: "13",
-    name: "target_type",
-    label: "Куда привлекаем *",
-    error: "Выберите вариант",
-    options: [
-      { value: "личная страница", label: "Личная страница" },
-      { value: "сообщество", label: "Сообщество / группа" },
-    ],
+    name: "materials_url",
+    label: "Ссылка на рекламные материалы",
+    hint: "Если есть — пришлите ссылку на папку с фото и видео (Google Диск, Яндекс.Диск, облако)",
+    type: "url",
+    placeholder: "https://disk.yandex.ru/...",
   },
 
-  { kind: "section", title: "Материалы" },
+  { kind: "section", num: 6, title: "Дополнительно" },
   {
-    kind: "select",
-    num: "14",
-    name: "materials",
-    label: "Есть ли рекламные материалы",
-    options: [
-      { value: "", label: "—" },
-      { value: "есть фото", label: "Есть фото" },
-      { value: "есть видео", label: "Есть видео" },
-      { value: "есть фото и видео", label: "Есть фото и видео" },
-      { value: "ничего нет, нужна помощь", label: "Ничего нет, нужна помощь" },
-    ],
+    kind: "textarea",
+    name: "competitors",
+    label: "Ссылки на конкурентов или примеры",
+    hint: "Если есть кто-то, на кого вы хотите быть похожи — пришлите ссылки",
+    rows: 3,
+    placeholder: "https://vk.com/example1\nhttps://vk.com/example2",
+  },
+  {
+    kind: "textarea",
+    name: "extra",
+    label: "Есть ли что-то ещё, что важно учесть?",
+    rows: 3,
+    placeholder: "Любая дополнительная информация",
   },
 ];
 
 export default function BriefIndividual() {
   return (
-    <>
-      <header className="topbar">
-        <div className="brand">
-          VK<span>·</span>Ads<span>·</span>auto
+    <div className="bf">
+      <header className="bf-header">
+        <div className="bf-header__inner">
+          <Link className="bf-brand" href="/">
+            <span className="bf-brand__badge" aria-hidden="true">
+              VK
+            </span>
+            VK<span className="bf-brand__dot">·</span>Ads
+            <span className="bf-brand__dot">·</span>auto
+          </Link>
+          <Link className="bf-header__back" href="/">
+            На главную
+          </Link>
         </div>
       </header>
 
-      <main className="wrap">
-        <div className="eyebrow">Бриф · продвижение личной страницы</div>
-        <h2>Расскажите о продвижении</h2>
-        <p className="lead">Поля со звёздочкой обязательны. Это займёт пару минут.</p>
+      <div className="bf-hero">
+        <div className="bf-hero__badge">📋 Бриф</div>
+        <h1 className="bf-hero__title">Подписчики на вашу страницу или сообщество ВКонтакте</h1>
+        <p className="bf-hero__sub">
+          Заполните короткую анкету — мы подготовим стратегию и запустим рекламу для привлечения
+          подписчиков. Поля со звёздочкой обязательны.
+        </p>
+      </div>
 
-        <BriefForm variant="individual" rows={ROWS} />
-      </main>
-    </>
+      <div className="bf-container">
+        <BriefForm
+          variant="individual"
+          rows={ROWS}
+          footer={
+            <>
+              После отправки откроется ваш <strong>личный кабинет</strong>
+              <br />— там будет статус брифа и запуск кампании
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }

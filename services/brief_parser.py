@@ -333,11 +333,16 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
         vk_ad_cabinet_id=get("vk_ad_cabinet_id") or None,
         competitors=split_competitors(get("competitors")),
         extra=get("extra") or None,
+        # ИНН спрашивают ОБА макета: у физлица — «если есть, для оформления
+        # документов», поэтому поле не бизнес-только.
+        tax_id=get("tax_id") or None,
         company=biz("company"),
         niche=biz("niche"),
         org_type=parse_org_type(get("org_type")) if is_community else None,
-        tax_id=biz("tax_id"),
         org_name=biz("org_name"),
+        # Реквизиты в бриф больше не собираются (BRIEF_SPEC §0: не параметр VK и не
+        # идентификация) — их место в личном кабинете. Поле оставлено, чтобы разбор
+        # ранее сохранённых брифов не терял данные.
         bank_details=biz("bank_details"),
         site_url=biz("site_url"),
         product_description=biz("product_description"),

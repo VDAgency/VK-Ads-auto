@@ -1,0 +1,611 @@
+/* ==========================================================================
+   brief.css — формы брифа (физлицо и юрлицо).
+
+   Структура и UX перенесены с макетов заказчика (docs/references/*.html):
+   нумерованные секции, подсказка под каждым лейблом, карточки выбора вместо
+   серых select'ов, коробка с инструкцией, двухколоночные пары.
+
+   Палитра — НЕ из макетов (там тёмная тема), а наша, с лендинга и модалки
+   входа: VK-blue на светлом. Значения продублированы из landing.css
+   осознанно: там они живут под `.lp`, здесь под `.bf`, и это единственные две
+   области, где палитра бренда применяется. Менять — синхронно в обоих файлах.
+
+   Шрифт наследуется от styles.css (системный стек). Это зафиксированное
+   открытое место: макеты используют Manrope, docs/ДИЗАЙН-СИСТЕМА.md §4 требует
+   кириллический набор через next/font. Решается в дизайн-сессии на весь сайт
+   сразу, а не в одной форме.
+   ========================================================================== */
+
+.bf {
+  /* Палитра бренда — та же, что у лендинга (.lp в landing.css). */
+  --vk-blue: #0077ff;
+  --vk-blue-2: #2787f5;
+  --vk-blue-strong: #0062da;
+  --vk-blue-soft: rgba(0, 119, 255, 0.09);
+  --vk-blue-ring: rgba(0, 119, 255, 0.18);
+
+  --bf-ink: var(--ink, #0b1221);
+  --bf-muted: var(--muted, #5b6678);
+  --bf-faint: #7c8798;
+  --bf-paper: var(--paper, #f7f8fa);
+  --bf-surface: var(--surface, #ffffff);
+  --bf-line: var(--line, #e3e7ee);
+  --bf-tint: #eef4ff;
+  --bf-danger: var(--danger, #e5484d);
+
+  --bf-radius: 16px;
+  --bf-radius-sm: 12px;
+  --bf-radius-xs: 10px;
+  --bf-shadow: 0 12px 40px rgba(10, 47, 120, 0.1);
+  --bf-shadow-soft: 0 6px 24px rgba(10, 47, 120, 0.08);
+  --bf-maxw: 760px;
+
+  min-height: 100vh;
+  background: var(--bf-surface);
+  color: var(--bf-ink);
+  overflow-x: hidden;
+}
+
+.bf *,
+.bf *::before,
+.bf *::after {
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------------------------
+   Шапка — облегчённая версия шапки лендинга, чтобы стиль не рвался
+   -------------------------------------------------------------------------- */
+.bf-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
+  border-bottom: 1px solid var(--bf-line);
+}
+.bf-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 64px;
+  max-width: var(--bf-maxw);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+.bf-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--bf-ink);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.bf-brand__badge {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--bf-radius-xs);
+  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(0, 119, 255, 0.35);
+}
+.bf-brand__dot {
+  color: var(--vk-blue);
+}
+.bf-header__back {
+  color: var(--bf-muted);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: var(--bf-radius-xs);
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+.bf-header__back:hover {
+  color: var(--bf-ink);
+  background: var(--bf-tint);
+}
+
+/* --------------------------------------------------------------------------
+   Герой
+   -------------------------------------------------------------------------- */
+.bf-hero {
+  position: relative;
+  padding: 56px 20px 36px;
+  text-align: center;
+  overflow: hidden;
+}
+/* Мягкое голубое свечение сверху — светлый аналог glow из макетов. */
+.bf-hero::before {
+  content: "";
+  position: absolute;
+  top: -320px;
+  left: 50%;
+  width: 720px;
+  height: 620px;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(0, 119, 255, 0.14) 0%, transparent 70%);
+  pointer-events: none;
+}
+.bf-hero > * {
+  position: relative;
+}
+.bf-hero__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  margin-bottom: 20px;
+  border-radius: 100px;
+  background: var(--vk-blue-soft);
+  border: 1px solid rgba(0, 119, 255, 0.18);
+  color: var(--vk-blue-strong);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bf-hero__title {
+  margin: 0 0 14px;
+  font-size: clamp(26px, 4.4vw, 38px);
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.bf-hero__sub {
+  max-width: 540px;
+  margin: 0 auto;
+  color: var(--bf-muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+/* --------------------------------------------------------------------------
+   Контейнер и секции
+   -------------------------------------------------------------------------- */
+.bf-container {
+  max-width: var(--bf-maxw);
+  margin: 0 auto;
+  padding: 0 20px 80px;
+}
+
+/* Строки формы рендерятся плоским списком, без обёртки-секции: заголовок сам
+   отбивает предыдущую секцию верхним отступом. */
+.bf-section__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 40px 0 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--bf-line);
+}
+.bf-section__head:first-child {
+  margin-top: 0;
+}
+.bf-section__num {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--bf-radius-xs);
+  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(0, 119, 255, 0.28);
+}
+.bf-section__title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* --------------------------------------------------------------------------
+   Поля
+   -------------------------------------------------------------------------- */
+.bf-field {
+  margin-bottom: 20px;
+}
+.bf-field__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bf-ink);
+}
+.bf-req {
+  margin-left: 2px;
+  color: var(--bf-danger);
+}
+.bf-hint {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--bf-faint);
+}
+.bf-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--vk-blue-strong);
+}
+
+.bf input[type="text"],
+.bf input[type="url"],
+.bf input[type="email"],
+.bf input[type="tel"],
+.bf textarea,
+.bf select {
+  width: 100%;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--bf-ink);
+  background: var(--bf-surface);
+  border: 1px solid var(--bf-line);
+  border-radius: var(--bf-radius-sm);
+  outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.bf input::placeholder,
+.bf textarea::placeholder {
+  color: #9aa4b2;
+}
+.bf input:focus,
+.bf textarea:focus,
+.bf select:focus {
+  border-color: var(--vk-blue);
+  box-shadow: 0 0 0 4px var(--vk-blue-ring);
+}
+.bf textarea {
+  min-height: 96px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+/* Стрелка select'а — инлайновый SVG, чтобы не тянуть внешний файл. */
+.bf select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6678' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+
+/* Незаполненное обязательное поле после ответа 422. */
+.bf-field.is-invalid input,
+.bf-field.is-invalid textarea,
+.bf-field.is-invalid select {
+  border-color: var(--bf-danger);
+  box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.14);
+}
+.bf-field__error {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--bf-danger);
+}
+
+/* Пара полей в строку. */
+.bf-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.bf-two > .bf-field {
+  margin-bottom: 20px;
+}
+
+/* --------------------------------------------------------------------------
+   Карточки выбора (radio) — вместо серых select'ов
+   -------------------------------------------------------------------------- */
+.bf-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.bf-choice {
+  position: relative;
+}
+/* Инпут визуально скрыт, но остаётся фокусируемым с клавиатуры. */
+.bf-choice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.bf-choice label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 16px;
+  background: var(--bf-surface);
+  border: 1px solid var(--bf-line);
+  border-radius: var(--bf-radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease;
+}
+.bf-choice label:hover {
+  border-color: #c3cddc;
+  background: #fbfcfe;
+}
+.bf-choice input:checked + label {
+  background: var(--vk-blue-soft);
+  border-color: var(--vk-blue);
+  color: var(--vk-blue-strong);
+}
+/* Фокус с клавиатуры виден на карточке, а не на скрытом инпуте. */
+.bf-choice input:focus-visible + label {
+  border-color: var(--vk-blue);
+  box-shadow: 0 0 0 4px var(--vk-blue-ring);
+}
+
+.bf-choice__mark {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #c3cddc;
+  border-radius: 50%;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+.bf-choice input:checked + label .bf-choice__mark {
+  background: var(--vk-blue);
+  border-color: var(--vk-blue);
+}
+.bf-choice input:checked + label .bf-choice__mark::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* Недоступная цель: видно, что она есть, но выбрать нельзя. */
+.bf-choice input:disabled + label {
+  cursor: not-allowed;
+  background: var(--bf-paper);
+  border-style: dashed;
+  color: var(--bf-faint);
+}
+.bf-choice input:disabled + label:hover {
+  border-color: var(--bf-line);
+  background: var(--bf-paper);
+}
+.bf-choice input:disabled + label .bf-choice__mark {
+  border-color: #d7dde7;
+}
+.bf-choice__soon {
+  margin-left: 2px;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: var(--bf-line);
+  color: var(--bf-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------------------------------
+   Коробка с инструкцией и предупреждение
+   -------------------------------------------------------------------------- */
+.bf-instruction {
+  margin: 4px 0 20px;
+  padding: 18px 20px;
+  background: var(--bf-tint);
+  border: 1px solid rgba(0, 119, 255, 0.16);
+  border-radius: var(--bf-radius);
+}
+.bf-instruction__title {
+  margin-bottom: 10px;
+  color: var(--vk-blue-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+.bf-instruction ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.bf-instruction li {
+  margin-bottom: 4px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--bf-muted);
+}
+.bf-instruction li:last-child {
+  margin-bottom: 0;
+}
+
+.bf-notice {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: #fff8ec;
+  border: 1px solid #f3ddb5;
+  border-radius: var(--bf-radius-sm);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #7a5a1e;
+}
+
+/* --------------------------------------------------------------------------
+   Отправка
+   -------------------------------------------------------------------------- */
+.bf-submit {
+  padding: 24px 0 8px;
+  text-align: center;
+}
+.bf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 340px;
+  padding: 16px 32px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
+  border: none;
+  border-radius: var(--bf-radius-sm);
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 119, 255, 0.32);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
+}
+.bf-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(0, 119, 255, 0.38);
+}
+.bf-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--vk-blue-ring);
+}
+.bf-btn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+  opacity: 0.7;
+  box-shadow: none;
+}
+
+.bf-foot {
+  margin-top: 18px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--bf-faint);
+  text-align: center;
+}
+.bf-foot strong {
+  color: var(--vk-blue-strong);
+  font-weight: 600;
+}
+
+/* Полоса результата отправки. */
+.bf-result {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: var(--bf-radius-sm);
+  font-size: 14.5px;
+  line-height: 1.6;
+  display: none;
+}
+.bf-result.is-shown {
+  display: block;
+}
+.bf-result.is-ok {
+  background: rgba(18, 165, 148, 0.1);
+  border: 1px solid var(--success, #12a594);
+  color: #0c6b60;
+}
+.bf-result.is-err {
+  background: rgba(229, 72, 77, 0.08);
+  border: 1px solid var(--bf-danger);
+  color: #a3262b;
+}
+
+/* --------------------------------------------------------------------------
+   Мобильные
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .bf-hero {
+    padding: 36px 16px 26px;
+  }
+  .bf-hero::before {
+    width: 420px;
+    height: 380px;
+    top: -200px;
+  }
+  .bf-hero__sub {
+    font-size: 15px;
+  }
+  .bf-container {
+    padding: 0 16px 60px;
+  }
+  .bf-section {
+    margin-bottom: 32px;
+  }
+  .bf-section__num {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+  .bf-section__title {
+    font-size: 17px;
+  }
+
+  /* 16px — минимум, при котором iOS не зумит страницу на фокусе. */
+  .bf input[type="text"],
+  .bf input[type="url"],
+  .bf input[type="email"],
+  .bf input[type="tel"],
+  .bf textarea,
+  .bf select {
+    font-size: 16px;
+    padding: 14px;
+  }
+
+  .bf-two {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .bf-choices {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bf-choice {
+    width: 100%;
+  }
+  /* Крупная зона нажатия на палец. */
+  .bf-choice label {
+    width: 100%;
+    min-height: 48px;
+    padding: 13px 16px;
+  }
+  .bf-btn {
+    max-width: none;
+  }
+  .bf-instruction {
+    padding: 14px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bf *,
+  .bf *::before,
+  .bf *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  .bf-btn:hover:not(:disabled) {
+    transform: none;
+  }
+}
