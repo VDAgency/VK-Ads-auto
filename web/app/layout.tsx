@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import "./globals.css";
+// Базовые стили и токены дизайн-системы. Раньше лежали в public/ и
+// подключались тегом <link>, потому что их делили с ещё не перенесёнными
+// страницами. Все страницы перенесены — файл живёт в дереве приложения и
+// собирается вместе с остальным.
+import "./styles.css";
 
 export const metadata: Metadata = {
   title: "VK Ads auto",

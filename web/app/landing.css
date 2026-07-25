@@ -101,7 +101,9 @@
   font-weight: 500;
   padding: 8px 12px;
   border-radius: 10px;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
 }
 .lp-nav a:hover {
   color: var(--lp-ink);
@@ -139,7 +141,10 @@
   border-radius: 12px;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease,
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease,
     border-color 0.18s ease;
 }
 .lp-btn small {
@@ -210,7 +215,12 @@
   position: relative;
   overflow: hidden;
   color: #fff;
-  background: linear-gradient(135deg, #0a5be0 0%, var(--vk-blue-strong) 55%, var(--vk-blue-deep) 100%);
+  background: linear-gradient(
+    135deg,
+    #0a5be0 0%,
+    var(--vk-blue-strong) 55%,
+    var(--vk-blue-deep) 100%
+  );
   background-size: 180% 180%;
   animation: lp-gradient-shift 18s ease infinite;
   isolation: isolate;
@@ -257,7 +267,8 @@
 .lp-grid {
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
   background-size: 46px 46px;
   mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, #000 40%, transparent 100%);
@@ -504,7 +515,9 @@
   border-radius: var(--lp-radius);
   padding: 28px 24px;
   box-shadow: var(--lp-shadow-soft);
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
 }
 .lp-step:hover {
   transform: translateY(-4px);
@@ -556,7 +569,10 @@
   border: 1px solid var(--lp-line);
   border-radius: var(--lp-radius);
   padding: 26px 22px;
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
 }
 .lp-feature:hover {
   transform: translateY(-4px);
@@ -602,7 +618,12 @@
   padding: 64px 32px;
   text-align: center;
   color: #fff;
-  background: linear-gradient(135deg, #0a5be0 0%, var(--vk-blue-strong) 60%, var(--vk-blue-deep) 100%);
+  background: linear-gradient(
+    135deg,
+    #0a5be0 0%,
+    var(--vk-blue-strong) 60%,
+    var(--vk-blue-deep) 100%
+  );
   box-shadow: var(--lp-shadow);
 }
 .lp-cta__glow {
@@ -610,7 +631,8 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 20% 10%, rgba(125, 255, 191, 0.28), transparent 45%),
+  background:
+    radial-gradient(circle at 20% 10%, rgba(125, 255, 191, 0.28), transparent 45%),
     radial-gradient(circle at 85% 90%, rgba(90, 160, 255, 0.4), transparent 45%);
 }
 .lp-cta__card > * {
@@ -690,7 +712,9 @@
 .js .reveal {
   opacity: 0;
   transform: translateY(22px);
-  transition: opacity 0.7s ease, transform 0.7s ease;
+  transition:
+    opacity 0.7s ease,
+    transform 0.7s ease;
 }
 .js .reveal.is-visible {
   opacity: 1;
@@ -954,7 +978,9 @@
   background: transparent;
   color: #8a94a6;
   cursor: pointer;
-  transition: background 0.18s ease, color 0.18s ease;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
 }
 .lp-modal__close:hover {
   background: var(--lp-tint);
@@ -1028,7 +1054,10 @@
   font-weight: 600;
   color: var(--lp-muted);
   cursor: pointer;
-  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 .lp-seg__btn:hover {
   color: var(--lp-ink);
@@ -1066,7 +1095,10 @@
   background: #f5f9ff;
   border-color: #dde7f5;
   border-radius: 11px;
-  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 .lp-modal .form-field input::placeholder {
   color: #9aa6b8;
@@ -1098,7 +1130,9 @@
   background: transparent;
   color: #8a94a6;
   cursor: pointer;
-  transition: color 0.16s ease, background 0.16s ease;
+  transition:
+    color 0.16s ease,
+    background 0.16s ease;
 }
 .lp-eye:hover {
   color: var(--vk-blue-strong);
