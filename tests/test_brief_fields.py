@@ -23,7 +23,7 @@ def test_fields_for_unknown_variant_raises() -> None:
 
 
 def test_field_keys_match_web_form_names_individual() -> None:
-    # Ключи == name-инпутов web/static/brief-individual.html (в том же порядке).
+    # Ключи == name-инпутов web/app/brief-individual/page.tsx (в том же порядке).
     keys = [f.key for f in INDIVIDUAL_FIELDS]
     assert keys == [
         "full_name",
