@@ -19,6 +19,7 @@ def test_menu_has_expected_commands() -> None:
         "send_brief",
         "pending",
         "stats",
+        "stop_campaign",
         "admin",
         "link_userbot",
         "link_kotbot",

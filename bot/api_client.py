@@ -16,6 +16,10 @@ from config.settings import get_settings
 
 _TIMEOUT = httpx.Timeout(10.0)
 
+# Загрузка креатива тянет за собой создание кампании на площадке (кабинет,
+# ad_plan/ad_group/banner, модерация) — ждём заметно дольше обычного (spec §5).
+_LAUNCH_TIMEOUT = httpx.Timeout(360.0)
+
 
 class CoreUnavailable(RuntimeError):
     """Ядро недоступно (сеть/таймаут/5xx) — показать заглушку оператору."""
@@ -38,6 +42,14 @@ class CreativeRejected(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class CampaignNotFound(RuntimeError):
+    """Ядро не нашло кампанию (404) — показать оператору «кампания не найдена»."""
+
+
+class CampaignStopFailed(RuntimeError):
+    """Площадка/канал не приняли остановку (502) — это не «ядро лежит»."""
 
 
 class UserbotUnavailable(RuntimeError):
@@ -121,6 +133,19 @@ class CreativeResult:
     campaign_status: str
     campaign_id: int
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignStopped:
+    """Итог остановки кампании (зеркало `CampaignStopOut` ядра).
+
+    `external_id is None` — кампании не было на площадке: статус сменили у себя,
+    останавливать во внешней системе было нечего.
+    """
+
+    campaign_id: int
+    status: str
+    external_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +296,7 @@ async def upload_creative(
         "body": body,
     }
     try:
-        async with httpx.AsyncClient(timeout=_INVITE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
             response = await client.post(url, json=payload)
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
@@ -291,6 +316,32 @@ async def upload_creative(
         campaign_status=str(data["campaign_status"]),
         campaign_id=int(data["campaign_id"]),
         message=str(data["message"]),
+    )
+
+
+async def stop_campaign(campaign_id: int) -> CampaignStopped:
+    """`POST /campaigns/{id}/stop`: остановить кампанию на площадке.
+
+    404 → `CampaignNotFound`; 502 (канал не принял остановку) → `CampaignStopFailed`;
+    прочие 5xx и сеть → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/campaigns/{campaign_id}/stop"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise CampaignNotFound(str(campaign_id))
+    if response.status_code == 502:
+        raise CampaignStopFailed(str(campaign_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    payload = response.json()
+    return CampaignStopped(
+        campaign_id=int(payload["campaign_id"]),
+        status=str(payload["status"]),
+        external_id=payload.get("external_id"),
     )
 
 
