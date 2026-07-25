@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 STUB_CHANNEL = "stub"
 
 # Статусы площадки, которые считаем модерацией (VK отдаёт `moderation`/`pending`).
-_MODERATION_MARKERS = ("moder", "pending")
+# Публичная константа: тем же признаком пользуется синк статистики (`services/stats_sync`).
+MODERATION_MARKERS = ("moder", "pending")
 
 
 class BriefNotFoundError(Exception):
@@ -192,7 +193,7 @@ async def _refine_status(adapter: PlatformAdapter, external_id: str) -> str:
         logger.exception("failed to read campaign status from platform")
         return "launched"
     lowered = platform_status.lower()
-    if any(marker in lowered for marker in _MODERATION_MARKERS):
+    if any(marker in lowered for marker in MODERATION_MARKERS):
         return "moderation"
     return "launched"
 
@@ -296,14 +297,25 @@ def _outcome_message(status: str, *, is_live: bool, fallback: bool) -> str:
     return _PREPARED_MSG
 
 
-def _adapter_for_channel(settings: Settings, channel_name: str) -> PlatformAdapter:
-    """Адаптер канала, которым кампания была создана (для остановки/статуса)."""
+def adapter_for_channel(settings: Settings, channel_name: str) -> PlatformAdapter:
+    """Адаптер канала, которым кампания была создана (для остановки/статуса/статистики).
+
+    Неизвестное имя канала (в т.ч. `stub`) → заглушка: боевых мутаций не делаем.
+    """
     adapters = _build_adapters(settings)
     try:
         channel = Channel(channel_name)
     except ValueError:
         return StubAdapter()
     return adapters.get(channel, StubAdapter())
+
+
+async def campaign_channel(session: AsyncSession, account_id: int, campaign: Campaign) -> str:
+    """Имя канала кампании (по её кабинету). Без кабинета — заглушка."""
+    if campaign.cabinet_id is None:
+        return STUB_CHANNEL
+    cabinet = await get_cabinet(session, account_id, campaign.cabinet_id)
+    return cabinet.channel if cabinet is not None else STUB_CHANNEL
 
 
 async def stop_campaign(
@@ -325,13 +337,8 @@ async def stop_campaign(
     if campaign is None:
         return None
 
-    channel_name = STUB_CHANNEL
-    if campaign.cabinet_id is not None:
-        cabinet = await get_cabinet(session, account_id, campaign.cabinet_id)
-        if cabinet is not None:
-            channel_name = cabinet.channel
-
-    platform = adapter or _adapter_for_channel(cfg, channel_name)
+    channel_name = await campaign_channel(session, account_id, campaign)
+    platform = adapter or adapter_for_channel(cfg, channel_name)
     if campaign.external_id:
         try:
             await platform.stop(campaign.external_id)

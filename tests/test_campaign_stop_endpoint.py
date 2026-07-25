@@ -62,7 +62,8 @@ async def _call(path: str, *, account_id: int = 1) -> tuple[int, dict[str, Any],
 def test_stop_sets_campaign_status() -> None:
     code, data, status = asyncio.run(_call("/api/v1/campaigns/1/stop"))
     assert code == 200
-    assert data == {"campaign_id": 1, "status": "stopped"}
+    # `external_id` в ответе нужен боту: по нему видно, была ли кампания на площадке.
+    assert data == {"campaign_id": 1, "status": "stopped", "external_id": "stub-campaign-1"}
     assert status == "stopped"
 
 
