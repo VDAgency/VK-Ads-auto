@@ -10,7 +10,13 @@ services:
       - path: .env
         required: false
     ports:
-      - "8000:8000"
+      # ТОЛЬКО loopback. Снаружи ядро доступно исключительно через Caddy, который
+      # отдаёт 404 на операторские/трекинговые эндпоинты (152-ФЗ, infra/Caddyfile).
+      # Публикация на всех интерфейсах делала эти правила декоративными: запрос на
+      # http://<SERVER_IP>:8000/api/v1/invites шёл мимо Caddy и отдавал контакты
+      # клиентов, а POST туда же позволял рассылать от имени оператора без входа.
+      # Деплойная проверка health (curl http://localhost:8000/health по SSH) работает.
+      - "127.0.0.1:8000:8000"
     volumes:
       # Загруженные креативы (persistent). Каталог из CREATIVES_DIR (по умолч. /data/creatives).
       - creatives:/data/creatives
