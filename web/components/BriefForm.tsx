@@ -235,9 +235,21 @@ function Field({ field, invalid }: { field: BriefField; invalid: ReadonlySet<str
       <div className="bf-field">
         <span className="bf-field__label">{field.label}</span>
         {field.hint ? <span className="bf-hint">{field.hint}</span> : null}
-        <div className="bf-two">
-          <input name="age_from" inputMode="numeric" placeholder="от" aria-label="Возраст от" />
-          <input name="age_to" inputMode="numeric" placeholder="до" aria-label="Возраст до" />
+        <div className="bf-age">
+          <input
+            type="text"
+            name="age_from"
+            inputMode="numeric"
+            placeholder="от"
+            aria-label="Возраст от"
+          />
+          <input
+            type="text"
+            name="age_to"
+            inputMode="numeric"
+            placeholder="до"
+            aria-label="Возраст до"
+          />
         </div>
       </div>
     );

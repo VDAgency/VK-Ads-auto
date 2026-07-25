@@ -213,22 +213,19 @@ const ROWS: BriefRow[] = [
     required: true,
     error: "Опишите аудиторию",
   },
+  // Пол и возраст — отдельными строками, а не парой: три карточки пола не
+  // помещаются в половину ширины и переносятся, оставляя рваную пустоту.
   {
-    kind: "pair",
-    items: [
-      {
-        kind: "choices",
-        name: "gender",
-        label: "Пол",
-        options: [
-          { value: "мужской", label: "Мужской" },
-          { value: "женский", label: "Женский" },
-          { value: "любой", label: "Любой" },
-        ],
-      },
-      { kind: "age", label: "Возраст" },
+    kind: "choices",
+    name: "gender",
+    label: "Пол",
+    options: [
+      { value: "мужской", label: "Мужской" },
+      { value: "женский", label: "Женский" },
+      { value: "любой", label: "Любой" },
     ],
   },
+  { kind: "age", label: "Возраст", hint: "Оставьте пустым, если возраст неважен" },
   {
     kind: "input",
     name: "geo",
