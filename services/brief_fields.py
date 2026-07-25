@@ -2,7 +2,7 @@
 
 Одна и та же нумерация используется и для показа карточки брифа оператору, и для
 правок формата `номер.значение` (`services/edit_parser.py`). Порядок полей повторяет
-порядок веб-форм (`web/static/brief-*.html`), ключ поля == `name` инпута == ключ
+порядок веб-форм (`web/app/brief-*/page.tsx`), ключ поля == `name` инпута == ключ
 `Brief.payload` == внутренний id в `services/brief_parser.py`.
 
 Карточка показывает ВСЕ канонические поля варианта (пустое → пустая строка), поэтому
@@ -23,7 +23,7 @@ class BriefField:
     label: str
 
 
-# Порядок = порядок полей формы web/static/brief-individual.html.
+# Порядок = порядок полей формы web/app/brief-individual/page.tsx.
 INDIVIDUAL_FIELDS: list[BriefField] = [
     BriefField("full_name", "Как обращаться"),
     BriefField("object_url", "Ссылка на страницу VK"),
@@ -42,7 +42,7 @@ INDIVIDUAL_FIELDS: list[BriefField] = [
     BriefField("materials", "Рекламные материалы"),
 ]
 
-# Порядок = порядок полей формы web/static/brief-community.html.
+# Порядок = порядок полей формы web/app/brief-community/page.tsx.
 COMMUNITY_FIELDS: list[BriefField] = [
     BriefField("full_name", "Контактное лицо"),
     BriefField("object_url", "Ссылка на сообщество VK"),
