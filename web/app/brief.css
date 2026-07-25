@@ -241,10 +241,10 @@
   color: var(--vk-blue-strong);
 }
 
-.bf input[type="text"],
-.bf input[type="url"],
-.bf input[type="email"],
-.bf input[type="tel"],
+/* Селекторы по ЭЛЕМЕНТУ, а не по `[type=...]`. У инпута без атрибута type
+   (браузер считает его текстовым) селектор по атрибуту не сработает, и поле
+   осталось бы без стилей — именно так и вышло с полями возраста. */
+.bf input:not([type="radio"]):not([type="checkbox"]),
 .bf textarea,
 .bf select {
   width: 100%;
@@ -307,6 +307,14 @@
 }
 .bf-two > .bf-field {
   margin-bottom: 20px;
+}
+
+/* Возраст: две узкие границы диапазона. Ширина задана явно — растянутые на всю
+   строку поля под «от» и «до» читаются как отдельные вопросы, а не как диапазон. */
+.bf-age {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 148px));
+  gap: 12px;
 }
 
 /* --------------------------------------------------------------------------
@@ -563,10 +571,7 @@
   }
 
   /* 16px — минимум, при котором iOS не зумит страницу на фокусе. */
-  .bf input[type="text"],
-  .bf input[type="url"],
-  .bf input[type="email"],
-  .bf input[type="tel"],
+  .bf input:not([type="radio"]):not([type="checkbox"]),
   .bf textarea,
   .bf select {
     font-size: 16px;

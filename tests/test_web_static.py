@@ -226,6 +226,24 @@ def test_brief_forms_cover_every_canonical_field() -> None:
         assert not missing, f"{variant}: в форме нет полей {missing}"
 
 
+def test_brief_inputs_are_styled_regardless_of_type_attribute() -> None:
+    """Поля ввода нельзя стилизовать только через `[type=...]`.
+
+    Поля возраста рендерятся без атрибута `type` (браузер считает их текстовыми
+    по умолчанию), поэтому селектор вида `input[type="text"]` на них не
+    срабатывает и поле остаётся без стилей. Такая поломка не роняет ни сборку,
+    ни разметку — видна только глазами, поэтому проверяется здесь.
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        css = page_css(client, page)
+        # Селектор по элементу с исключением переключателей (минификатор
+        # выкидывает кавычки внутри атрибута, поэтому проверяем обе формы).
+        assert "input:not([type=radio])" in css or 'input:not([type="radio"])' in css
+        # Диапазон возраста — собственная сетка, а не растянутые на всю строку поля.
+        assert ".bf-age" in css
+
+
 def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
     """Недоступные цели показаны, но выбрать их нельзя.
 
