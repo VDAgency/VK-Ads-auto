@@ -12,6 +12,8 @@ __pycache__
 htmlcov
 docs
 web/node_modules
+web/out
+web/.next
 node_modules
 .env
 .env.*

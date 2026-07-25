@@ -1,3 +1,15 @@
+# Сборка фронта Блока 2: Next.js static export → /web/out. Отдельная стадия, чтобы
+# в финальном образе не осталось ни Node, ни node_modules — только готовые файлы.
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+# --include=dev обязателен: next build требует typescript и eslint-config-next,
+# которые лежат в devDependencies. Если в окружении сборки окажется
+# NODE_ENV=production, npm молча выставит omit=dev и сборка упадёт на типах.
+RUN npm ci --include=dev
+COPY web/ ./
+RUN npm run build
+
 # Образ ядра (FastAPI) и бота. Зависимости ставятся через uv.
 FROM python:3.11-slim
 
@@ -16,6 +28,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . .
 RUN uv sync --frozen --no-dev
+
+# Строго ПОСЛЕ `COPY . .`: иначе исходники из контекста затрут собранный фронт.
+COPY --from=web /web/out /app/web/out
 
 EXPOSE 8000
 
