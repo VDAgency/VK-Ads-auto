@@ -67,56 +67,8 @@ body {
   line-height: 1.5;
 }
 
-/* --------------------------------------------------------------------------
-   Сигнатура дизайн-системы: нумерованное поле.
-   Моно-маркер NN слева + лейбл + инпут. Фокус — рамка --accent 2px без тени.
-   -------------------------------------------------------------------------- */
-
-.numbered-field {
-  display: grid;
-  grid-template-columns: 40px 1fr;
-  column-gap: var(--space-1);
-  row-gap: 4px;
-  align-items: baseline;
-  margin-bottom: var(--space-2);
-}
-
-.numbered-field__num {
-  font-family: var(--font-mono);
-  font-size: var(--text-caption);
-  color: var(--accent);
-}
-
-.numbered-field__label {
-  font-size: var(--text-caption);
-  color: var(--muted);
-}
-
-.numbered-field__input {
-  grid-column: 2;
-  width: 100%;
-  padding: var(--space-1);
-  font-family: var(--font-ui);
-  font-size: var(--text-field);
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-}
-
-.numbered-field__input:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.numbered-field[data-invalid="true"] .numbered-field__input {
-  border-color: var(--danger);
-}
-
-.numbered-field__error {
-  grid-column: 2;
-  margin: 0;
-  font-size: var(--text-caption);
-  color: var(--danger);
-}
+/* Сигнатура «нумерованное поле» (моно-маркер NN + лейбл + инпут) живёт в
+   /styles.css как `.field` / `.field .num` — там же, где её видят ещё не
+   перенесённые страницы. Формы брифа рендерят ровно эту разметку
+   (components/BriefForm.tsx), поэтому дублировать её здесь нечем и незачем.
+   На дизайн-этапе она переедет сюда вместе с остальным. */
