@@ -50,5 +50,10 @@ Thumbs.db
 # Internal docs — keep out of public repo (business/client info, plans)
 docs/
 
-# Claude Code local state (worktrees, session artifacts)
-.claude/
+# Claude Code local state (worktrees, session artifacts) — ignore everything
+# except vendored skills and shared project settings, which travel with the
+# repo so any collaborator gets the same design tooling automatically without
+# personal Claude Code setup. settings.local.json (personal) stays ignored.
+.claude/*
+!.claude/skills/
+!.claude/settings.json

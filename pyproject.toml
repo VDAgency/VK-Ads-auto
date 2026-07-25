@@ -43,6 +43,8 @@ packages = ["core", "bot", "services", "integrations", "db", "config", "userbot"
 target-version = "py311"
 line-length = 100
 src = ["core", "bot", "services", "integrations", "db", "config", "userbot", "kotbot", "tests"]
+# Вендоренные Claude Code skills — сторонний код, не наш гейт качества.
+extend-exclude = [".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "ASYNC"]

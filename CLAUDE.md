@@ -118,7 +118,7 @@
 - **`aikido`** — безопасность; **только через GitHub-интеграцию** (локальный скан «по ссылке» ломается из-за VPN — не использовать).
 - **`n8n-mcp`** — опционально, проектирование/валидация воркфлоу; нестабилен в этой среде → не полагаться (детали docs/N8N.md). Изменения прода — через git, не записью MCP в живой n8n.
 - **`chrome-devtools`** — отладка/perf/a11y в браузере (Блок 2; инспекция потока kotbot).
-- **(Блок 2) `shadcn`, `playwright`** — ставятся per-project на вёрстке (docs/ДИЗАЙН-СИСТЕМА.md). Playwright нужен и под автоматизацию kotbot.
+- **`shadcn`, `playwright`** — подключены на project scope (`.mcp.json`, без секретов, приезжают коллеге автоматически). `shadcn` — поиск/установка компонентов и реестров (Aceternity UI/Magic UI/react-bits) при вёрстке Блока 2 (docs/ДИЗАЙН-СИСТЕМА.md). `playwright` — визуальная проверка UI в дизайн-конвейере; также нужен под автоматизацию kotbot.
 - `excel` — проекту не нужен (бриф через Google Sheets).
 
 ### 5.2. Скиллы — когда какой
@@ -127,7 +127,7 @@
 - **Git:** `commit-commands:commit`, `commit-commands:commit-push-pr`, `commit-commands:clean_gone`.
 - **Ревью перед merge:** `code-review:code-review` + `coderabbit:coderabbit-review` / `coderabbit:autofix`.
 - **Архитектура/разведка фич:** `feature-dev:*`. **Упрощение кода:** `code-simplifier`.
-- **Дизайн (Блок 2):** базовый `frontend-design` → апгрейд Impeccable (docs/ДИЗАЙН-СИСТЕМА.md).
+- **Дизайн (Блок 2, Next.js):** skill `impeccable` (вендорен в `.claude/skills/`, сторонний open-source github.com/pbakaus/impeccable, расширяет Anthropic `frontend-design`) — планирование `/impeccable shape`/`craft`, критика/вкус `/impeccable critique`/`audit`/`polish`. Токены бренда — источник правды `docs/design.md` + уже установленные скиллы `design-system`/`ui-styling`/`brand`. Готовые блоки — `shadcn` MCP + реестры Aceternity UI/Magic UI/react-bits (устанавливаются в код через `npx shadcn@latest add <url>` внутри Next.js-проекта). Визуальная проверка — `playwright` MCP или `chrome-devtools`.
 - **Документы:** `document-skills:*` по необходимости.
 - **Поиск по коду:** `ripgrep` (rg) — текстовый; `ast-grep` — структурный (рефакторинг/паттерны).
 - **Сопровождение этого файла:** `claude-md-management:*` — только по явному запросу, не самовольно.
