@@ -162,3 +162,19 @@ def test_brief_forms_have_vk_ad_cabinet_id_field() -> None:
         assert "ID кабинета VK Реклама *" in body
         assert 'name="vk_ad_cabinet_id"' in body
         assert 'href="/instrukciya-vk-cabinet.html"' in body
+
+
+def test_extensionless_path_serves_html_file() -> None:
+    # Статический экспорт Next кладёт роут /instrukciya-vk-cabinet в файл
+    # instrukciya-vk-cabinet.html. Разосланные ссылки ведут на путь с .html,
+    # внутренняя навигация Next — на путь без него; оба обязаны отдавать одно.
+    client = TestClient(create_app())
+    with_ext = client.get("/instrukciya-vk-cabinet.html")
+    without_ext = client.get("/instrukciya-vk-cabinet")
+    assert without_ext.status_code == 200
+    assert without_ext.text == with_ext.text
+
+
+def test_unknown_extensionless_path_is_not_found() -> None:
+    client = TestClient(create_app())
+    assert client.get("/no-such-page").status_code == 404

@@ -19,19 +19,31 @@ from starlette.types import Scope
 from core.api import health
 from core.api.v1 import router as v1_router
 
-# Каталог статики веба (лендинг + формы брифа). Корень репозитория / web / static.
-_STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
+# Каталог собранного фронта Блока 2 (Next.js static export). Корень репозитория /
+# web / out. Наполняется `npm run build`; в образ кладётся отдельной стадией
+# Dockerfile. Локально появляется после `cd web && npm run build`.
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "out"
 
 
 class _NoCacheStaticFiles(StaticFiles):
-    """StaticFiles с `Cache-Control: no-cache` — браузер всегда перепроверяет свежесть.
+    """StaticFiles с `Cache-Control: no-cache` и фолбэком на `.html`.
 
-    Формы/JS меняются при деплое; без no-cache браузер может отдавать старый JS
-    (например, форму брифа без токена `?t=`, из-за чего инвайт не метится received).
-    ETag/Last-Modified делают перепроверку дешёвой (304, если файл не менялся).
+    `no-cache` — браузер всегда перепроверяет свежесть. Формы/JS меняются при
+    деплое; без него браузер может отдавать старый JS (например, форму брифа без
+    токена `?t=`, из-за чего инвайт не метится received). ETag/Last-Modified
+    делают перепроверку дешёвой (304, если файл не менялся).
+
+    Фолбэк `.html` — следствие статического экспорта Next: роут `/cabinet`
+    экспортируется в файл `cabinet.html`. Разосланные клиентам ссылки ведут на
+    `/cabinet.html?token=...`, внутренняя навигация Next — на `/cabinet`; оба
+    пути обязаны отдавать один и тот же файл.
     """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        if not Path(path).suffix:
+            _, stat_result = self.lookup_path(f"{path}.html")
+            if stat_result is not None:
+                path = f"{path}.html"
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache"
         return response

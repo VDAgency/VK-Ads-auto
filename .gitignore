@@ -30,6 +30,11 @@ htmlcov/
 # Node (Block 2 web)
 node_modules/
 .next/
+web/out/
+# Генерируются `next build` (конвенция Next). next-env.d.ts ссылается на
+# .next/types/routes.d.ts, поэтому вне сборки он всё равно нерабочий.
+web/next-env.d.ts
+*.tsbuildinfo
 
 # DB dumps / data
 *.sql.gz
