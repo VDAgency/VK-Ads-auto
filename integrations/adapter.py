@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from services.mapping import CampaignSpec
+
 
 class PlatformAdapter(ABC):
     """Абстрактный адаптер рекламной площадки.
@@ -47,3 +49,36 @@ class PlatformAdapter(ABC):
     async def health_check(self) -> bool:
         """Проверить доступность канала. Используется роутером для выбора и фолбэка."""
         raise NotImplementedError
+
+    # Ниже — необязательные операции: базовая реализация нужна, чтобы заглушка и
+    # скелет kotbot оставались рабочими, а боевой адаптер их переопределял.
+
+    async def get_status(self, campaign_id: str) -> str:
+        """Статус кампании на площадке. По умолчанию площадка его не сообщает."""
+        return "unknown"
+
+    async def stop(self, campaign_id: str) -> None:
+        """Остановить кампанию. По умолчанию не поддерживается каналом."""
+        raise NotImplementedError("stop is not supported by this adapter")
+
+    async def create_campaign_from_spec(
+        self,
+        cabinet_id: str,
+        spec: CampaignSpec,
+        *,
+        creative_ref: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
+        budget_limit_day: float | None = None,
+    ) -> str:
+        """Создать кампанию целиком по спеке; вернуть её идентификатор.
+
+        Единственная операция запуска, которую знает ядро: как площадка разложит
+        спеку по своим уровням (у VK — ad_plan → ad_group → banner) — её дело
+        (CLAUDE.md §1.3). Дефолт повторяет прежнее поведение: одна кампания по
+        цели из спеки плюс, при наличии, загрузка креатива.
+        """
+        campaign_id = await self.create_campaign(cabinet_id, spec.objective)
+        if creative_ref:
+            await self.upload_creative(campaign_id, creative_ref)
+        return campaign_id

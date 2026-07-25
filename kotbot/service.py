@@ -3,21 +3,24 @@
 Держит хранилища (креды + storage_state), браузерный бэкенд и pending-попытки
 входа с TTL 300с: браузер «паркуется» на странице челленджа, оператор вводит код
 в Telegram, бот доносит его через `POST /auth/code`. Флаги `needs_reauth`
-взводятся, когда неинтерактивный релогин невозможен (K-PR3), и сбрасываются
-успешной авторизацией.
+взводятся, когда неинтерактивный релогин невозможен (`ensure_logged_in`,
+ступень 3), и сбрасываются успешной авторизацией.
 
 Ошибки — `AuthError(code)` (как в userbot): API-слой превращает их в 400.
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from kotbot.backend import AutomationBackend, LoginOutcome
 from kotbot.store import CredentialStore, StateStore
+
+logger = logging.getLogger(__name__)
 
 # Стратегии входа на kotbot.ru (spec §1: почта+пароль и VK-аккаунт).
 STRATEGIES = ("email", "vk")
@@ -32,6 +35,25 @@ class AuthError(Exception):
     def __init__(self, code: str, message: str = "") -> None:
         super().__init__(message or code)
         self.code = code
+
+
+class ReauthRequired(Exception):
+    """Все ступени `ensure_logged_in` мимо: нужна ручная авторизация оператором.
+
+    API-слой отвечает на неё 409 `{detail: "reauth_required"}` (spec §4.2 п.4).
+    """
+
+
+def parse_strategy_order(raw: str) -> tuple[str, ...]:
+    """Разобрать `KOTBOT_STRATEGY_ORDER` в порядок стратегий для `ensure_logged_in`.
+
+    Неизвестные значения отбрасываем, пропущенные дописываем в каноничном порядке —
+    так опечатка в env не отключает стратегию молча.
+    """
+    configured = [item.strip() for item in raw.split(",")]
+    ordered = [item for item in configured if item in STRATEGIES]
+    ordered += [item for item in STRATEGIES if item not in ordered]
+    return tuple(ordered)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +86,13 @@ class KotbotAutomation:
         backend: AutomationBackend,
         *,
         clock: Callable[[], float] = time.monotonic,
+        strategy_order: Sequence[str] = STRATEGIES,
     ) -> None:
         self._credentials = credentials
         self._states = states
         self._backend = backend
         self._clock = clock
+        self._strategy_order = tuple(strategy_order)
         self._pending: dict[str, _PendingAttempt] = {}
         self._needs_reauth: dict[str, bool] = {}
 
@@ -114,6 +138,72 @@ class KotbotAutomation:
         # code_invalid — оставляем попытку живой: оператор может ввести код ещё раз.
         raise AuthError(error_code)
 
+    async def ensure_logged_in(self) -> str:
+        """Гарантировать живую сессию перед action; вернуть рабочую стратегию.
+
+        Четыре ступени (spec §4.2): storage_state предпочтительной стратегии →
+        storage_state второй → скриптовый релогин по сохранённым кредам →
+        `ReauthRequired`. Порядок стратегий берётся из `strategy_order`.
+        """
+        self._require_configured()
+        working = await self._try_saved_states()
+        if working is not None:
+            return working
+        working = await self._try_scripted_relogin()
+        if working is not None:
+            return working
+        logger.warning("kotbot: все ступени ensure_logged_in мимо — нужна ручная авторизация")
+        raise ReauthRequired("reauth_required")
+
+    async def _try_saved_states(self) -> str | None:
+        """Ступени 1–2: проверить сохранённые storage_state по порядку стратегий.
+
+        Флаг `needs_reauth` здесь не смотрим: живой state авторитетнее флага и
+        сбрасывает его. Успех продлевает сессию — перезаписываем state-файл.
+        """
+        for strategy in self._strategy_order:
+            state = self._states.load_raw(strategy)
+            if state is None:
+                continue
+            check = await self._backend.check_session(strategy, state)
+            if not check.logged_in:
+                continue
+            if check.storage_state is not None:
+                self._states.save_raw(strategy, check.storage_state)
+            self._needs_reauth[strategy] = False
+            logger.info("kotbot: сессия стратегии %s жива", strategy)
+            return strategy
+        return None
+
+    async def _try_scripted_relogin(self) -> str | None:
+        """Ступень 3: неинтерактивный релогин по сохранённым кредам.
+
+        Запрос кода или капча означают, что без оператора не пройти: НЕ ретраим
+        (защита от блокировки аккаунта), взводим `needs_reauth[strategy]`.
+        """
+        for strategy in self._strategy_order:
+            if self._needs_reauth.get(strategy, False):
+                continue
+            credentials = self._credentials.load(strategy)
+            if credentials is None:
+                continue
+            login, password = credentials
+            outcome = await self._backend.login(strategy, login, password)
+            if outcome.status == "ok":
+                self._persist_success(strategy, login, password, outcome)
+                logger.info("kotbot: скриптовый релогин стратегией %s удался", strategy)
+                return strategy
+            if outcome.status == "code_required":
+                # Кода спросить некому — освобождаем припаркованный флоу.
+                await self._backend.close_attempt(outcome.attempt)
+            logger.warning(
+                "kotbot: релогин стратегией %s невозможен неинтерактивно (%s)",
+                strategy,
+                outcome.error_code or outcome.status,
+            )
+            self.mark_reauth_needed(strategy)
+        return None
+
     def health(self) -> dict[str, object]:
         """Состояние стратегий (spec §4.1): дёшево — файлы + кеш-флаги, без браузера."""
         strategies: dict[str, dict[str, bool]] = {}
@@ -127,6 +217,15 @@ class KotbotAutomation:
             flags["has_state"] and not flags["needs_reauth"] for flags in strategies.values()
         )
         return {"healthy": healthy, "strategies": strategies}
+
+    async def shutdown(self) -> None:
+        """Освободить ресурсы бэкенда на остановке сервиса (закрыть браузер).
+
+        Бэкенд без `close` (заглушка, фейк в тестах) — ничего не делаем.
+        """
+        close = getattr(self._backend, "close", None)
+        if close is not None:
+            await close()
 
     def mark_reauth_needed(self, strategy: str) -> None:
         """Взвести флаг «нужна повторная авторизация» (ensure_logged_in, K-PR3)."""

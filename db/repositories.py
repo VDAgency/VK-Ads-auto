@@ -500,6 +500,18 @@ async def find_cabinet(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def get_cabinet(session: AsyncSession, account_id: int, cabinet_id: int) -> Cabinet | None:
+    """Кабинет тенанта по id (нужен, чтобы понять канал кампании при остановке)."""
+    stmt = select(Cabinet).where(Cabinet.account_id == account_id, Cabinet.id == cabinet_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_campaign(session: AsyncSession, account_id: int, campaign_id: int) -> Campaign | None:
+    """Кампания тенанта по id. `None` — нет такой либо принадлежит чужому тенанту."""
+    stmt = select(Campaign).where(Campaign.account_id == account_id, Campaign.id == campaign_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def create_cabinet_row(
     session: AsyncSession,
     account_id: int,

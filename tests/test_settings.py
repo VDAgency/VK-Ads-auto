@@ -64,6 +64,27 @@ def test_is_operator() -> None:
     assert settings.is_operator(999) is False
 
 
+def test_live_mode_flags_are_off_by_default() -> None:
+    # Предохранители: без явного включения ни кампании, ни кабинеты не создаются боево.
+    settings = Settings(_env_file=None)
+    assert settings.vk_live_campaigns is False
+    assert settings.vk_campaign_autostart is False
+    assert settings.vk_agency_confirmed is False
+    assert settings.integration_forced_channel == ""
+
+
+def test_live_mode_flags_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VK_LIVE_CAMPAIGNS", "true")
+    monkeypatch.setenv("VK_CAMPAIGN_AUTOSTART", "true")
+    monkeypatch.setenv("INTEGRATION_FORCED_CHANNEL", "vk_api")
+    settings = Settings(_env_file=None)
+    assert settings.vk_live_campaigns is True
+    assert settings.vk_campaign_autostart is True
+    assert settings.integration_forced_channel == "vk_api"
+    # Создание кабинетов остаётся отдельным запретом и не ослабляется этими флагами.
+    assert settings.vk_agency_confirmed is False
+
+
 def test_secret_not_in_repr() -> None:
     # SecretStr не должен раскрывать значение в repr/str (защита от утечки в логи).
     settings = Settings(_env_file=None, bot_token=SecretStr("super-secret"))

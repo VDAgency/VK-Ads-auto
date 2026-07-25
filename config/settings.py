@@ -50,9 +50,16 @@ class Settings(BaseSettings):
     vk_ads_access_token: SecretStr = SecretStr("")
     vk_ads_refresh_token: SecretStr = SecretStr("")
     vk_ads_token_type: str = "Bearer"
-    # Боевое создание кабинетов/кампаний VK разрешено только после подтверждения
-    # агентского статуса ИП (CLAUDE.md §1.4). Пока False — запуск РК идёт заглушкой.
+    # Боевое создание КАБИНЕТОВ VK разрешено только после подтверждения агентского
+    # статуса ИП (CLAUDE.md §1.4). Флаг не ослабляется предохранителями ниже.
     vk_agency_confirmed: bool = False
+    # Боевое создание КАМПАНИИ через VK Ads API. False (по умолчанию) — запуск идёт
+    # заглушкой, боевых мутаций нет. Кабинет при этом берётся готовый (из брифа).
+    vk_live_campaigns: bool = False
+    # Автозапуск кампании после создания. False — кампания создаётся, но НЕ
+    # запускается (статус `prepared`): оператор сначала смотрит её глазами,
+    # деньги не тратятся. Второй предохранитель поверх `vk_live_campaigns`.
+    vk_campaign_autostart: bool = False
 
     # Каталог хранения загруженных креативов (persistent volume РФ-сервера).
     creatives_dir: str = "/data/creatives"
@@ -66,6 +73,10 @@ class Settings(BaseSettings):
     # Пустой BASE_URL = сервис не сконфигурирован; бот работает в мок-режиме.
     # Остальные KOTBOT_-переменные читает сам сервис (kotbot/config.py), не ядро.
     kotbot_base_url: str = ""
+
+    # Ручной переключатель канала интеграции (`vk_api` | `kotbot`). Пусто — канал
+    # выбирается по умолчанию с health-check и фолбэком (см. `ChannelRouter`).
+    integration_forced_channel: str = ""
 
     # Внутренний API ядра для тонких клиентов (бот ходит сюда, не в БД, §1.3 CLAUDE.md).
     # Дефолт — имя сервиса ядра в docker-compose; локально задаётся через env.

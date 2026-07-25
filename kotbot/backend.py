@@ -1,8 +1,8 @@
 """Протокол браузерного бэкенда автоматизации kotbot (spec §3, §4).
 
 `KotbotAutomation` (service.py) не знает про Playwright: вся работа с браузером
-скрыта за `AutomationBackend`. В K-PR1 существует только `NullBackend`-заглушка;
-реальный Playwright-бэкенд (browser.py + flows.py) придёт в K-PR3.
+скрыта за `AutomationBackend`. Реализации: `NullBackend` (заглушка для тестов и
+режима «автоматизация выключена») и `PlaywrightBackend` (`kotbot/browser.py`).
 """
 
 from __future__ import annotations
@@ -31,8 +31,21 @@ class LoginOutcome:
     storage_state: bytes | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SessionCheck:
+    """Итог глубокой проверки сохранённой сессии браузером (spec §4.2, ступени 1–2).
+
+    - `logged_in` — подхватился ли storage_state (маркер залогиненности кабинета);
+    - `storage_state` — обновлённый сериализованный state при успехе: сервис
+      перезаписывает им файл, чтобы продлить сессию.
+    """
+
+    logged_in: bool
+    storage_state: bytes | None = None
+
+
 class AutomationBackend(Protocol):
-    """Контракт браузерной автоматизации входа на kotbot.ru."""
+    """Контракт браузерной автоматизации входа (kotbot.ru / ads.vk.ru)."""
 
     async def login(self, strategy: str, login: str, password: str) -> LoginOutcome:
         """Выполнить вход стратегией (`email`/`vk`); может запросить код."""
@@ -46,12 +59,16 @@ class AutomationBackend(Protocol):
         """Закрыть припаркованный флоу (истёк TTL / отмена) — освободить браузер."""
         ...
 
+    async def check_session(self, strategy: str, storage_state: bytes) -> SessionCheck:
+        """Проверить браузером, жива ли сохранённая сессия стратегии."""
+        ...
+
 
 class NullBackend:
-    """Заглушка до K-PR3: браузерной автоматизации ещё нет.
+    """Заглушка «браузера нет»: для тестов и режима с выключенной автоматизацией.
 
     Любая попытка входа отвечает `not_implemented` — бот показывает оператору
-    честную подсказку, что автоматизация ещё не выкачена.
+    честную подсказку, что автоматизация недоступна.
     """
 
     async def login(self, strategy: str, login: str, password: str) -> LoginOutcome:
@@ -62,3 +79,6 @@ class NullBackend:
 
     async def close_attempt(self, attempt: object) -> None:
         return None
+
+    async def check_session(self, strategy: str, storage_state: bytes) -> SessionCheck:
+        return SessionCheck(logged_in=False)
