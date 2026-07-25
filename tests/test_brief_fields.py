@@ -27,20 +27,24 @@ def test_field_keys_match_web_form_names_individual() -> None:
     keys = [f.key for f in INDIVIDUAL_FIELDS]
     assert keys == [
         "full_name",
-        "object_url",
-        "vk_ad_cabinet_id",
-        "email",
         "phone",
         "telegram",
+        "email",
+        "tax_id",
+        "object_url",
+        "vk_ad_cabinet_id",
+        "target_type",
         "audience_description",
-        "geo",
         "gender",
         "age_from",
         "age_to",
+        "geo",
         "budget",
         "term",
-        "target_type",
         "materials",
+        "materials_url",
+        "competitors",
+        "extra",
     ]
 
 
@@ -48,22 +52,52 @@ def test_field_keys_match_web_form_names_community() -> None:
     keys = [f.key for f in COMMUNITY_FIELDS]
     assert keys == [
         "full_name",
-        "object_url",
-        "vk_ad_cabinet_id",
-        "email",
+        "company",
         "phone",
         "telegram",
+        "email",
         "niche",
         "org_type",
-        "product_description",
+        "tax_id",
+        "org_name",
+        "object_url",
+        "vk_ad_cabinet_id",
         "site_url",
+        "product_description",
+        "avg_check",
         "usp",
+        "offers",
         "audience_description",
-        "geo",
         "gender",
+        "age_from",
+        "age_to",
+        "geo",
+        "exclusions",
+        "goal",
         "budget",
         "term",
+        "materials",
+        "materials_url",
+        "competitors",
+        "extra",
     ]
+
+
+def test_bank_details_not_collected_by_brief() -> None:
+    """Реквизиты — не параметр VK и не идентификация (BRIEF_SPEC §0).
+
+    Их место в личном кабинете клиента, а не в брифе: иначе банковские данные
+    попадают в payload и в карточку Telegram-бота.
+    """
+    for fields in (INDIVIDUAL_FIELDS, COMMUNITY_FIELDS):
+        assert "bank_details" not in [f.key for f in fields]
+
+
+def test_every_field_key_is_unique_within_variant() -> None:
+    # Дубль ключа тихо ломает правки `номер.значение`: два номера пишут в одно поле.
+    for variant in ("individual", "community"):
+        keys = [f.key for f in fields_for(variant)]
+        assert len(keys) == len(set(keys)), variant
 
 
 def test_numbered_starts_at_one_and_fills_from_payload() -> None:
@@ -85,9 +119,9 @@ def test_numbered_covers_all_canonical_fields() -> None:
 
 def test_apply_edits_maps_number_to_key() -> None:
     payload = {"full_name": "Старое имя"}
-    new_payload, unknown = apply_edits(payload, "individual", {1: "Новое имя", 8: "Москва"})
+    new_payload, unknown = apply_edits(payload, "individual", {1: "Новое имя", 13: "Москва"})
     assert new_payload["full_name"] == "Новое имя"  # поле №1
-    assert new_payload["geo"] == "Москва"  # поле №8 (после вставки ID кабинета сдвиг +1)
+    assert new_payload["geo"] == "Москва"  # поле №13 в порядке секций макета
     assert unknown == []
 
 

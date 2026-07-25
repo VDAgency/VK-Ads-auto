@@ -227,6 +227,13 @@ def test_individual_has_no_business_fields() -> None:
     assert brief.org_type is None
 
 
+def test_individual_keeps_tax_id() -> None:
+    """ИНН спрашивают оба макета: у физлица — для оформления документов."""
+    raw = _individual_raw() | {"tax_id": "770700000000"}
+    brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert brief.tax_id == "770700000000"
+
+
 # --- parse_brief: вариант ИП/сообщество -------------------------------------
 
 

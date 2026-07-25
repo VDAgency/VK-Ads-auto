@@ -182,23 +182,71 @@ def test_admin_page_served_with_sections() -> None:
     assert 'id="app"' in body
 
 
+_BRIEF_PAGES = {
+    "individual": "/brief-individual.html",
+    "community": "/brief-community.html",
+}
+
+
 def test_brief_forms_mark_email_and_phone_required() -> None:
     client = TestClient(create_app())
-    for form in ("/brief-individual.html", "/brief-community.html"):
+    for form in _BRIEF_PAGES.values():
         body = client.get(form).text
-        assert "Email *" in body
-        assert "Телефон *" in body
+        assert "E-mail" in body
+        assert "Телефон / WhatsApp" in body
+        # Звёздочка обязательности — отдельный span, скрытый от скринридера
+        # (обязательность ему сообщает атрибут required на самом поле).
+        assert 'class="bf-req" aria-hidden="true"> *</span>' in body
         assert "required" in body
 
 
 def test_brief_forms_have_vk_ad_cabinet_id_field() -> None:
     client = TestClient(create_app())
-    for form in ("/brief-individual.html", "/brief-community.html"):
+    for form in _BRIEF_PAGES.values():
         body = client.get(form).text
         # Обязательное поле «ID кабинета VK Реклама» + ссылка на инструкцию.
-        assert "ID кабинета VK Реклама *" in body
+        assert "ID кабинета VK Реклама" in body
         assert 'name="vk_ad_cabinet_id"' in body
         assert 'href="/instrukciya-vk-cabinet.html"' in body
+
+
+def test_brief_forms_cover_every_canonical_field() -> None:
+    """Форма обязана собирать ВСЕ поля канонической карты варианта.
+
+    Расхождение формы и `services/brief_fields.py` — это молчаливая потеря
+    данных: поле есть в карточке оператора и в нумерации правок `номер.значение`,
+    но клиенту его никто не показал, поэтому оно всегда пустое.
+    """
+    from services.brief_fields import fields_for
+
+    client = TestClient(create_app())
+    for variant, page in _BRIEF_PAGES.items():
+        body = client.get(page).text
+        missing = [f.key for f in fields_for(variant) if f'name="{f.key}"' not in body]
+        assert not missing, f"{variant}: в форме нет полей {missing}"
+
+
+def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
+    """Недоступные цели показаны, но выбрать их нельзя.
+
+    `disabled` здесь не украшение: браузер не включает такие поля в FormData,
+    поэтому цель, которую мы ещё не умеем запускать, физически не уедет в ядро.
+    """
+    client = TestClient(create_app())
+    body = client.get(_BRIEF_PAGES["community"]).text
+
+    radios = re.findall(r'<input type="radio"[^>]*name="goal"[^>]*>', body)
+    assert len(radios) >= 2, "цели должны быть показаны списком"
+
+    available = [r for r in radios if "disabled" not in r]
+    locked = [r for r in radios if "disabled" in r]
+    # Запускаем пока только подписчиков — она и единственная доступная.
+    assert len(available) == 1
+    assert 'value="подписчики"' in available[0]
+    assert locked, "остальные цели должны быть заблокированы"
+    # Каждая заблокированная цель помечена «скоро» — клиент видит, что она
+    # существует, но ещё не подключена.
+    assert body.count('class="bf-choice__soon"') == len(locked)
 
 
 def test_extensionless_path_serves_html_file() -> None:

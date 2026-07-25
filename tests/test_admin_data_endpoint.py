@@ -140,8 +140,16 @@ def test_brief_detail_returns_card() -> None:
 
 
 def test_brief_edit_applies() -> None:
+    # Номер берётся из канонической карты, а не пишется константой: иначе тест
+    # ломается при каждом изменении порядка полей формы.
+    from services.brief_fields import fields_for
+
+    geo_number = str(
+        next(i for i, f in enumerate(fields_for("individual"), start=1) if f.key == "geo")
+    )
+
     async def scenario(client: AsyncClient) -> dict[str, Any]:
-        resp = await client.patch("/api/v1/admin/briefs/1", json={"edits": {"8": "Москва"}})
+        resp = await client.patch("/api/v1/admin/briefs/1", json={"edits": {geo_number: "Москва"}})
         assert resp.status_code == 200
         body: dict[str, Any] = resp.json()
         return body

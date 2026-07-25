@@ -107,11 +107,23 @@ def test_get_brief_card_404_when_missing() -> None:
     assert asyncio.run(_with_client(scenario)) == 404
 
 
+def _field_number(variant: str, key: str) -> str:
+    """Номер поля в карточке — как его видит оператор в боте.
+
+    Считается из канонической карты, а не пишется константой: иначе тест
+    ломается при каждом изменении порядка полей формы.
+    """
+    from services.brief_fields import fields_for
+
+    return str(next(i for i, f in enumerate(fields_for(variant), start=1) if f.key == key))
+
+
 def test_patch_brief_applies_edits_and_persists() -> None:
     async def scenario(client: AsyncClient) -> dict[str, Any]:
-        # Правка поля №1 (ФИО) и №8 (география; после вставки ID кабинета сдвиг +1).
+        # Правка ФИО (поле №1) и географии.
+        geo_number = _field_number("individual", "geo")
         patch = await client.patch(
-            "/api/v1/briefs/1", json={"edits": {"1": "Иван Петров", "8": "Москва"}}
+            "/api/v1/briefs/1", json={"edits": {"1": "Иван Петров", geo_number: "Москва"}}
         )
         assert patch.status_code == 200
         # Перечитываем карточку — правки сохранились в БД.
