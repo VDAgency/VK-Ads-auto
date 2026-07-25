@@ -4,6 +4,10 @@ import Link from "next/link";
 import { LoginModal } from "@/components/LoginModal";
 import { ScrollReveal } from "@/components/ScrollReveal";
 
+// Стили лендинга. Импорт в самой странице — Next привяжет CSS-чанк к этому
+// маршруту, поэтому остальные страницы его не тянут.
+import "./landing.css";
+
 export const metadata: Metadata = {
   title: "VK-Ads-auto — запуск рекламы в VK из брифа за минуты",
   description:
@@ -70,9 +74,6 @@ export default function Landing() {
   return (
     <>
       <script dangerouslySetInnerHTML={{ __html: BOOTSTRAP_CLASSES }} />
-      {/* eslint-disable-next-line @next/next/no-css-tags -- лежит в public/ рядом
-          со styles.css; импорт как модуля означал бы вторую копию файла. */}
-      <link rel="stylesheet" href="/landing.css" precedence="default" />
 
       {/* ================= Header ================= */}
       <header className="lp-header">

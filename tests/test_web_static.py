@@ -1,5 +1,29 @@
+import re
+
 from core.app import create_app
 from fastapi.testclient import TestClient
+
+# Стили собираются Next в хешированные чанки под /_next/, поэтому обращаться к
+# ним по имени файла (как к прежним /styles.css и /landing.css) больше нельзя.
+# Находим их через разметку самой страницы — проверяем то же самое, но не
+# завязываемся на имя, которое меняется от сборки к сборке.
+_STYLESHEET_RE = re.compile(r'<link rel="stylesheet" href="([^"]+)"')
+
+
+def stylesheet_hrefs(body: str) -> list[str]:
+    """Адреса всех таблиц стилей, подключённых страницей."""
+    return _STYLESHEET_RE.findall(body)
+
+
+def page_css(client: TestClient, path: str) -> str:
+    """Весь CSS, который реально получает страница по указанному адресу."""
+    body = client.get(path).text
+    chunks = []
+    for href in stylesheet_hrefs(body):
+        resp = client.get(href)
+        assert resp.status_code == 200, f"таблица стилей {href} не отдаётся"
+        chunks.append(resp.text)
+    return "\n".join(chunks)
 
 
 def test_landing_served() -> None:
@@ -25,19 +49,15 @@ def test_landing_links_both_brief_forms() -> None:
     assert 'href="/brief-community.html"' in body
 
 
-def test_landing_links_landing_css() -> None:
-    client = TestClient(create_app())
-    body = client.get("/").text
-    # Точный вид тега задаёт React (добавляет data-precedence), поэтому
-    # проверяем факт подключения, а не форматирование.
-    assert 'href="/landing.css"' in body
-
-
 def test_landing_css_served() -> None:
     client = TestClient(create_app())
-    response = client.get("/landing.css")
-    assert response.status_code == 200
-    assert "text/css" in response.headers["content-type"]
+    body = client.get("/").text
+    hrefs = stylesheet_hrefs(body)
+    assert hrefs, "лендинг обязан подключать хотя бы одну таблицу стилей"
+    for href in hrefs:
+        response = client.get(href)
+        assert response.status_code == 200
+        assert "text/css" in response.headers["content-type"]
 
 
 def test_landing_respects_reduced_motion() -> None:
@@ -45,7 +65,7 @@ def test_landing_respects_reduced_motion() -> None:
     # Стили уважают системную настройку. JS-часть (scroll-reveal сразу показывает
     # блоки при reduce) переехала в бандл вместе с инлайновым скриптом лендинга,
     # поэтому по HTML она больше не проверяется — см. прогон поведения (спека §7).
-    assert "prefers-reduced-motion" in client.get("/landing.css").text
+    assert "prefers-reduced-motion" in page_css(client, "/")
 
 
 def test_instruction_page_served() -> None:
@@ -134,7 +154,7 @@ def test_landing_has_login_modal() -> None:
 
 def test_landing_css_has_modal_styles() -> None:
     client = TestClient(create_app())
-    css = client.get("/landing.css").text
+    css = page_css(client, "/")
     assert ".lp-modal" in css
     assert "backdrop-filter" in css  # стеклянное затемнение
     assert ".lp-seg" in css  # сегментный переключатель

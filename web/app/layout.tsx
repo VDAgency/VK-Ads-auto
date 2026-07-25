@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import "./globals.css";
+// Базовые стили и токены дизайн-системы. Раньше лежали в public/ и
+// подключались тегом <link>, потому что их делили с ещё не перенесёнными
+// страницами. Все страницы перенесены — файл живёт в дереве приложения и
+// собирается вместе с остальным.
+import "./styles.css";
 
 export const metadata: Metadata = {
   title: "VK Ads auto",
@@ -11,18 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ru">
-      <body>
-        {/* Базовые стили прежнего фронта. Файл лежит в public/ и отдаётся по тому
-            же адресу, что и раньше, — так перенесённые страницы гарантированно
-            выглядят как до миграции, а не «похоже». Сюда же ходят ещё не
-            перенесённые страницы из public/. Уйдёт вместе с ними на дизайн-этапе.
-            precedence нужен, чтобы React поднял тег в <head> и дедуплицировал. */}
-        {/* eslint-disable-next-line @next/next/no-css-tags -- файл общий с ещё не
-            перенесёнными страницами в public/; импортировать его как модуль значило
-            бы держать две копии, которые разъедутся. Уйдёт вместе с public/ на N7. */}
-        <link rel="stylesheet" href="/styles.css" precedence="default" />
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
