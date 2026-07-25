@@ -146,15 +146,20 @@ def test_admin_page_served_with_sections() -> None:
     resp = client.get("/admin.html")
     assert resp.status_code == 200
     body = resp.text
-    # Вход только из бота + вызовы админ-эндпоинтов + операторские действия.
+    # Оболочка админки: экран «нужен вход» и операторская навигация.
+    # Экраны внутри (карточка брифа с правками и загрузкой креатива) рендерятся
+    # только после выбора брифа, поэтому в статике их нет — как и вызовов
+    # /api/v1/admin/*, уехавших в бандл. Проверяются прогоном поведения (§7).
     assert "Вход только из бота" in body
-    assert "/api/v1/admin" in body  # база админ-API
-    assert "/authenticate" in body
-    assert "/overview" in body
-    assert "Внести правки" in body
-    assert "Загрузить креатив" in body
+    assert "/admin" in body  # подсказка «команда /admin в боте»
     assert "Отправить бриф" in body  # веб-отправка брифа клиенту
-    assert "/invites" in body  # вызов POST /api/v1/admin/invites
+    assert "Клиенты" in body
+    assert "Пришли брифы" in body
+    assert "Ждём брифы" in body
+    assert "Кампании" in body
+    assert 'id="logout"' in body
+    assert 'id="need-auth"' in body
+    assert 'id="app"' in body
 
 
 def test_brief_forms_mark_email_and_phone_required() -> None:

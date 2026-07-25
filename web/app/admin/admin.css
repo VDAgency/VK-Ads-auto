@@ -1,0 +1,98 @@
+/* Локальные стили админ-панели. Перенесено 1:1 из <style> прежней
+   web/static/admin.html; базовые токены — из /styles.css. */
+
+.adm-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.adm-tile {
+  flex: 1 1 140px;
+  border: 1px solid var(--line, #e3e7ee);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--surface, #fff);
+}
+
+.adm-tile b {
+  display: block;
+  font-size: 26px;
+  line-height: 1.1;
+}
+
+.adm-tile span {
+  color: var(--muted, #5b6678);
+  font-size: 13px;
+}
+
+.adm-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.adm-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e3e7ee);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--surface, #fff);
+}
+
+.adm-row:hover {
+  border-color: var(--accent, #2a6bff);
+}
+
+.adm-row .muted {
+  color: var(--muted, #5b6678);
+  font-size: 13px;
+}
+
+.adm-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2fb;
+  color: #2a6bff;
+  white-space: nowrap;
+}
+
+.adm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.adm-back {
+  display: inline-block;
+  margin-bottom: 8px;
+  cursor: pointer;
+  color: var(--muted, #5b6678);
+}
+
+/* Строки списков и «назад» раньше были div'ами с обработчиком клика. Теперь это
+   настоящие кнопки (доступны с клавиатуры) — сбрасываем кнопочные стили, чтобы
+   вид не изменился. */
+button.adm-row,
+button.adm-back {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+button.adm-back {
+  width: auto;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted, #5b6678);
+}
