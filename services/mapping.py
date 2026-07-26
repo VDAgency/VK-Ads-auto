@@ -11,10 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from services.brief_parser import Gender, Goal, ParsedBrief
+from services.brief_parser import Gender, Goal, ParsedBrief, TargetType
 
 # Цель «подписчики/вступления в сообщество» в VK Ads API.
 SOCIAL_ENGAGEMENT = "socialengagement"
+
+# Тип рекламируемого объекта — нейтральные значения, общие для любых площадок.
+# Пусто = неизвестно (адаптер догадывается по ссылке, как раньше).
+OBJECT_KIND_COMMUNITY = TargetType.COMMUNITY.value
+OBJECT_KIND_PERSONAL = TargetType.PERSONAL_PAGE.value
 
 _VK_AGE_MIN = 14
 _VK_AGE_MAX = 75
@@ -28,6 +33,9 @@ class CampaignSpec:
     name: str
     object_url: str
     geo_raw: str  # текстом из брифа; в region id переводит адаптер (live API)
+    # Тип объекта из брифа: короткий адрес (vk.ru/имя) сам по себе человека от
+    # сообщества не отличает, поэтому подсказка из брифа авторитетнее ссылки.
+    object_kind: str = ""
     age_list: list[int] = field(default_factory=list)  # пусто = без возрастного таргетинга
     sex: list[str] = field(default_factory=list)  # [] = любой; ["male"]/["female"]
     budget_rub: int | None = None
@@ -66,6 +74,7 @@ def build_campaign_spec(brief: ParsedBrief) -> CampaignSpec:
         name=name,
         object_url=brief.object_url,
         geo_raw=audience.geo,
+        object_kind=brief.target_type.value,
         age_list=_age_list(audience.age_from, audience.age_to),
         sex=_sex(audience.gender),
         budget_rub=brief.budget.amount_rub,

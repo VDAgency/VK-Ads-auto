@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
+from services.brief_parser import TargetType
 from services.mapping import CampaignSpec
 
 from integrations.adapter import PlatformAdapter
@@ -105,31 +106,19 @@ def _object_slug(object_url: str) -> str:
     return segments[0].lower() if segments else ""
 
 
-def resolve_ad_object(object_url: str) -> AdObject:
-    """Определить тип объекта рекламы по ссылке и подобрать package_id/objective.
+def _profile_object(url: str, object_id: str | None) -> AdObject:
+    """Личная страница: пакет 3268, objective `socialengagement_profile`."""
+    return AdObject(
+        url=url,
+        url_object_type=URL_OBJECT_PROFILE,
+        url_object_id=object_id,
+        package_id=PACKAGE_PROFILE,
+        objective=OBJECTIVE_PROFILE,
+    )
 
-    `vk.com/club…`, `vk.com/public…`, `vk.com/event…` — сообщество (пакет 3122);
-    `vk.com/id…` — личная страница (пакет 3268, objective `socialengagement_profile`).
-    Короткий адрес (`vk.com/my_community`) трактуем как сообщество — самый частый
-    случай брифа; числовой id из него не выводится, в теле останется только `url`.
-    """
-    slug = _object_slug(object_url)
-    url = object_url.strip()
 
-    profile = _PROFILE_RE.match(slug)
-    if profile:
-        return AdObject(
-            url=url,
-            url_object_type=URL_OBJECT_PROFILE,
-            url_object_id=profile.group(1),
-            package_id=PACKAGE_PROFILE,
-            objective=OBJECTIVE_PROFILE,
-        )
-
-    community = _COMMUNITY_RE.match(slug)
-    object_id = community.group(1) if community else None
-    if object_id is None:
-        logger.warning("Vanity VK url %r: numeric object id is unknown", url)
+def _community_object(url: str, object_id: str | None) -> AdObject:
+    """Сообщество: пакет 3122, objective `socialengagement`."""
     return AdObject(
         url=url,
         url_object_type=URL_OBJECT_COMMUNITY,
@@ -139,13 +128,44 @@ def resolve_ad_object(object_url: str) -> AdObject:
     )
 
 
+def resolve_ad_object(object_url: str, kind: str = "") -> AdObject:
+    """Определить тип объекта рекламы и подобрать package_id/objective.
+
+    Числовой адрес — факт и решает сам: `vk.com/club…`, `public…`, `event…` —
+    сообщество (пакет 3122); `vk.com/id…` — личная страница (пакет 3268).
+
+    Короткий адрес (`vk.ru/fin_dolm`) человека от сообщества не отличает. Для него
+    авторитетна подсказка `kind` из брифа (`personal_page`/`community`), где тип
+    объекта указан явно. Без подсказки остаётся прежняя эвристика «сообщество» —
+    самый частый случай брифа; числовой id тогда неизвестен и в тело уйдёт только `url`.
+    """
+    slug = _object_slug(object_url)
+    url = object_url.strip()
+
+    profile = _PROFILE_RE.match(slug)
+    if profile:
+        return _profile_object(url, profile.group(1))
+
+    community = _COMMUNITY_RE.match(slug)
+    if community:
+        return _community_object(url, community.group(1))
+
+    # Дальше — короткий адрес: числового id нет, тип берём из брифа.
+    if kind == TargetType.PERSONAL_PAGE.value:
+        logger.warning("Vanity VK url %r: personal page per brief, numeric id unknown", url)
+        return _profile_object(url, None)
+    if kind != TargetType.COMMUNITY.value:
+        logger.warning("Vanity VK url %r without brief hint: assuming community", url)
+    return _community_object(url, None)
+
+
 def campaign_objective(spec: CampaignSpec) -> str:
     """Objective для ad_plan: из спеки, но для личной страницы — profile-вариант.
 
     `services/mapping.py` пока отдаёт `socialengagement` для обоих вариантов брифа,
     а у личной страницы цель другая — правим здесь, где известен объект рекламы.
     """
-    resolved = resolve_ad_object(spec.object_url).objective
+    resolved = resolve_ad_object(spec.object_url, spec.object_kind).objective
     if resolved != spec.objective:
         logger.warning(
             "Objective %r from spec replaced with %r for personal page", spec.objective, resolved
@@ -262,7 +282,7 @@ class VkApiAdapter(PlatformAdapter):
         Пересчёт бюджета брифа в дневной лимит — ответственность сервиса запуска;
         сюда он приходит готовым значением, иначе ключ не отправляется вовсе.
         """
-        ad_object = resolve_ad_object(spec.object_url)
+        ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
         body: dict[str, Any] = {
             "ad_plan_id": int(campaign_id),
             "name": spec.name,
@@ -284,7 +304,7 @@ class VkApiAdapter(PlatformAdapter):
             targetings["age"] = {"age_list": [AGE_UNKNOWN, *spec.age_list], "expand": False}
         if spec.sex:
             targetings["sex"] = list(spec.sex)
-        if resolve_ad_object(spec.object_url).is_community:
+        if resolve_ad_object(spec.object_url, spec.object_kind).is_community:
             targetings["group_members"] = NOT_GROUP_MEMBER
         targetings["geo"] = {"regions": regions}
         return targetings
@@ -301,7 +321,7 @@ class VkApiAdapter(PlatformAdapter):
         about_company: str | None = None,
     ) -> str:
         """Создать объявление: медиа по слотам, тексты и ссылка на объект рекламы."""
-        ad_object = resolve_ad_object(spec.object_url)
+        ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
         textblocks: dict[str, dict[str, str]] = {
             SLOT_TITLE: {"text": title},
             SLOT_TEXT: {"text": text},
