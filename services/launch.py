@@ -57,6 +57,9 @@ async def run_campaign(
         title=title,
         body=body,
         budget_limit_day=budget_limit_day,
+        # Безопасность: VK создаёт кампанию активной, поэтому решение о трате
+        # денег передаём прямо в создание, а не отдельным шагом после него.
+        activate=autostart,
     )
     if not autostart:
         return LaunchResult(campaign_id=campaign_id, launched=False)
