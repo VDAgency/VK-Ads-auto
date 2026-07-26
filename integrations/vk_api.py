@@ -1,10 +1,15 @@
 """VkApiAdapter — прямой VK Ads API (myTarget v2) через httpx.
 
-Иерархия кампании: `ad_plan` (цель, даты) → `ad_group` (пакет, таргетинг, бюджет,
-автобиддинг) → `banner` (медиа, тексты, ссылка на объект рекламы). Поля и уровни
-подтверждены живыми read-only запросами 2026-07-25 — см. docs/VK_API_REFERENCE.md,
-раздел «Подтверждено живыми read-only запросами». Пункты, помеченные VERIFY, требуют
-проверки мутацией на минимальном бюджете.
+Иерархия кампании в терминах API: `ad_plan` (цель, даты) → `campaigns` (пакет,
+таргетинг, бюджет, автобиддинг) → `banners` (медиа, тексты, ссылка на объект
+рекламы). То, что бриф и ядро зовут «группой объявлений», в теле запроса
+называется `campaigns[]`; `/ad_groups.json` — эндпоинт только для чтения, id
+совпадают (`ad_plan.campaigns[].id == ad_group.id`).
+
+⚠️ Создаётся всё ОДНИМ вложенным `POST /ad_plans.json`: отдельный запрос на план
+отвечает HTTP 400 `campaigns: required` (боевая проверка 2026-07-26). Поля и уровни
+подтверждены живыми запросами — см. docs/VK_API_REFERENCE.md. Пункты, помеченные
+VERIFY, требуют проверки мутацией на минимальном бюджете.
 
 Адаптер мутаций НЕ вызывается автоматически; запуск идёт через оркестрацию, которую
 мы контролируем. Токен берётся из per-account конфигурации и никогда не логируется.
@@ -15,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -228,17 +233,29 @@ class VkApiAdapter(PlatformAdapter):
     async def create_campaign(
         self, cabinet_id: str, goal: str, *, spec: CampaignSpec | None = None
     ) -> str:
-        """Создать кампанию (ad_plan): цель, имя, дата старта.
+        """Создать кампанию по контракту `PlatformAdapter`.
 
-        Бюджет и автобиддинг на этом уровне НЕ задаются — они живут на ad_group
-        (подтверждено эталонной кампанией кабинета).
+        Со спекой — обычная сборка через `create_campaign_from_spec`. Без спеки
+        (контрактный вызов без данных брифа) отправляется минимальный план с одной
+        кампанией-заглушкой: VK не принимает план с пустым `campaigns`, а объекта
+        рекламы и таргетинга в этом вызове взять неоткуда.
         """
-        objective = campaign_objective(spec) if spec is not None else goal
-        name = spec.name if spec is not None else f"plan-{cabinet_id}"
-        body = {"name": name, "objective": objective, "date_start": _today()}
-        response = await self._request("POST", "/ad_plans.json", json=body)
-        response.raise_for_status()
-        return str(response.json()["id"])
+        if spec is not None:
+            return await self.create_campaign_from_spec(cabinet_id, spec)
+        name = f"plan-{cabinet_id}"
+        logger.warning("Creating ad_plan %r without a spec: no targeting and no banner", name)
+        body = _ad_plan_body(
+            name=name,
+            objective=goal,
+            campaigns=[
+                {
+                    "name": name,
+                    "package_id": PACKAGE_COMMUNITY,
+                    "autobidding_mode": AUTOBIDDING_MAX_GOALS,
+                }
+            ],
+        )
+        return await self._post_ad_plan(body)
 
     async def create_campaign_from_spec(
         self,
@@ -250,54 +267,43 @@ class VkApiAdapter(PlatformAdapter):
         body: str | None = None,
         budget_limit_day: float | None = None,
     ) -> str:
-        """Собрать кампанию целиком: ad_plan → ad_group → (медиа) → banner.
+        """Собрать кампанию целиком одним вложенным запросом (плюс загрузка медиа).
 
         Возвращает id ad_plan — именно он для ядра «идентификатор кампании»
         (по нему идут статус, остановка и статистика). Разложение спеки по
         уровням VK остаётся внутри адаптера: ядро об иерархии не знает.
         """
-        plan_id = await self.create_campaign(cabinet_id, spec.objective, spec=spec)
-        group_id = await self.create_ad_group(plan_id, spec, budget_limit_day=budget_limit_day)
         content: dict[str, str] = {}
         if creative_ref:
-            content[content_slot(creative_ref)] = await self.upload_creative(plan_id, creative_ref)
-        await self.create_banner(
-            group_id,
+            # Медиа грузится ДО плана: id нужен уже в теле вложенного banner.
+            content[content_slot(creative_ref)] = await self.upload_creative(
+                cabinet_id, creative_ref
+            )
+        banner = _banner_body(
             spec,
             title=_fit(title or spec.name, TITLE_MAX_LEN),
             text=_fit(body or spec.name, TEXT_MAX_LEN),
             content=content,
         )
-        return plan_id
+        campaign = _campaign_body(
+            spec,
+            targetings=await self.build_targetings(spec),
+            banners=[banner],
+            budget_limit_day=budget_limit_day,
+        )
+        payload = _ad_plan_body(
+            name=spec.name, objective=campaign_objective(spec), campaigns=[campaign]
+        )
+        return await self._post_ad_plan(payload)
 
-    async def create_ad_group(
-        self,
-        campaign_id: str,
-        spec: CampaignSpec,
-        *,
-        budget_limit_day: float | None = None,
-    ) -> str:
-        """Создать группу объявлений: пакет, таргетинг, дневной бюджет, автобиддинг.
-
-        Пересчёт бюджета брифа в дневной лимит — ответственность сервиса запуска;
-        сюда он приходит готовым значением, иначе ключ не отправляется вовсе.
-        """
-        ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
-        body: dict[str, Any] = {
-            "ad_plan_id": int(campaign_id),
-            "name": spec.name,
-            "package_id": ad_object.package_id,
-            "autobidding_mode": AUTOBIDDING_MAX_GOALS,
-            "targetings": await self.build_targetings(spec),
-        }
-        if budget_limit_day is not None:
-            body["budget_limit_day"] = float(budget_limit_day)
-        response = await self._request("POST", "/ad_groups.json", json=body)
+    async def _post_ad_plan(self, body: Mapping[str, Any]) -> str:
+        """Отправить тело плана и вернуть id созданного ad_plan."""
+        response = await self._request("POST", "/ad_plans.json", json=dict(body))
         response.raise_for_status()
         return str(response.json()["id"])
 
     async def build_targetings(self, spec: CampaignSpec) -> dict[str, Any]:
-        """Собрать `targetings` группы: гео (region id), возраст, пол, не-подписчики."""
+        """Собрать `targetings` кампании: гео (region id), возраст, пол, не-подписчики."""
         regions = await self._geo.resolve(spec.geo_raw)
         targetings: dict[str, Any] = {}
         if spec.age_list:
@@ -308,46 +314,6 @@ class VkApiAdapter(PlatformAdapter):
             targetings["group_members"] = NOT_GROUP_MEMBER
         targetings["geo"] = {"regions": regions}
         return targetings
-
-    async def create_banner(
-        self,
-        ad_group_id: str,
-        spec: CampaignSpec,
-        *,
-        title: str,
-        text: str,
-        content: Mapping[str, str],
-        cta: str = DEFAULT_CTA,
-        about_company: str | None = None,
-    ) -> str:
-        """Создать объявление: медиа по слотам, тексты и ссылка на объект рекламы."""
-        ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
-        textblocks: dict[str, dict[str, str]] = {
-            SLOT_TITLE: {"text": title},
-            SLOT_TEXT: {"text": text},
-            SLOT_CTA: {"text": cta},
-        }
-        if about_company:
-            # Юр. данные рекламодателя (347-ФЗ). VERIFY: обязательность при создании.
-            textblocks[SLOT_ABOUT_COMPANY] = {"text": about_company}
-
-        primary: dict[str, str] = {
-            "url": ad_object.url,
-            "url_object_type": ad_object.url_object_type,
-        }
-        if ad_object.url_object_id is not None:
-            primary["url_object_id"] = ad_object.url_object_id
-
-        body: dict[str, Any] = {
-            "ad_group_id": int(ad_group_id),
-            "name": spec.name,
-            "content": _content_body(content),
-            "textblocks": textblocks,
-            "urls": {"primary": primary},
-        }
-        response = await self._request("POST", "/banners.json", json=body)
-        response.raise_for_status()
-        return str(response.json()["id"])
 
     async def upload_creative(self, campaign_id: str, creative_ref: str) -> str:
         """Загрузить статичный креатив (multipart) и вернуть content id."""
@@ -404,6 +370,81 @@ class VkApiAdapter(PlatformAdapter):
         payload = response.json()
         items = payload.get("items", []) if isinstance(payload, dict) else payload
         return [item for item in items if isinstance(item, dict)]
+
+
+def _ad_plan_body(
+    *, name: str, objective: str, campaigns: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Тело `POST /ad_plans.json`: план целиком, вместе с вложенными кампаниями.
+
+    `budget_limit_day` на этом уровне НЕ ставится — у живого плана он `null`,
+    дневной лимит живёт внутри `campaigns[]`.
+    """
+    return {
+        "name": name,
+        "objective": objective,
+        "date_start": _today(),
+        "campaigns": [dict(campaign) for campaign in campaigns],
+    }
+
+
+def _campaign_body(
+    spec: CampaignSpec,
+    *,
+    targetings: Mapping[str, Any],
+    banners: Sequence[Mapping[str, Any]],
+    budget_limit_day: float | None = None,
+) -> dict[str, Any]:
+    """Тело вложенной кампании (в брифе — «группа объявлений»): пакет, таргетинг, бюджет.
+
+    Пересчёт бюджета брифа в дневной лимит — ответственность сервиса запуска;
+    сюда он приходит готовым значением, иначе ключ не отправляется вовсе.
+    """
+    ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
+    body: dict[str, Any] = {
+        "name": spec.name,
+        "package_id": ad_object.package_id,
+        "autobidding_mode": AUTOBIDDING_MAX_GOALS,
+        "targetings": dict(targetings),
+        "banners": [dict(banner) for banner in banners],
+    }
+    if budget_limit_day is not None:
+        body["budget_limit_day"] = float(budget_limit_day)
+    return body
+
+
+def _banner_body(
+    spec: CampaignSpec,
+    *,
+    title: str,
+    text: str,
+    content: Mapping[str, str],
+    cta: str = DEFAULT_CTA,
+    about_company: str | None = None,
+) -> dict[str, Any]:
+    """Тело вложенного объявления: медиа по слотам, тексты и ссылка на объект рекламы."""
+    ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
+    textblocks: dict[str, dict[str, str]] = {
+        SLOT_TITLE: {"text": title},
+        SLOT_TEXT: {"text": text},
+        SLOT_CTA: {"text": cta},
+    }
+    if about_company:
+        # Юр. данные рекламодателя (347-ФЗ). VERIFY: обязательность при создании.
+        textblocks[SLOT_ABOUT_COMPANY] = {"text": about_company}
+
+    primary: dict[str, str] = {
+        "url": ad_object.url,
+        "url_object_type": ad_object.url_object_type,
+    }
+    if ad_object.url_object_id is not None:
+        primary["url_object_id"] = ad_object.url_object_id
+
+    return {
+        "content": _content_body(content),
+        "textblocks": textblocks,
+        "urls": {"primary": primary},
+    }
 
 
 def _content_body(content: Mapping[str, str]) -> dict[str, dict[str, int]]:
