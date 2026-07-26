@@ -11,6 +11,10 @@
 - `vk_agency_confirmed` — боевое создание КАБИНЕТОВ VK; снят → кабинет только готовый
   (из брифа), на площадке ничего не заводим.
 Кампания на заглушке сохраняется со статусом `prepared` — боевых мутаций нет.
+
+Отказ боевого канала посреди запуска (сервис kotbot ещё без живых флоу — 501,
+`reauth_required`, сеть) не имитируем успехом: кампания переигрывается на заглушке,
+оператор получает «подготовлена, но не запущена» + уведомление.
 """
 
 from __future__ import annotations
@@ -31,13 +35,13 @@ from db.repositories import (
 )
 from integrations.adapter import PlatformAdapter
 from integrations.channels import Channel, ChannelConfig, ChannelRouter, NoHealthyChannelError
-from integrations.kotbot_playwright import KotbotAdapter
+from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_parser import BriefVariant, ParsedBrief, parse_brief
-from services.launch import daily_budget_rub, run_campaign
+from services.launch import LaunchResult, daily_budget_rub, run_campaign
 from services.mapping import CampaignSpec, build_campaign_spec
 from services.notifier import notify_operator
 
@@ -94,7 +98,7 @@ def _build_adapters(settings: Settings) -> dict[Channel, PlatformAdapter]:
     else:
         adapters[Channel.VK_API] = StubAdapter()
     if settings.kotbot_base_url:
-        adapters[Channel.KOTBOT] = KotbotAdapter()
+        adapters[Channel.KOTBOT] = KotbotAdapter(settings.kotbot_base_url)
     return adapters
 
 
@@ -198,6 +202,50 @@ async def _refine_status(adapter: PlatformAdapter, external_id: str) -> str:
     return "launched"
 
 
+async def _prepare_on_platform(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int | None,
+    parsed: ParsedBrief,
+    spec: CampaignSpec,
+    channel: Channel,
+    adapter: PlatformAdapter,
+    settings: Settings,
+    *,
+    creative_ref: str,
+    title: str | None,
+    body: str | None,
+) -> tuple[int | None, LaunchResult, str]:
+    """Кабинет и кампания на выбранном канале: (id кабинета, результат, статус).
+
+    Всё общение с площадкой собрано здесь, чтобы отказ канала можно было поймать
+    целиком и честно переиграть запуск на заглушке (см. `launch_from_creative`).
+    """
+    autostart = not isinstance(adapter, StubAdapter) and settings.vk_campaign_autostart
+    cabinet_ref, cabinet_id = await _resolve_cabinet(
+        session,
+        account_id,
+        client_id,
+        spec,
+        parsed,
+        adapter,
+        _channel_name(channel, adapter),
+        settings,
+    )
+    result = await run_campaign(
+        adapter,
+        cabinet_ref,
+        spec,
+        creative_ref=creative_ref,
+        title=title,
+        body=body,
+        budget_limit_day=daily_budget_rub(spec),
+        autostart=autostart,
+    )
+    status = await _refine_status(adapter, result.campaign_id) if result.launched else "prepared"
+    return cabinet_id, result, status
+
+
 async def launch_from_creative(
     session: AsyncSession,
     account_id: int,
@@ -239,32 +287,36 @@ async def launch_from_creative(
     )
 
     channel, adapter, fallback = await _select_channel(cfg, router)
+
+    async def prepare(platform: PlatformAdapter) -> tuple[int | None, LaunchResult, str]:
+        return await _prepare_on_platform(
+            session,
+            account_id,
+            brief.client_id,
+            parsed,
+            spec,
+            channel,
+            platform,
+            cfg,
+            creative_ref=file_path,
+            title=title,
+            body=body,
+        )
+
+    try:
+        cabinet_id, result, status = await prepare(adapter)
+    except Exception:  # noqa: BLE001 — любой отказ канала → честный фолбэк, не 500
+        if isinstance(adapter, StubAdapter):
+            # Заглушка ничего не мутирует: её падение — баг, а не отказ канала.
+            raise
+        # Канал ответил отказом (нет флоу/переавторизация/сеть): успех не имитируем —
+        # готовим кампанию на заглушке и честно говорим оператору, что запуска не было.
+        logger.exception("Channel %s failed during launch; falling back to stub", channel.value)
+        adapter = StubAdapter()
+        fallback = True
+        cabinet_id, result, status = await prepare(adapter)
+
     is_live = not isinstance(adapter, StubAdapter)
-    autostart = is_live and cfg.vk_campaign_autostart
-
-    cabinet_ref, cabinet_id = await _resolve_cabinet(
-        session,
-        account_id,
-        brief.client_id,
-        spec,
-        parsed,
-        adapter,
-        _channel_name(channel, adapter),
-        cfg,
-    )
-
-    result = await run_campaign(
-        adapter,
-        cabinet_ref,
-        spec,
-        creative_ref=file_path,
-        title=title,
-        body=body,
-        budget_limit_day=daily_budget_rub(spec),
-        autostart=autostart,
-    )
-
-    status = await _refine_status(adapter, result.campaign_id) if result.launched else "prepared"
     campaign = Campaign(
         account_id=account_id,
         brief_id=brief_id,

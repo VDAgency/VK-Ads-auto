@@ -11,6 +11,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
+import httpx
+import pytest
+import respx
 from config.settings import Settings
 from db.base import Base
 from db.models import Account, Brief, Cabinet, Client
@@ -20,7 +23,7 @@ from db.repositories import (
 )
 from integrations.adapter import PlatformAdapter
 from integrations.channels import Channel, ChannelConfig, ChannelRouter
-from integrations.kotbot_playwright import KotbotAdapter
+from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
 from services import notifier
@@ -37,6 +40,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 T = TypeVar("T")
+
+_KOTBOT_URL = "http://kotbot:8002"
 
 _VALID = {
     "full_name": "Вячеслав",
@@ -145,7 +150,7 @@ def test_vk_channel_is_live_with_token_and_flag() -> None:
 
 def test_kotbot_channel_only_when_base_url_set() -> None:
     assert Channel.KOTBOT not in _build_adapters(Settings(_env_file=None))
-    adapters = _build_adapters(Settings(_env_file=None, kotbot_base_url="http://kotbot:8002"))
+    adapters = _build_adapters(Settings(_env_file=None, kotbot_base_url=_KOTBOT_URL))
     assert isinstance(adapters[Channel.KOTBOT], KotbotAdapter)
 
 
@@ -390,6 +395,122 @@ def test_fallback_to_stub_warns_operator() -> None:
     assert status == "prepared"
     assert "⚠️" in message
     assert sent and "⚠️" in sent[0]
+
+
+def _kotbot_settings() -> Settings:
+    """Настройки «канал kotbot включён»: боевой канал ожидается, автозапуск разрешён."""
+    return Settings(_env_file=None, kotbot_base_url=_KOTBOT_URL, vk_campaign_autostart=True)
+
+
+async def _launch_with_kotbot(session: AsyncSession, action: httpx.Response) -> tuple[str, str]:
+    """Запуск при живом `/health` kotbot и заданном ответе action-эндпоинта.
+
+    Проверяем заодно, что канал kotbot действительно был выбран и опрошен, —
+    иначе фолбэк доказывал бы только нездоровый health, а не отказ действия.
+    """
+    with respx.mock(assert_all_called=False) as router:
+        router.get(f"{_KOTBOT_URL}/health").mock(
+            return_value=httpx.Response(200, json={"healthy": True, "strategies": {}})
+        )
+        campaigns = router.post(f"{_KOTBOT_URL}/campaigns").mock(return_value=action)
+        outcome = await launch_from_creative(
+            session, 1, 1, "photo", "/x.jpg", None, None, settings=_kotbot_settings()
+        )
+        assert campaigns.called
+    await session.commit()
+    return outcome.campaign_status, outcome.message
+
+
+def _collect_notifications() -> list[str]:
+    """Подписаться на уведомления оператора и вернуть накопитель."""
+    sent: list[str] = []
+
+    async def sender(text: str) -> None:
+        sent.append(text)
+
+    notifier.register_operator_notifier(sender)
+    return sent
+
+
+def test_kotbot_not_implemented_falls_back_to_stub_without_fake_success() -> None:
+    # Сервис kotbot жив (health ok), но живые флоу ещё не написаны: action → 501.
+    # Запуск обязан выглядеть как «подготовлена, но не запущена», а не как успех.
+    sent = _collect_notifications()
+
+    async def scenario(session: AsyncSession) -> tuple[str, str, str, str]:
+        status, message = await _launch_with_kotbot(
+            session, httpx.Response(501, json={"detail": "not_implemented"})
+        )
+        campaign = await get_latest_campaign_for_brief(session, 1, 1)
+        assert campaign is not None
+        return status, message, campaign.status, campaign.external_id or ""
+
+    try:
+        status, message, persisted_status, external_id = asyncio.run(_with_db(scenario))
+    finally:
+        notifier.reset_operator_notifier()
+
+    assert status == "prepared"
+    assert persisted_status == "prepared"
+    assert external_id.startswith("stub-campaign")
+    assert "не запущена" in message
+    assert sent and "⚠️" in sent[0]
+
+
+def test_kotbot_reauth_required_falls_back_to_stub() -> None:
+    # 409 = сессия протухла, нужен оператор: тот же честный путь, без «успеха».
+    sent = _collect_notifications()
+
+    async def scenario(session: AsyncSession) -> tuple[str, str, str]:
+        status, message = await _launch_with_kotbot(
+            session, httpx.Response(409, json={"detail": "reauth_required"})
+        )
+        cabinets = list((await session.execute(select(Cabinet))).scalars().all())
+        return status, message, cabinets[-1].channel
+
+    try:
+        status, message, cabinet_channel = asyncio.run(_with_db(scenario))
+    finally:
+        notifier.reset_operator_notifier()
+
+    assert status == "prepared"
+    assert "⚠️" in message
+    assert cabinet_channel == "stub"
+    assert sent
+
+
+def test_stub_failure_is_not_swallowed() -> None:
+    # Падение самой заглушки — это баг, а не отказ канала: наружу должно лететь.
+    class _BrokenStub(StubAdapter):
+        async def create_campaign_from_spec(
+            self,
+            cabinet_id: str,
+            spec: CampaignSpec,
+            *,
+            creative_ref: str | None = None,
+            title: str | None = None,
+            body: str | None = None,
+            budget_limit_day: float | None = None,
+        ) -> str:
+            raise RuntimeError("boom")
+
+    async def scenario(session: AsyncSession) -> None:
+        await launch_from_creative(
+            session,
+            1,
+            1,
+            "photo",
+            "/x.jpg",
+            None,
+            None,
+            settings=Settings(_env_file=None),
+            router=ChannelRouter(
+                {Channel.VK_API: _BrokenStub()}, ChannelConfig(default=Channel.VK_API)
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(_with_db(scenario))
 
 
 # --- остановка кампании ------------------------------------------------------------
