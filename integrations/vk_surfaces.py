@@ -144,6 +144,8 @@ class Surface:
     objective: str
     default_cta: str
     patterns: tuple[Pattern, ...]
+    # Прошла ли площадка боевое создание кампании в живом кабинете. Непроверенные
+    # в интерфейсе показываются как «скоро» и клиенту не предлагаются.
     verified: bool = False
 
     @property
@@ -242,6 +244,7 @@ VK_NEWSLETTER = Surface(
     package_id=3210,
     objective="vk_miniapps",
     default_cta="visitSite",
+    verified=True,
     patterns=_patterns(
         CTA_MINIAPP,
         TEXT_LONG,
@@ -287,6 +290,7 @@ VK_CHANNEL = Surface(
     package_id=4606,
     objective="vk_channel",
     default_cta="visitSite",
+    verified=True,
     patterns=_CHANNEL_PATTERNS,
 )
 
@@ -297,6 +301,7 @@ MAX_CHANNEL = Surface(
     package_id=4686,
     objective="max_channel",
     default_cta="visitSite",
+    verified=True,
     patterns=_CHANNEL_PATTERNS,
 )
 
@@ -310,6 +315,7 @@ OK_COMMUNITY = Surface(
     package_id=3466,
     objective="odkl",
     default_cta="signUp",
+    verified=True,
     patterns=_patterns(
         CTA_COMMUNITY,
         TEXT_LONG,
@@ -329,6 +335,7 @@ OK_PROFILE = Surface(
     package_id=3845,
     objective="odkl_profile",
     default_cta="signUp",
+    verified=True,
     patterns=_patterns(
         CTA_PROFILE,
         TEXT_LONG,

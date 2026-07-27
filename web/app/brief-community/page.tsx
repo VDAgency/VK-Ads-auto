@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { BriefForm, type BriefRow } from "@/components/BriefForm";
 import { BRIEF_GOALS } from "@/lib/briefGoals";
+import { BRIEF_SURFACES } from "@/lib/briefSurfaces";
 
 import "../brief.css";
 
@@ -52,6 +53,13 @@ const GOAL_OPTIONS = BRIEF_GOALS.map((goal) => ({
   value: goal.value,
   label: goal.label,
   disabled: !goal.enabled,
+}));
+
+// Площадки подписки — единый список для обеих форм брифа (web/lib/briefSurfaces.ts).
+const SURFACE_OPTIONS = BRIEF_SURFACES.map((surface) => ({
+  value: surface.value,
+  label: surface.label,
+  disabled: !surface.enabled,
 }));
 
 // Порядок строк = порядок COMMUNITY_FIELDS в services/brief_fields.py.
@@ -143,14 +151,23 @@ const ROWS: BriefRow[] = [
 
   { kind: "section", num: 2, title: "О продукте и услуге" },
   {
+    kind: "choices",
+    name: "target_type",
+    label: "Куда привлекаем подписчиков?",
+    hint: "Подписка возможна не только на сообщество — выберите нужный объект",
+    required: true,
+    error: "Выберите вариант",
+    options: SURFACE_OPTIONS,
+  },
+  {
     kind: "input",
     name: "object_url",
-    label: "Ссылка на сообщество ВКонтакте",
-    hint: "Именно это сообщество мы будем продвигать",
+    label: "Ссылка на объект продвижения",
+    hint: "Ссылка именно на то, куда будем набирать подписчиков",
     type: "url",
     placeholder: "https://vk.com/your_group",
     required: true,
-    error: "Укажите ссылку на сообщество",
+    error: "Укажите ссылку на объект",
   },
   {
     kind: "input",

@@ -11,7 +11,9 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from services.brief_parser import parse_target_type
 from services.edit_parser import parse_edits
+from services.goals import target_title
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -26,6 +28,8 @@ router.callback_query.filter(OperatorOnly())
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
 _NOT_FOUND = "Бриф не найден."
 _VARIANT_RU = {"individual": "физлицо", "community": "сообщество"}
+# Ярлык поля «куда привлекаем» — см. services/brief_fields.py.
+_TARGET_LABEL = "Куда привлекаем"
 _STATUS_RU = {
     "received": "принят",
     "prepared": "готов к запуску",
@@ -41,6 +45,19 @@ _EDIT_UNPARSED = (
 )
 
 
+def _resolved_surface(card: BriefCard) -> str | None:
+    """Площадка, на которую реально уйдёт кампания, — как её понял разбор брифа.
+
+    Оператор пишет «куда привлекаем» словами, а площадок семь, и непонятое значение
+    молча трактуется как сообщество. Поэтому показываем распознанный вариант рядом с
+    исходным текстом: ошибка в поле видна до запуска, а не после.
+    """
+    for field in card.fields:
+        if field.label == _TARGET_LABEL:
+            return target_title(parse_target_type(field.value or "").value)
+    return None
+
+
 def _render_card(card: BriefCard) -> str:
     """Текст карточки: заголовок + контакты клиента + нумерованные поля + статус креатива."""
     variant = _VARIANT_RU.get(card.variant, card.variant)
@@ -53,6 +70,9 @@ def _render_card(card: BriefCard) -> str:
     lines = [f"📋 Бриф №{card.brief_id} · {variant} · {status}", header_who, ""]
     lines += [f"{field.n}. {field.label}: {field.value or '—'}" for field in card.fields]
     lines.append("")
+    surface = _resolved_surface(card)
+    if surface:
+        lines.append(f"🎯 Площадка: {surface} (список — /surfaces)")
     lines.append("🖼 Креатив: " + ("загружен" if card.has_creative else "не загружен"))
     return "\n".join(lines)
 

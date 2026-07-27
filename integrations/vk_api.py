@@ -379,15 +379,19 @@ class VkApiAdapter(PlatformAdapter):
             group.raise_for_status()
 
     async def _campaign_ids(self, campaign_id: str) -> list[str]:
-        """Id вложенных групп объявлений (в терминах API — `campaigns`)."""
+        """Id групп объявлений плана.
+
+        ⚠️ Читаем через `/ad_groups.json?_ad_plan_id=`, а НЕ через вложенное поле
+        `campaigns` у `/ad_plans.json`: на чтение оно приходит пустым, хотя при
+        создании обязательно (боевая проверка 2026-07-27). На пустом списке
+        двухуровневая остановка молча вырождалась в остановку одного плана.
+        """
         response = await self._request(
-            "GET", "/ad_plans.json", params={"_id": campaign_id, "fields": "id,campaigns"}
+            "GET", "/ad_groups.json", params={"_ad_plan_id": campaign_id, "fields": "id"}
         )
         response.raise_for_status()
         items = response.json().get("items") or []
-        if not items:
-            return []
-        return [str(entry["id"]) for entry in items[0].get("campaigns") or [] if "id" in entry]
+        return [str(entry["id"]) for entry in items if "id" in entry]
 
     async def get_status(self, campaign_id: str) -> str:
         """Текущий статус кампании (`active`/`blocked`/…); `unknown`, если поля нет."""

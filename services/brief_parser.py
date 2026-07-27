@@ -318,10 +318,16 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
     amount, needs_discussion = parse_budget(get("budget"))
     age_from, age_to = parse_age(get("age_from"), get("age_to"))
 
-    if variant is BriefVariant.COMMUNITY:
+    # Площадку выбирает клиент в обеих формах брифа: подписка возможна не только на
+    # сообщество. Пустое поле у бизнес-брифа — сообщество, у физлица — личная страница:
+    # так ведут себя значения по умолчанию в формах.
+    raw_target = get("target_type")
+    if raw_target:
+        target_type = parse_target_type(raw_target)
+    elif variant is BriefVariant.COMMUNITY:
         target_type = TargetType.COMMUNITY
     else:
-        target_type = parse_target_type(get("target_type"))
+        target_type = TargetType.PERSONAL_PAGE
 
     contact = Contact(
         email=get("email") or None,

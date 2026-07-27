@@ -72,10 +72,8 @@ def _run(scenario: Callable[[respx.MockRouter], Awaitable[T]]) -> T:
             )
             # Создание неактивно по умолчанию: VK отдаёт кампанию активной, и адаптер
             # сразу гасит её вместе с вложенными группами.
-            router.get(f"{BASE_URL}/ad_plans.json").mock(
-                return_value=httpx.Response(
-                    200, json={"items": [{"id": 26135882, "campaigns": [{"id": 147206867}]}]}
-                )
+            router.get(f"{BASE_URL}/ad_groups.json").mock(
+                return_value=httpx.Response(200, json={"items": [{"id": 147206867}]})
             )
             router.post(url__regex=rf"{BASE_URL}/ad_plans/\d+\.json").mock(
                 return_value=httpx.Response(204)
