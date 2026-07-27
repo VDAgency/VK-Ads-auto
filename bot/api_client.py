@@ -124,6 +124,8 @@ class BriefCard:
     fields: list[BriefFieldItem]
     has_creative: bool
     campaign_status: str | None
+    # Распознанная площадка подписки — приходит из ядра готовой строкой.
+    surface_title: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +223,7 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         ],
         has_creative=bool(payload.get("has_creative", False)),
         campaign_status=payload.get("campaign_status"),
+        surface_title=str(payload.get("surface_title") or ""),
     )
 
 

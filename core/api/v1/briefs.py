@@ -81,6 +81,8 @@ class BriefCardOut(BaseModel):
     fields: list[BriefFieldOut]
     has_creative: bool
     campaign_status: str | None = None
+    # Распознанная площадка подписки — считает ядро, интерфейсы только показывают.
+    surface_title: str = ""
 
 
 class BriefEditIn(BaseModel):
@@ -141,6 +143,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         fields=[BriefFieldOut(n=f.number, label=f.label, value=f.value) for f in view.fields],
         has_creative=view.has_creative,
         campaign_status=view.campaign_status,
+        surface_title=view.surface_title,
     )
 
 

@@ -79,6 +79,8 @@ export type BriefCard = {
   fields: BriefField[];
   has_creative: boolean;
   campaign_status?: string | null;
+  /** Распознанная площадка подписки — считает ядро, здесь только показываем. */
+  surface_title?: string;
   unknown?: number[];
 };
 
