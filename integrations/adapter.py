@@ -70,6 +70,7 @@ class PlatformAdapter(ABC):
         title: str | None = None,
         body: str | None = None,
         budget_limit_day: float | None = None,
+        activate: bool = False,
     ) -> str:
         """Создать кампанию целиком по спеке; вернуть её идентификатор.
 

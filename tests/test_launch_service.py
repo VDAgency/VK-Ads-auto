@@ -491,6 +491,7 @@ def test_stub_failure_is_not_swallowed() -> None:
             title: str | None = None,
             body: str | None = None,
             budget_limit_day: float | None = None,
+            activate: bool = False,
         ) -> str:
             raise RuntimeError("boom")
 
@@ -588,6 +589,7 @@ def test_spec_is_passed_to_adapter_untouched() -> None:
             title: str | None = None,
             body: str | None = None,
             budget_limit_day: float | None = None,
+            activate: bool = False,
         ) -> str:
             seen.append(spec)
             assert budget_limit_day is not None

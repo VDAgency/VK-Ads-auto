@@ -21,6 +21,7 @@ def test_menu_has_expected_commands() -> None:
         "cabinets",
         "stats",
         "stop_campaign",
+        "surfaces",
         "admin",
         "link_userbot",
         "link_kotbot",

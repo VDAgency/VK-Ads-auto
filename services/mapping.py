@@ -16,10 +16,15 @@ from services.brief_parser import Gender, Goal, ParsedBrief, TargetType
 # Цель «подписчики/вступления в сообщество» в VK Ads API.
 SOCIAL_ENGAGEMENT = "socialengagement"
 
-# Тип рекламируемого объекта — нейтральные значения, общие для любых площадок.
+# Площадка подписки — нейтральные значения, общие для любых рекламных систем.
 # Пусто = неизвестно (адаптер догадывается по ссылке, как раньше).
 OBJECT_KIND_COMMUNITY = TargetType.COMMUNITY.value
 OBJECT_KIND_PERSONAL = TargetType.PERSONAL_PAGE.value
+OBJECT_KIND_NEWSLETTER = TargetType.NEWSLETTER.value
+OBJECT_KIND_VK_CHANNEL = TargetType.VK_CHANNEL.value
+OBJECT_KIND_MAX_CHANNEL = TargetType.MAX_CHANNEL.value
+OBJECT_KIND_OK_COMMUNITY = TargetType.OK_COMMUNITY.value
+OBJECT_KIND_OK_PROFILE = TargetType.OK_PROFILE.value
 
 _VK_AGE_MIN = 14
 _VK_AGE_MAX = 75
