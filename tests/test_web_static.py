@@ -177,9 +177,22 @@ def test_admin_page_served_with_sections() -> None:
     assert "Пришли брифы" in body
     assert "Ждём брифы" in body
     assert "Кампании" in body
+    assert "Рекламные кабинеты" in body  # управление кабинетами доступно и в вебе
     assert 'id="logout"' in body
     assert 'id="need-auth"' in body
     assert 'id="app"' in body
+
+
+def test_admin_page_never_ships_a_token_field_value() -> None:
+    """Токен кабинета вводится, но не выводится: в разметке его быть не должно.
+
+    Проверка грубая по построению — именно поэтому и полезная: если кто-то
+    добавит показ токена в списке, тест это заметит.
+    """
+    client = TestClient(create_app())
+    body = client.get("/admin.html").text
+    assert "access_token=" not in body
+    assert "token_encrypted" not in body
 
 
 _BRIEF_PAGES = {
