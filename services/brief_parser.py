@@ -54,6 +54,7 @@ class TargetType(Enum):
     MAX_CHANNEL = "max_channel"
     OK_COMMUNITY = "ok_community"
     OK_PROFILE = "ok_profile"
+    DZEN_CHANNEL = "dzen_channel"
 
 
 class OrgType(Enum):
@@ -235,6 +236,8 @@ def parse_target_type(value: str) -> TargetType:
 
     if "рассылк" in text:
         return TargetType.NEWSLETTER
+    if "дзен" in text or "dzen" in text:
+        return TargetType.DZEN_CHANNEL
     if "max" in text or "макс" in text:
         return TargetType.MAX_CHANNEL
     if "канал" in text:

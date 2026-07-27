@@ -50,6 +50,7 @@ from integrations.vk_surfaces import (
     surface_for,
     text_limit,
 )
+from integrations.vk_video import image_to_video
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,9 @@ class VkApiAdapter(PlatformAdapter):
             # плана: id нужен уже в теле вложенного banner.
             pattern = pattern_for_creative(ad_object.surface, creative_ref)
             for slot in (ICON_SLOT, pattern.media_slot):
-                content[slot] = await self._upload_for_slot(cabinet_id, creative_ref, slot)
+                content[slot] = await self._upload_for_slot(
+                    cabinet_id, creative_ref, slot, pattern.ratio
+                )
         banner = _banner_body(
             ad_object,
             pattern=pattern,
@@ -299,14 +302,25 @@ class VkApiAdapter(PlatformAdapter):
             await self.stop(plan_id)
         return plan_id
 
-    async def _upload_for_slot(self, cabinet_id: str, creative_ref: str, slot: str) -> str:
-        """Подогнать креатив под размеры слота (если они заданы) и загрузить."""
+    async def _upload_for_slot(
+        self, cabinet_id: str, creative_ref: str, slot: str, ratio: str = ""
+    ) -> str:
+        """Подогнать креатив под слот и загрузить.
+
+        Видео-слот, а прислали картинку — собираем из неё короткий ролик (ffmpeg,
+        `integrations/vk_video.py`): клиент, который не умеет монтировать, видео не
+        пришлёт, а часть шаблонов принимает только его. Иконка при этом остаётся
+        картинкой — она обязательна во всех шаблонах и всегда статична.
+        """
+        work_dir = Path(creative_ref).parent / "_vk"
+        if slot.startswith("video_") and not is_video(creative_ref):
+            video = await image_to_video(creative_ref, ratio or "1:1", work_dir)
+            return await self.upload_creative(cabinet_id, str(video))
+
         target = slot_size(slot)
         if target is None or is_video(creative_ref):
             return await self.upload_creative(cabinet_id, creative_ref)
-        prepared = await asyncio.to_thread(
-            fit_to_slot, creative_ref, target, Path(creative_ref).parent / "_vk"
-        )
+        prepared = await asyncio.to_thread(fit_to_slot, creative_ref, target, work_dir)
         return await self.upload_creative(cabinet_id, str(prepared))
 
     async def create_url_object(self, object_url: str) -> str:
@@ -489,19 +503,25 @@ def _banner_body(
 ) -> dict[str, Any]:
     """Тело вложенного объявления: медиа по слотам, тексты и ссылка на объект рекламы.
 
-    Имена слотов берутся из шаблона, подобранного под креатив: у каждой площадки своя
-    кнопка (`cta_community_vk`, `cta_miniapp_vk`, `cta_sites_full`, …) и свой лимит
-    текста — у каналов VK и MAX это `text_90`, а не привычные 2000 символов.
+    Имена слотов берутся из шаблона, подобранного под креатив: у каждой площадки свои
+    кнопка и лимиты. Крайние случаи, ради которых слоты и живут в справочнике:
+    у каналов VK и MAX текст — `text_90`, а не 2000 символов; у Дзена кнопки нет
+    вовсе, заголовок ограничен 25 символами, требуется имя канала и ссылка уходит
+    в слот `dzen_publication`, а не в `primary`.
 
-    `urls.primary` принимает ТОЛЬКО `id` заранее созданного url-объекта: поля `url` и
+    Слот ссылки принимает ТОЛЬКО `id` заранее созданного url-объекта: поля `url` и
     `url_object_type` в запросе доступны лишь на чтение (`read_only_field`), а без `id`
     приходит `required / Empty value` (боевая проверка 2026-07-27).
     """
     textblocks: dict[str, dict[str, str]] = {
-        SLOT_TITLE: {"text": title},
+        pattern.title_slot: {"text": _fit(title, text_limit(pattern.title_slot))},
         pattern.text_slot: {"text": _fit(text, text_limit(pattern.text_slot))},
-        pattern.cta_slot: {"text": cta or ad_object.surface.default_cta},
     }
+    if pattern.cta_slot:
+        textblocks[pattern.cta_slot] = {"text": cta or ad_object.surface.default_cta}
+    if pattern.name_slot:
+        # Дзен показывает имя канала отдельной строкой; берём заголовок объявления.
+        textblocks[pattern.name_slot] = {"text": _fit(title, text_limit(pattern.name_slot))}
     if about_company:
         # Юр. данные рекламодателя. Слот необязательный во всех шаблонах площадок.
         textblocks[SLOT_ABOUT_COMPANY] = {
@@ -511,7 +531,7 @@ def _banner_body(
     return {
         "content": _content_body(content),
         "textblocks": textblocks,
-        "urls": {"primary": {"id": int(url_id)}},
+        "urls": {ad_object.surface.url_slot: {"id": int(url_id)}},
     }
 
 

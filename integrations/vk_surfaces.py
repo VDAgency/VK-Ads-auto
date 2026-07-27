@@ -55,6 +55,10 @@ TEXT_SLOT_LIMITS: dict[str, int] = {
     "text_2000": 2000,
     "text_90": 90,
     SLOT_ABOUT_COMPANY: 115,
+    # Дзен: свои имена слотов и заметно более жёсткие лимиты.
+    "name_140": 140,
+    "title_25": 25,
+    "text_40": 40,
 }
 
 # Соотношения сторон, которые различает VK.
@@ -79,6 +83,11 @@ CTA_SITES = "cta_sites_full"
 
 TEXT_LONG = "text_2000"
 TEXT_SHORT = "text_90"
+
+# Слот ссылки на объект рекламы. У всех площадок это `primary`, и только Дзен
+# требует собственный слот.
+URL_SLOT_PRIMARY = "primary"
+URL_SLOT_DZEN = "dzen_publication"
 
 _DURATION_RE = re.compile(r"_(\d+)s$")
 
@@ -107,12 +116,19 @@ def _slot_ratio(slot: str) -> str:
 
 @dataclass(frozen=True)
 class Pattern:
-    """Один разрешённый шаблон объявления: основной медиа-слот и его текстовая обвязка."""
+    """Один разрешённый шаблон объявления: основной медиа-слот и его текстовая обвязка.
+
+    Имена текстовых слотов различаются по площадкам, а у Дзена кнопки нет вовсе —
+    поэтому слоты хранятся здесь, а не берутся из общих констант.
+    """
 
     pattern_id: int
     media_slot: str
-    cta_slot: str
+    cta_slot: str | None
     text_slot: str
+    title_slot: str = SLOT_TITLE
+    # Дзен требует ещё имя канала (`name_140`); у остальных площадок такого слота нет.
+    name_slot: str | None = None
 
     @property
     def is_video(self) -> bool:
@@ -144,6 +160,7 @@ class Surface:
     objective: str
     default_cta: str
     patterns: tuple[Pattern, ...]
+    url_slot: str = URL_SLOT_PRIMARY
     # Прошла ли площадка боевое создание кампании в живом кабинете. Непроверенные
     # в интерфейсе показываются как «скоро» и клиенту не предлагаются.
     verified: bool = False
@@ -165,9 +182,18 @@ class Surface:
         return self.patterns[0]
 
 
-def _patterns(cta: str, text: str, table: dict[int, str]) -> tuple[Pattern, ...]:
+def _patterns(
+    cta: str | None,
+    text: str,
+    table: dict[int, str],
+    *,
+    title: str = SLOT_TITLE,
+    name: str | None = None,
+) -> tuple[Pattern, ...]:
     """Собрать шаблоны площадки из таблицы «id шаблона → основной медиа-слот»."""
-    return tuple(Pattern(pattern_id, slot, cta, text) for pattern_id, slot in table.items())
+    return tuple(
+        Pattern(pattern_id, slot, cta, text, title, name) for pattern_id, slot in table.items()
+    )
 
 
 # --- ВКонтакте: сообщество (пакет 3122) --------------------------------------------
@@ -348,6 +374,33 @@ OK_PROFILE = Surface(
     ),
 )
 
+# --- Дзен: подписка на канал (пакет 3642) ------------------------------------------
+# Площадка живёт по своим правилам: ссылка идёт в слот `dzen_publication`, кнопки нет
+# вовсе, а тексты втрое короче привычных. И главное — минимальный дневной бюджет
+# 10 000 ₽ против 100 ₽ у всех остальных площадок (боевая проверка 2026-07-27),
+# поэтому предлагать её клиенту с бюджетом «5 000 ₽ на месяц» бессмысленно.
+DZEN_CHANNEL = Surface(
+    kind="dzen_channel",
+    title="Канал Дзен",
+    hint="ссылка на канал Дзен: dzen.ru/…",
+    package_id=3642,
+    objective="dzen",
+    default_cta="",
+    verified=True,
+    url_slot=URL_SLOT_DZEN,
+    patterns=_patterns(
+        None,
+        "text_40",
+        {
+            578: "image_600x600",
+            580: "image_1080x607",
+            581: "image_1080x1350",
+        },
+        title="title_25",
+        name="name_140",
+    ),
+)
+
 SURFACES: tuple[Surface, ...] = (
     VK_COMMUNITY,
     VK_PERSONAL,
@@ -356,6 +409,7 @@ SURFACES: tuple[Surface, ...] = (
     MAX_CHANNEL,
     OK_COMMUNITY,
     OK_PROFILE,
+    DZEN_CHANNEL,
 )
 
 _BY_KIND: dict[str, Surface] = {surface.kind: surface for surface in SURFACES}

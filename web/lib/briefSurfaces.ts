@@ -31,6 +31,7 @@ export const BRIEF_SURFACES: BriefSurfaceOption[] = [
   { value: "канал MAX", label: "🅼 Канал MAX", enabled: true },
   { value: "сообщество в Одноклассниках", label: "🟠 Сообщество в Одноклассниках", enabled: true },
   { value: "профиль в Одноклассниках", label: "🟠 Профиль в Одноклассниках", enabled: true },
+  { value: "канал Дзен", label: "📄 Канал Дзен", enabled: true },
 ];
 
 /** Площадка по умолчанию для брифа физлица — личная страница. */
