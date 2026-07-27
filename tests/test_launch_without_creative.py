@@ -41,3 +41,38 @@ def test_core_exposes_a_launch_without_creative_entry_point() -> None:
     from services.creative_intake import launch_without_creative
 
     assert callable(launch_without_creative)
+
+
+def test_bot_card_offers_launch_instead_of_creative() -> None:
+    """У площадки без креатива кнопка загрузки заменяется на запуск."""
+    from bot.keyboards import brief_card_keyboard
+
+    with_creative = brief_card_keyboard(1, needs_creative=True)
+    without = brief_card_keyboard(1, needs_creative=False)
+
+    def actions(markup: object) -> set[str]:
+        return {
+            button.callback_data.split(":", 1)[0]
+            for row in markup.inline_keyboard  # type: ignore[attr-defined]
+            for button in row
+        }
+
+    assert actions(with_creative) == {"edit", "creative"}
+    assert actions(without) == {"edit", "launch"}
+
+
+def test_surfaces_help_groups_by_goal_and_flags_creative() -> None:
+    from bot.handlers.surfaces import render_surfaces
+    from services.goals import goal_titles
+
+    text = render_surfaces()
+    for title in goal_titles().values():
+        assert title in text, title
+    # Оператор должен видеть, где картинку просить не нужно.
+    assert "креатив не нужен" in text
+
+
+def test_card_view_reports_whether_a_creative_is_needed() -> None:
+    from services.brief_view import BriefCardView
+
+    assert "surface_needs_creative" in BriefCardView.__annotations__

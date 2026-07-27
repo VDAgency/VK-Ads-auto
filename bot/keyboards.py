@@ -67,18 +67,27 @@ def recent_briefs_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup
     )
 
 
-def brief_card_keyboard(brief_id: int) -> InlineKeyboardMarkup:
-    """Действия над карточкой брифа: правки (`edit:{id}`) и загрузка креатива (`creative:{id}`)."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Внести правки", callback_data=f"edit:{brief_id}")],
+def brief_card_keyboard(brief_id: int, *, needs_creative: bool = True) -> InlineKeyboardMarkup:
+    """Действия над карточкой брифа: правки, креатив либо запуск без него.
+
+    Продвижение готового поста, клипа или трека креатива не требует — объявлением
+    служит сам объект. Показывать там кнопку загрузки значило бы просить у оператора
+    картинку, которая никуда не пойдёт.
+    """
+    rows = [[InlineKeyboardButton(text="✏️ Внести правки", callback_data=f"edit:{brief_id}")]]
+    if needs_creative:
+        rows.append(
+            [InlineKeyboardButton(text="🖼 Загрузить креатив", callback_data=f"creative:{brief_id}")]
+        )
+    else:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="🖼 Загрузить креатив", callback_data=f"creative:{brief_id}"
+                    text="🚀 Запустить без креатива", callback_data=f"launch:{brief_id}"
                 )
-            ],
-        ]
-    )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def creative_confirm_keyboard() -> InlineKeyboardMarkup:
