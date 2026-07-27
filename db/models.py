@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base, TenantMixin
@@ -47,6 +47,62 @@ class IntegrationConfig(TenantMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     default_channel: Mapped[str] = mapped_column(String(32), default="vk_api")
     channel_healthy: Mapped[bool] = mapped_column(default=True)
+
+
+class AdAccount(TenantMixin, Base):
+    """Доступ оператора к рекламному кабинету VK Ads (spec 2026-07-27 §4).
+
+    НЕ путать с `Cabinet`: та описывает, где крутится реклама конкретного клиента
+    по конкретному объекту, и создаётся системой при запуске. `AdAccount` — пул
+    доступов оператора, заводится руками и несёт секрет.
+
+    Проверено живыми запросами 2026-07-27: параметр `sudo` работает только в
+    веб-интерфейсе, через API игнорируется — значит один кабинет = один токен,
+    и одним агентским токеном несколько кабинетов не покрыть.
+
+    `token_encrypted`/`refresh_encrypted` — Fernet (`services.secret_box`); наружу
+    отдаётся только `token_tail`. Удаление — мягкое: `status='archived'` плюс
+    затирание обоих секретов в NULL.
+
+    `advertiser_kind` — чью рекламу размещаем в кабинете: `owner` (владельца) или
+    `third_party` (конечного рекламодателя, тогда заполнены `advertiser_*`).
+    Признак информационный: маркировку (erid/ЕРИР) присваивает сама площадка.
+    """
+
+    __tablename__ = "ad_account"
+    __table_args__ = (
+        Index("ix_ad_account_tenant", "account_id", "status"),
+        # Один активный кабинет на один VK-id внутри тенанта. Частичный индекс:
+        # архивные строки не мешают завести кабинет заново после удаления.
+        Index(
+            "uq_ad_account_active",
+            "account_id",
+            "external_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    external_id: Mapped[str] = mapped_column(String(64))
+    username: Mapped[str | None] = mapped_column(String(128), default=None)
+    token_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
+    refresh_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
+    token_tail: Mapped[str] = mapped_column(String(8), default="")
+    advertiser_kind: Mapped[str] = mapped_column(String(16), default="owner")
+    advertiser_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    advertiser_inn: Mapped[str | None] = mapped_column(String(16), default=None)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    health: Mapped[str] = mapped_column(String(16), default="unknown")
+    health_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    health_error: Mapped[str | None] = mapped_column(String(255), default=None)
+    balance_rub: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class Client(TenantMixin, Base):
@@ -182,6 +238,10 @@ class Campaign(TenantMixin, Base):
     `spec_json` — сериализованная `CampaignSpec` (раскладка брифа).
     `cabinet_id` — рекламный кабинет, в котором запущена кампания; NULL у строк,
     созданных до появления таблицы `cabinet` (миграция 0009).
+    `ad_account_id` — доступ к кабинету площадки, которым кампания создана. Нужен
+    не ради истории: остановить кампанию и забрать её статистику можно только
+    токеном ТОГО кабинета, где она заведена (миграция 0010). NULL — у строк,
+    созданных, когда токен был один и лежал в `.env`.
     """
 
     __tablename__ = "campaign"
@@ -191,6 +251,9 @@ class Campaign(TenantMixin, Base):
     client_id: Mapped[int | None] = mapped_column(ForeignKey("client.id"), index=True, default=None)
     cabinet_id: Mapped[int | None] = mapped_column(
         ForeignKey("cabinet.id"), nullable=True, index=True, default=None
+    )
+    ad_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ad_account.id"), nullable=True, index=True, default=None
     )
     status: Mapped[str] = mapped_column(String(16), default="prepared")
     objective: Mapped[str] = mapped_column(String(32))
