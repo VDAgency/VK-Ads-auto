@@ -38,7 +38,7 @@ def test_landing_has_brand_and_hero_headline() -> None:
     body = client.get("/").text
     # Бренд лендинга и заголовок героя.
     assert 'Ads<span class="lp-brand__dot">·</span>auto' in body
-    assert "От брифа до запущенной кампании" in body
+    assert "Бриф вместо технического задания" in body
 
 
 def test_landing_links_both_brief_forms() -> None:
@@ -117,23 +117,34 @@ def test_landing_has_cabinet_login_link() -> None:
 # неавторизованных проверяются прогоном поведения по чек-листу спеки §7.
 
 
-def test_cabinet_page_has_logout() -> None:
+def test_cabinet_page_shell_has_header() -> None:
+    """Оболочка кабинета отдаётся статикой.
+
+    Кнопка выхода рендерится условно — только когда кабинет загружен, поэтому
+    в статическом HTML её нет. Прежде она лежала в разметке всегда и
+    проверялась по id. Выход проверяется прогоном по чек-листу спеки §7.
+    """
     client = TestClient(create_app())
     body = client.get("/cabinet.html").text
-    assert 'id="logout"' in body
-    assert "Выйти" in body
+    assert "cab-header" in body
+    assert 'Ads<span class="cab-brand__dot">·</span>auto' in body
 
 
-def test_cabinet_page_has_setpassword_screen() -> None:
+def test_cabinet_page_shell_served() -> None:
+    """Оболочка кабинета отдаётся статикой.
+
+    Экран установки пароля теперь рендерится условно — только когда ядро
+    ответило `password_set: false` на magic-link. Прежде он лежал в разметке
+    скрытым и проверялся строкой; сейчас его в статике нет, и это осознанно:
+    незачем отдавать всем разметку экрана, который увидит один клиент из ста.
+    Поведение первого входа проверяется прогоном по чек-листу спеки §7.
+    """
     client = TestClient(create_app())
     resp = client.get("/cabinet.html")
     assert resp.status_code == 200
     body = resp.text
-    # Экран установки пароля (первый вход) с крупными полями + инструкция.
-    assert "Задайте пароль для входа" in body
-    assert "Запишите или запомните его" in body
-    assert "form-field" in body  # полноширинные поля, а не grid .field
-    assert 'id="setpw-btn"' in body
+    assert "cab-brand" in body  # шапка кабинета
+    assert "skip-link" in body  # ссылка «к содержимому»
 
 
 def test_landing_has_login_modal() -> None:
@@ -177,8 +188,8 @@ def test_admin_page_served_with_sections() -> None:
     assert "Пришли брифы" in body
     assert "Ждём брифы" in body
     assert "Кампании" in body
-    assert 'id="logout"' in body
-    assert 'id="need-auth"' in body
+    assert "adm-gate" in body  # экран «вход только из бота»
+    assert "adm-nav__btn" in body  # навигация разделов
     assert 'id="app"' in body
 
 
@@ -239,7 +250,9 @@ def test_brief_inputs_are_styled_regardless_of_type_attribute() -> None:
         css = page_css(client, page)
         # Селектор по элементу с исключением переключателей (минификатор
         # выкидывает кавычки внутри атрибута, поэтому проверяем обе формы).
-        assert "input:not([type=radio])" in css or 'input:not([type="radio"])' in css
+        # Поля стилизуются селектором по элементу, без опоры на атрибут type.
+        assert ".bf input" in css
+        assert "[type=text]" not in css and '[type="text"]' not in css
         # Диапазон возраста — собственная сетка, а не растянутые на всю строку поля.
         assert ".bf-age" in css
 
