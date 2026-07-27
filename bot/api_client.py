@@ -126,6 +126,7 @@ class BriefCard:
     campaign_status: str | None
     # Распознанная площадка подписки — приходит из ядра готовой строкой.
     surface_title: str = ""
+    surface_needs_creative: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +260,7 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         has_creative=bool(payload.get("has_creative", False)),
         campaign_status=payload.get("campaign_status"),
         surface_title=str(payload.get("surface_title") or ""),
+        surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
     )
 
 
@@ -361,6 +363,36 @@ async def upload_creative(
             "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
             "Выберите другой кабинет или добавьте его заново через /cabinets."
         )
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    data = response.json()
+    return CreativeResult(
+        campaign_status=str(data["campaign_status"]),
+        campaign_id=int(data["campaign_id"]),
+        message=str(data["message"]),
+    )
+
+
+async def launch_brief(brief_id: int) -> CreativeResult:
+    """`POST /briefs/{id}/launch`: запустить кампанию без креатива.
+
+    Для площадок, где объявлением служит сам объект (пост, клип, трек). Ошибки
+    разбираются так же, как у загрузки креатива: 404 → `BriefNotFound`,
+    422 → `CreativeRejected`, сеть/5xx → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
+    try:
+        async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
+            response = await client.post(url, json={})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise BriefNotFound(str(brief_id))
+    if response.status_code == 422:
+        detail: Any = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        raise CreativeRejected(_creative_reject_reason(detail))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()

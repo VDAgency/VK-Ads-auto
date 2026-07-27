@@ -81,6 +81,8 @@ export type BriefCard = {
   campaign_status?: string | null;
   /** Распознанная площадка подписки — считает ядро, здесь только показываем. */
   surface_title?: string;
+  /** Нужен ли креатив: продвижение готового поста обходится без него. */
+  surface_needs_creative?: boolean;
   unknown?: number[];
 };
 

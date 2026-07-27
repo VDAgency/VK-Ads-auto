@@ -13,14 +13,14 @@ from __future__ import annotations
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from services.goals import subscription_targets
+from services.goals import goal_titles, subscription_targets
 
 from bot.access import OperatorOnly
 
 router = Router(name="surfaces")
 router.message.filter(OperatorOnly())
 
-_INTRO = "🎯 <b>Куда можно привлекать подписчиков</b>\n"
+_INTRO = "🎯 <b>Куда можно вести рекламу</b>\n"
 _OUTRO = (
     "\nПлощадка берётся из поля «Куда привлекаем» в брифе. Чтобы сменить её, откройте "
     "карточку брифа, нажмите «Внести правки» и отправьте номер этого поля с новым "
@@ -29,13 +29,21 @@ _OUTRO = (
 
 
 def render_surfaces() -> str:
-    """Текст справки: название площадки, что писать в бриф и какая нужна ссылка."""
+    """Текст справки: площадки по целям, что писать в бриф и нужен ли креатив."""
+    targets = subscription_targets()
     lines = [_INTRO]
-    for target in subscription_targets():
-        mark = "✅" if target.available else "🔜"
-        lines.append(f"{mark} <b>{target.title}</b>")
-        lines.append(f"   в бриф: «{target.kind}» или своими словами")
-        lines.append(f"   {target.hint}")
+    for goal, goal_title in goal_titles().items():
+        group = [target for target in targets if target.goal == goal]
+        if not group:
+            continue
+        lines.append(f"<b>— {goal_title} —</b>")
+        for target in group:
+            mark = "✅" if target.available else "🔜"
+            # Где объявлением служит сам объект, картинку просить не нужно.
+            creative = "" if target.needs_creative else "  (креатив не нужен)"
+            lines.append(f"{mark} <b>{target.title}</b>{creative}")
+            lines.append(f"   в бриф: «{target.kind}» или своими словами")
+            lines.append(f"   {target.hint}")
         lines.append("")
     lines.append(_OUTRO)
     return "\n".join(lines)

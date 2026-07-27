@@ -89,6 +89,8 @@ class BriefCardOut(BaseModel):
     campaign_status: str | None = None
     # Распознанная площадка подписки — считает ядро, интерфейсы только показывают.
     surface_title: str = ""
+    # Нужен ли креатив: у продвижения готового поста его не спрашивают.
+    surface_needs_creative: bool = True
 
 
 class BriefEditIn(BaseModel):
@@ -154,6 +156,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         has_creative=view.has_creative,
         campaign_status=view.campaign_status,
         surface_title=view.surface_title,
+        surface_needs_creative=view.surface_needs_creative,
     )
 
 

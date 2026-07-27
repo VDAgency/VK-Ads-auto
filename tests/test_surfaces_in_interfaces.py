@@ -69,5 +69,6 @@ def test_card_view_carries_the_surface_for_both_interfaces() -> None:
         has_creative=False,
         campaign_status=None,
         surface_title="Профиль в Одноклассниках",
+        surface_needs_creative=True,
     )
     assert view.surface_title == "Профиль в Одноклассниках"
