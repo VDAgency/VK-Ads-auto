@@ -6,18 +6,24 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from db.session import get_sessionmaker
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from services.ad_accounts import seed_from_env
 from services.notifier_telegram import register_telegram_notifier
 from starlette.responses import Response
 from starlette.types import Scope
 
 from core.api import health
 from core.api.v1 import router as v1_router
+from core.api.v1.ad_accounts import DEFAULT_ACCOUNT_ID
+
+logger = logging.getLogger(__name__)
 
 # Каталог собранного фронта Блока 2 (Next.js static export). Корень репозитория /
 # web / out. Наполняется `npm run build`; в образ кладётся отдельной стадией
@@ -49,12 +55,32 @@ class _NoCacheStaticFiles(StaticFiles):
         return response
 
 
+async def _seed_ad_account_from_env() -> None:
+    """Перевести токен из `.env` в таблицу кабинетов (spec 2026-07-27 §8.4).
+
+    Переезд без простоя: пока кабинетов нет, запуск работает по токену из
+    окружения, как раньше; на первом старте с ключом шифрования кабинет
+    заводится сам, и дальше источник правды — база.
+
+    Посев одноразовый (только при пустой таблице) — иначе он воскрешал бы
+    кабинет, который оператор сознательно удалил. Любая ошибка не должна
+    ронять старт ядра: попробуем на следующем.
+    """
+    try:
+        async with get_sessionmaker()() as session:
+            if await seed_from_env(session, DEFAULT_ACCOUNT_ID) is not None:
+                await session.commit()
+    except Exception:  # noqa: BLE001 — старт ядра важнее посева
+        logger.warning("ad account seeding from environment failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Старт процесса ядра: подключить транспорты, живущие в процессе api."""
     # Регистрируем транспорт уведомлений оператору (см. services/notifier_telegram.py):
     # POST /briefs обрабатывается здесь, в процессе api, а бот — отдельный процесс.
     register_telegram_notifier()
+    await _seed_ad_account_from_env()
     yield
 
 

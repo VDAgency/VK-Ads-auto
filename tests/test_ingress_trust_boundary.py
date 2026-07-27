@@ -34,6 +34,26 @@ def test_compose_publishes_api_only_on_loopback() -> None:
     assert '- "8000:8000"' not in compose, "Осталась публикация порта 8000 на всех интерфейсах."
 
 
+def test_ad_account_routes_are_closed_from_the_internet() -> None:
+    """Через `/api/v1/ad-accounts` добавляются и удаляются токены доступа к
+    рекламным кабинетам. Снаружи этот путь обязан отдавать 404: бот ходит внутри
+    compose-сети, а веб — через `/api/v1/admin/ad-accounts` со своей авторизацией.
+    """
+    caddyfile = (_ROOT / "infra" / "Caddyfile").read_text(encoding="utf-8")
+    operator_only = next(
+        (line for line in caddyfile.splitlines() if "@operator_only" in line and "path" in line),
+        "",
+    )
+    assert "/api/v1/ad-accounts" in operator_only, (
+        "Список кабинетов должен быть закрыт снаружи: он раскрывает состав "
+        "кабинетов оператора и позволяет управлять доступами без авторизации."
+    )
+    assert "/api/v1/ad-accounts/*" in operator_only, (
+        "Закрыт должен быть и вложенный путь: иначе DELETE /api/v1/ad-accounts/{id} "
+        "остаётся доступным из интернета."
+    )
+
+
 def test_dockerfile_runs_uvicorn_behind_proxy_headers() -> None:
     dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "--proxy-headers" in dockerfile, (
