@@ -12,12 +12,14 @@ from config.settings import get_settings
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from services.ad_accounts import AccountNotFoundError, TokenUnavailableError
 from services.auth_magiclink import generate_token
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
 from services.briefs import InviteTokenError, intake_brief
 from services.creative_intake import CreativeError, intake_creative
-from services.launch_service import BriefNotFoundError
+from services.launch_service import BriefNotFoundError, UnsupportedGoalError
+from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.rate_limit import brief_rate_limit
@@ -108,6 +110,10 @@ class CreativeIn(BaseModel):
     height: int = 0
     title: str = ""
     body: str = ""
+    # Выбор оператора. Необязательные: без них поведение прежнее (токен из
+    # окружения, цель из раскладки брифа), поэтому старые вызовы не ломаются.
+    ad_account_id: int | None = None
+    goal: str | None = None
 
 
 class CreativeLaunchOut(BaseModel):
@@ -226,6 +232,8 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            ad_account_id=data.ad_account_id,
+            goal=data.goal,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
@@ -233,6 +241,12 @@ async def upload_creative(
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    except UnsupportedGoalError as exc:
+        raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="ad_account_not_found") from exc
+    except (TokenUnavailableError, NotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail="ad_account_token_unavailable") from exc
     await session.commit()
     return CreativeLaunchOut(
         campaign_status=outcome.campaign_status,

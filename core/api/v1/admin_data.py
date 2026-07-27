@@ -23,6 +23,7 @@ from db.repositories import (
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from services.ad_accounts import AccountNotFoundError, TokenUnavailableError
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import apply_brief_edits, get_brief_card
 from services.contact import ContactParseError, detect_contact
@@ -30,7 +31,8 @@ from services.creative_intake import CreativeError, intake_creative
 from services.delivery.factory import build_delivery_router
 from services.invite_tracking import InviteView, list_pending, list_recent
 from services.invites import create_invite
-from services.launch_service import BriefNotFoundError
+from services.launch_service import BriefNotFoundError, UnsupportedGoalError
+from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.v1.admin import require_admin
@@ -255,6 +257,8 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            ad_account_id=data.ad_account_id,
+            goal=data.goal,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
@@ -262,6 +266,12 @@ async def upload_creative(
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    except UnsupportedGoalError as exc:
+        raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="ad_account_not_found") from exc
+    except (TokenUnavailableError, NotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail="ad_account_token_unavailable") from exc
     await session.commit()
     return CreativeLaunchOut(
         campaign_status=outcome.campaign_status,
