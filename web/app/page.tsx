@@ -1,487 +1,377 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 import { LoginModal } from "@/components/LoginModal";
 import { ScrollReveal } from "@/components/ScrollReveal";
 
-// Стили лендинга. Импорт в самой странице — Next привяжет CSS-чанк к этому
-// маршруту, поэтому остальные страницы его не тянут.
 import "./landing.css";
 
 export const metadata: Metadata = {
-  title: "VK-Ads-auto — запуск рекламы в VK из брифа за минуты",
+  title: "Запуск рекламы ВКонтакте из короткого брифа — Ads·auto",
   description:
-    "Независимый сервис для запуска рекламы в VK Ads: короткий бриф, авто-раскладка в настройки кампании, запуск и отслеживание. Быстрее и легче, чем вручную.",
+    "Вы заполняете бриф, сервис собирает из него настройки кампании, таргетолог проверяет и запускает рекламу ВКонтакте. Статус и результат видно в личном кабинете.",
 };
 
-// Прогрессивное улучшение. `js` на <html> включает скрытие reveal-блоков (без JS
-// контент остаётся видимым), `lp` на <body> — локальную палитру лендинга из
-// landing.css. Скрипт синхронный и стоит первым в разметке, поэтому классы
-// проставляются до отрисовки контента и мигания не будет.
-const BOOTSTRAP_CLASSES = `document.documentElement.classList.add("js");document.body.classList.add("lp");`;
+/**
+ * Блок «кто ведёт» появится, когда будут получены материалы и разрешение на
+ * публикацию: имя, фото, опыт, кейсы с цифрами. До тех пор секция не
+ * рендерится — выдумывать доказательства нельзя, а заглушка с правдоподобным
+ * текстом читалась бы как настоящая.
+ */
+type Author = {
+  name: string;
+  role: string;
+  photo: string;
+  experience: string;
+  quote: string;
+};
 
-/** Галочка в списке доверия под геро-блоком. */
-function CheckIcon() {
+const AUTHOR: Author | null = null;
+
+function BriefCardArt() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M20 6 9 17l-5-5"
-        stroke="currentColor"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <div className="lp-art" aria-hidden="true">
+      <div className="lp-art__card lp-art__card--brief">
+        <span className="lp-art__label">Бриф</span>
+        <ul className="lp-art__rows">
+          <li>
+            <span className="lp-art__n">01</span>
+            <span className="lp-art__bar" style={{ inlineSize: "62%" }} />
+          </li>
+          <li>
+            <span className="lp-art__n">02</span>
+            <span className="lp-art__bar" style={{ inlineSize: "84%" }} />
+          </li>
+          <li>
+            <span className="lp-art__n">03</span>
+            <span className="lp-art__bar" style={{ inlineSize: "48%" }} />
+          </li>
+          <li>
+            <span className="lp-art__n">04</span>
+            <span className="lp-art__bar" style={{ inlineSize: "72%" }} />
+          </li>
+        </ul>
+      </div>
+
+      <div className="lp-art__link">
+        <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
+          <path
+            d="M5 12h14M13 6l6 6-6 6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+
+      <div className="lp-art__card lp-art__card--campaign">
+        <span className="lp-art__label">Кампания</span>
+        <dl className="lp-art__specs">
+          <div>
+            <dt>Цель</dt>
+            <dd>Подписчики</dd>
+          </div>
+          <div>
+            <dt>Аудитория</dt>
+            <dd>Ж, 25–45, Москва</dd>
+          </div>
+          <div>
+            <dt>Бюджет</dt>
+            <dd className="lp-art__mono">20 000 ₽</dd>
+          </div>
+        </dl>
+        <span className="badge badge--accent lp-art__status">Запущена</span>
+      </div>
+    </div>
   );
 }
 
-/** Стрелка между шагами «как это работает». */
-function StepArrow() {
-  return (
-    <svg
-      className="lp-step__arrow"
-      width="38"
-      height="38"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M5 12h14M13 6l6 6-6 6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
+const STEPS = [
+  {
+    title: "Вы заполняете бриф",
+    text: "Понятные вопросы о том, кого и куда вы хотите привлечь. Без терминов рекламного кабинета: отвечаете своими словами.",
+  },
+  {
+    title: "Сервис собирает кампанию",
+    text: "Ответы автоматически превращаются в настройки: цель, аудитория, география, бюджет и сроки. Вручную ничего переносить не нужно.",
+  },
+  {
+    title: "Таргетолог проверяет и запускает",
+    text: "Собранную кампанию смотрит живой специалист, при необходимости правит и подтверждает запуск. Дальше статус виден в личном кабинете.",
+  },
+];
 
-function Brand() {
-  return (
-    <Link className="lp-brand" href="/" aria-label="VK-Ads-auto — на главную">
-      <span className="lp-badge" aria-hidden="true">
-        ВК
-      </span>
-      <span>
-        Ads<span className="lp-brand__dot">·</span>auto
-      </span>
-    </Link>
-  );
-}
+const FAQ = [
+  {
+    q: "Что нужно, чтобы начать?",
+    a: "Сообщество или страница ВКонтакте, которую вы продвигаете, рекламный кабинет VK Реклама и заполненный бриф. Если кабинета ещё нет, мы подготовили пошаговую инструкцию, как его создать и где взять номер.",
+  },
+  {
+    q: "Нужен ли мне свой рекламный кабинет VK?",
+    a: "Да. Реклама запускается в вашем кабинете и с вашего бюджета — так вы остаётесь владельцем аккаунта и статистики. Создание кабинета занимает несколько минут и делается один раз.",
+  },
+  {
+    q: "Какие цели рекламы доступны сейчас?",
+    a: "Сейчас доступна одна цель — подписчики в сообщество или на личную страницу. Сообщения, лид-формы и заявки через Senler появятся позже, в брифе они отмечены как недоступные.",
+  },
+  {
+    q: "Что происходит после отправки брифа?",
+    a: "Бриф попадает к таргетологу, сервис собирает из него черновик кампании. Вы получаете доступ в личный кабинет, где видно, на каком этапе находится работа.",
+  },
+  {
+    q: "Можно ли изменить что-то после отправки?",
+    a: "Да. Правки вносятся до запуска: напишите, что поменять, и кампания будет пересобрана. Каждое поле брифа пронумеровано, поэтому достаточно назвать номер и новое значение.",
+  },
+  {
+    q: "Кто отвечает за результат?",
+    a: "Кампанию собирает автоматика, но решение о запуске принимает практикующий таргетолог. Автоматизация убирает ручную работу и ускоряет старт, а за настройками стоит человек.",
+  },
+  {
+    q: "Где я вижу результат?",
+    a: "В личном кабинете: статус брифа, состояние кампании и результат по цели. Вход по паролю или по ссылке на почту.",
+  },
+];
 
 export default function Landing() {
   return (
     <>
-      <script dangerouslySetInnerHTML={{ __html: BOOTSTRAP_CLASSES }} />
+      <a className="skip-link" href="#main">
+        Перейти к содержимому
+      </a>
 
-      {/* ================= Header ================= */}
       <header className="lp-header">
         <div className="lp-container lp-header__inner">
-          <Brand />
+          <Link className="lp-brand" href="/">
+            Ads<span className="lp-brand__dot">·</span>auto
+          </Link>
           <nav className="lp-nav" aria-label="Основная навигация">
             <a className="lp-nav__link" href="#how">
               Как это работает
             </a>
-            <a className="lp-nav__link" href="#features">
-              Возможности
+            <a className="lp-nav__link" href="#faq">
+              Вопросы
             </a>
-            <a className="lp-nav__link" href="/cabinet.html" data-open-login>
-              Вход в кабинет
+            <a className="lp-nav__login" href="/cabinet.html" data-open-login>
+              Вход
             </a>
-            <a className="lp-nav__cta" href="#start">
+            <a className="btn btn--primary lp-nav__cta" href="#start">
               Заполнить бриф
             </a>
           </nav>
         </div>
       </header>
 
-      <main>
-        {/* ================= Hero ================= */}
+      <main id="main">
         <section className="lp-hero">
-          <div className="lp-hero__bg" aria-hidden="true">
-            <span className="lp-blob lp-blob--1"></span>
-            <span className="lp-blob lp-blob--2"></span>
-            <span className="lp-blob lp-blob--3"></span>
-            <div className="lp-grid"></div>
-          </div>
-
           <div className="lp-container lp-hero__inner">
             <div className="lp-hero__copy">
-              <span className="lp-eyebrow reveal">
-                <span className="lp-eyebrow__dot" aria-hidden="true"></span>
-                Реклама в VK без рутины
-              </span>
-
-              <h1 className="lp-h1 reveal reveal--d1">
-                От брифа до запущенной кампании в&nbsp;VK — <span className="lp-hl">за минуты</span>
-                , а не часы.
-              </h1>
-
-              <p className="lp-lead reveal reveal--d2">
-                Клиент заполняет короткий бриф, сервис раскладывает его в настройки кампании,
-                оператор подтверждает — и реклама уходит в VK&nbsp;Ads. Быстрее и легче, чем
-                собирать кампанию в кабинете вручную.
+              <span className="lp-eyebrow">Реклама ВКонтакте</span>
+              <h1 className="lp-h1">Бриф вместо технического задания. Запуск вместо переписки.</h1>
+              <p className="lp-lead">
+                Вы отвечаете на понятные вопросы о своём продвижении. Сервис собирает из ответов
+                настройки кампании, таргетолог проверяет их и запускает рекламу ВКонтакте.
               </p>
 
-              <div className="lp-cta-row reveal reveal--d3">
-                <a className="lp-btn lp-btn--light" href="/brief-individual.html">
-                  <span className="lp-btn__label">
+              <div className="lp-cta-row">
+                <a className="btn btn--primary lp-cta" href="/brief-individual.html">
+                  <span>
                     Заполнить бриф
-                    <small>Физлицо · личная страница</small>
+                    <small>Личная страница или сообщество</small>
                   </span>
                 </a>
-                <a className="lp-btn lp-btn--glass" href="/brief-community.html">
-                  <span className="lp-btn__label">
+                <a className="btn lp-cta" href="/brief-community.html">
+                  <span>
                     Заполнить бриф
-                    <small>Бизнес · сообщество</small>
+                    <small>Бизнес: ИП, ООО, самозанятый</small>
                   </span>
                 </a>
               </div>
 
-              <p className="lp-hero__login reveal reveal--d3">
+              <p className="lp-hero__login">
                 Уже отправляли бриф?{" "}
                 <a href="/cabinet.html" data-open-login>
                   Войти в личный кабинет
                 </a>
               </p>
-
-              <ul className="lp-trust reveal reveal--d3">
-                <li>
-                  <CheckIcon />
-                  Бриф за пару минут
-                </li>
-                <li>
-                  <CheckIcon />
-                  Настройки собираются автоматически
-                </li>
-                <li>
-                  <CheckIcon />
-                  Запуск под ключ
-                </li>
-              </ul>
             </div>
 
-            {/* Анимированная схема: бриф → авто-раскладка → запущенная кампания. */}
-            <div className="lp-hero__art reveal reveal--d2">
-              <svg
-                className="lp-art"
-                viewBox="0 0 520 440"
-                role="img"
-                aria-label="Схема: бриф превращается в запущенную кампанию VK со статистикой"
-              >
-                <title>Бриф превращается в запущенную кампанию</title>
-
-                {/* Потоки между узлами */}
-                <path className="lp-flow" d="M182 244 H252" />
-                <path className="lp-flow" d="M320 240 C 362 240, 382 250, 424 250" />
-
-                {/* Карточка брифа */}
-                <g>
-                  <rect className="lp-art__card" x="30" y="150" width="152" height="192" rx="18" />
-                  <rect className="lp-art__accent" x="50" y="172" width="70" height="14" rx="7" />
-                  <rect className="lp-art__line" x="50" y="204" width="112" height="8" rx="4" />
-                  <rect
-                    className="lp-art__line lp-art__line--muted"
-                    x="50"
-                    y="224"
-                    width="94"
-                    height="8"
-                    rx="4"
-                  />
-                  <rect
-                    className="lp-art__line lp-art__line--muted"
-                    x="50"
-                    y="244"
-                    width="102"
-                    height="8"
-                    rx="4"
-                  />
-                  <rect
-                    className="lp-art__line lp-art__line--muted"
-                    x="50"
-                    y="264"
-                    width="70"
-                    height="8"
-                    rx="4"
-                  />
-                  <circle cx="60" cy="304" r="11" fill="#12a594" />
-                  <path
-                    d="M55 304 l3.5 3.5 L65 300"
-                    fill="none"
-                    stroke="#fff"
-                    strokeWidth="2.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <rect x="80" y="300" width="72" height="8" rx="4" fill="#dbe6f5" />
-                </g>
-
-                {/* Узел авто-раскладки */}
-                <g>
-                  <circle className="lp-ring" cx="286" cy="242" r="34" />
-                  <circle className="lp-ring lp-ring--2" cx="286" cy="242" r="34" />
-                  <circle className="lp-ring-rot" cx="286" cy="242" r="30" />
-                  <circle
-                    cx="286"
-                    cy="242"
-                    r="24"
-                    fill="rgba(255,255,255,0.14)"
-                    stroke="rgba(255,255,255,0.55)"
-                    strokeWidth="1.5"
-                  />
-                  <rect x="276" y="232" width="8" height="8" rx="2" fill="#ffffff" />
-                  <rect x="288" y="232" width="8" height="8" rx="2" fill="#7dffbf" />
-                  <rect x="276" y="244" width="8" height="8" rx="2" fill="#7dffbf" />
-                  <rect x="288" y="244" width="8" height="8" rx="2" fill="#ffffff" />
-                </g>
-
-                {/* Ракета: запущенная кампания */}
-                <g className="lp-rocket">
-                  <path d="M430 214 L414 252 L430 240 Z" fill="#cfe0ff" />
-                  <path d="M466 214 L482 252 L466 240 Z" fill="#cfe0ff" />
-                  <rect x="430" y="150" width="36" height="98" rx="18" fill="#ffffff" />
-                  <path d="M430 168 a18 18 0 0 1 36 0 Z" fill="#0077ff" />
-                  <circle cx="448" cy="192" r="10" fill="#0062da" />
-                  <circle cx="448" cy="192" r="10" fill="none" stroke="#7dffbf" strokeWidth="2" />
-                  <rect x="430" y="224" width="36" height="9" fill="#cfe0ff" />
-                  <path
-                    className="lp-flame"
-                    d="M438 248 q10 30 20 0 q-4 12 -10 15 q-6 -3 -10 -15 Z"
-                  />
-                </g>
-
-                {/* Столбики статистики: отслеживание */}
-                <g>
-                  <line
-                    x1="404"
-                    y1="412"
-                    x2="502"
-                    y2="412"
-                    stroke="rgba(255,255,255,0.4)"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                  <rect className="lp-bar" x="412" y="374" width="18" height="38" rx="4" />
-                  <rect
-                    className="lp-bar lp-bar--2"
-                    x="440"
-                    y="360"
-                    width="18"
-                    height="52"
-                    rx="4"
-                  />
-                  <rect
-                    className="lp-bar lp-bar--3"
-                    x="468"
-                    y="386"
-                    width="18"
-                    height="26"
-                    rx="4"
-                  />
-                </g>
-
-                {/* Искры */}
-                <circle className="lp-spark" cx="360" cy="150" r="4" />
-                <circle className="lp-spark lp-spark--2" cx="214" cy="112" r="3" />
-                <circle className="lp-spark lp-spark--3" cx="486" cy="128" r="3.5" />
-              </svg>
+            <div className="lp-hero__art">
+              <BriefCardArt />
             </div>
           </div>
         </section>
 
-        {/* ================= Как это работает ================= */}
         <section className="lp-section" id="how">
           <div className="lp-container">
-            <div className="lp-section__head reveal">
+            <div className="lp-head reveal">
               <span className="lp-kicker">Как это работает</span>
-              <h2 className="lp-h2">Три шага от идеи до открутки</h2>
+              <h2>Три шага от брифа до запущенной рекламы</h2>
               <p className="lp-sub">
-                Никаких таблиц с настройками и ручного переноса в кабинет — сервис проходит путь от
-                заявки до запуска за вас.
+                Ручной перенос настроек в рекламный кабинет убирается целиком. Остаётся то, что
+                действительно требует человека: проверка и решение о запуске.
               </p>
             </div>
 
             <ol className="lp-steps">
-              <li className="lp-step reveal">
-                <span className="lp-step__num">1</span>
-                <h3>Бриф за пару минут</h3>
-                <p>
-                  Клиент открывает короткую форму и отвечает на понятные вопросы о продвижении.
-                  Ничего лишнего.
-                </p>
-                <StepArrow />
-              </li>
-              <li className="lp-step reveal reveal--d1">
-                <span className="lp-step__num">2</span>
-                <h3>Авто-раскладка</h3>
-                <p>
-                  Ответы автоматически превращаются в структуру кампании: цель, аудитория, формат и
-                  настройки для VK&nbsp;Ads.
-                </p>
-                <StepArrow />
-              </li>
-              <li className="lp-step reveal reveal--d2">
-                <span className="lp-step__num">3</span>
-                <h3>Запуск и отслеживание</h3>
-                <p>
-                  Оператор подтверждает — кампания уходит в VK&nbsp;Ads. Статус и результат видно в
-                  личном кабинете.
-                </p>
-              </li>
+              {STEPS.map((step, index) => (
+                <li className="lp-step reveal" key={step.title}>
+                  <span className="lp-step__num">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <h3>{step.title}</h3>
+                    <p>{step.text}</p>
+                  </div>
+                </li>
+              ))}
             </ol>
           </div>
         </section>
 
-        {/* ================= Возможности ================= */}
-        <section className="lp-section lp-section--tint" id="features">
+        <section className="lp-section lp-section--sunk">
           <div className="lp-container">
-            <div className="lp-section__head reveal">
-              <span className="lp-kicker">Почему так удобнее</span>
-              <h2 className="lp-h2">Быстрее, легче и под ключ</h2>
+            <div className="lp-head reveal">
+              <h2>Меньше рутины на каждой стороне</h2>
               <p className="lp-sub">
-                Мы убрали ручную рутину запуска, чтобы реклама стартовала без задержек, а вы
-                занимались результатом.
+                Ниже — что именно снимается с вас и с таргетолога, когда бриф становится источником
+                настроек.
               </p>
             </div>
 
-            <div className="lp-features">
-              <article className="lp-feature reveal">
-                <span className="lp-feature__icon" aria-hidden="true">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <h3>Быстрее</h3>
+            <div className="lp-bento">
+              <article className="lp-tile lp-tile--wide reveal">
+                <h3>Вам не нужно разбираться в рекламном кабинете</h3>
                 <p>
-                  Кампания собирается из брифа за <span className="lp-feature__accent">минуты</span>
-                  , а не за часы ручной настройки.
+                  Бриф написан обычным языком. Никаких групп объявлений, плейсментов и look-alike:
+                  вы описываете, кого хотите привлечь, остальное переводит сервис.
                 </p>
               </article>
 
-              <article className="lp-feature reveal reveal--d1">
-                <span className="lp-feature__icon" aria-hidden="true">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <h3>Легче</h3>
+              <article className="lp-tile reveal">
+                <h3>Настройки собираются сами</h3>
+                <p>Цель, аудитория, география, бюджет и сроки выводятся из ответов брифа.</p>
+              </article>
+
+              <article className="lp-tile reveal">
+                <h3>Правки по номерам</h3>
                 <p>
-                  Клиенту — простая форма вместо длинных ТЗ. Оператору —{" "}
-                  <span className="lp-feature__accent">готовая раскладка</span> вместо ручного
-                  ввода.
+                  Каждое поле пронумеровано. Чтобы что-то изменить, достаточно назвать номер и новое
+                  значение.
                 </p>
               </article>
 
-              <article className="lp-feature reveal reveal--d2">
-                <span className="lp-feature__icon" aria-hidden="true">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M9 12l2 2 4-4"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <path
-                      d="M12 3l7 3v6c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3Z"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <h3>Под ключ</h3>
+              <article className="lp-tile lp-tile--wide reveal">
+                <h3>Статус виден вам, а не только исполнителю</h3>
                 <p>
-                  От заявки до запуска в VK&nbsp;Ads —{" "}
-                  <span className="lp-feature__accent">весь путь</span> в одном сервисе, без
-                  переключений между инструментами.
-                </p>
-              </article>
-
-              <article className="lp-feature reveal reveal--d3">
-                <span className="lp-feature__icon" aria-hidden="true">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M4 19V5m0 14h16M8 15l3-4 3 2 4-6"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <h3>Прозрачно</h3>
-                <p>
-                  Статус брифа и запущенной кампании —{" "}
-                  <span className="lp-feature__accent">в личном кабинете</span>, понятно клиенту.
+                  В личном кабинете видно, на каком этапе бриф и что с кампанией. Не нужно писать и
+                  спрашивать, как дела.
                 </p>
               </article>
             </div>
           </div>
         </section>
 
-        {/* ================= Финальный CTA ================= */}
-        <section className="lp-cta" id="start">
+        {AUTHOR ? (
+          <section className="lp-section" id="author">
+            <div className="lp-container lp-author reveal">
+              <Image
+                className="lp-author__photo"
+                src={AUTHOR.photo}
+                alt=""
+                width={160}
+                height={160}
+              />
+              <div>
+                <span className="lp-kicker">Кто ведёт</span>
+                <h2>{AUTHOR.name}</h2>
+                <p className="lp-author__role">{AUTHOR.role}</p>
+                <p>{AUTHOR.experience}</p>
+                <blockquote className="lp-author__quote">{AUTHOR.quote}</blockquote>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="lp-section" id="faq">
+          <div className="lp-container lp-container--narrow">
+            <div className="lp-head reveal">
+              <h2>Что обычно спрашивают</h2>
+            </div>
+
+            <div className="lp-faq reveal">
+              {FAQ.map((item) => (
+                <details className="lp-faq__item" key={item.q}>
+                  <summary>
+                    <span>{item.q}</span>
+                    <svg
+                      className="lp-faq__chevron"
+                      viewBox="0 0 24 24"
+                      width="20"
+                      height="20"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="m6 9 6 6 6-6"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </summary>
+                  <p>{item.a}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-final" id="start">
           <div className="lp-container">
-            <div className="lp-cta__card reveal">
-              <div className="lp-cta__glow" aria-hidden="true"></div>
-              <h2>Запустим рекламу в VK из вашего брифа</h2>
+            <div className="lp-final__card reveal">
+              <h2>Выберите бриф по типу продвижения</h2>
               <p>
-                Выберите форму по типу продвижения и заполните бриф — остальное сервис возьмёт на
-                себя.
+                Заполнение занимает около десяти минут: понадобится ссылка на страницу или
+                сообщество и номер рекламного кабинета VK.
               </p>
-              <div className="lp-cta__row">
-                <a className="lp-btn lp-btn--light" href="/brief-individual.html">
-                  <span className="lp-btn__label">
-                    Бриф для физлица
-                    <small>Личная страница VK</small>
+              <div className="lp-final__row">
+                <a className="btn btn--primary lp-cta" href="/brief-individual.html">
+                  <span>
+                    Бриф для частного лица
+                    <small>Личная страница или сообщество</small>
                   </span>
                 </a>
-                <a className="lp-btn lp-btn--glass" href="/brief-community.html">
-                  <span className="lp-btn__label">
+                <a className="btn lp-cta" href="/brief-community.html">
+                  <span>
                     Бриф для бизнеса
-                    <small>Сообщество ИП / ООО</small>
+                    <small>ИП, ООО, самозанятый</small>
                   </span>
                 </a>
               </div>
-              <p className="lp-cta__note">
-                Обычно ссылку на нужный бриф присылает таргетолог. Если вы попали сюда сами —
-                выберите форму по типу продвижения. Уже отправляли бриф?{" "}
-                <a href="/cabinet.html" data-open-login>
-                  Войти в личный кабинет
-                </a>
-                .
+              <p className="lp-final__note">
+                Нет рекламного кабинета?{" "}
+                <a href="/instrukciya-vk-cabinet.html">Инструкция, как его создать</a>.
               </p>
             </div>
           </div>
         </section>
       </main>
 
-      {/* ================= Footer ================= */}
       <footer className="lp-footer">
         <div className="lp-container lp-footer__inner">
-          <Brand />
+          <Link className="lp-brand lp-brand--footer" href="/">
+            Ads<span className="lp-brand__dot">·</span>auto
+          </Link>
           <nav className="lp-footer__links" aria-label="Ссылки в подвале">
-            <a href="/brief-individual.html">Бриф · физлицо</a>
-            <a href="/brief-community.html">Бриф · бизнес</a>
-            <a href="#how">Как это работает</a>
+            <a href="/brief-individual.html">Бриф: частное лицо</a>
+            <a href="/brief-community.html">Бриф: бизнес</a>
+            <a href="/instrukciya-vk-cabinet.html">Как создать кабинет VK</a>
+            <a href="#faq">Вопросы</a>
           </nav>
         </div>
-        <div className="lp-container lp-footer__copy">
-          Независимый сервис автоматизации запуска рекламы в VK&nbsp;Ads. Не является продуктом VK и
-          не аффилирован с VK.
+        <div className="lp-container lp-footer__legal">
+          Независимый сервис запуска рекламы. Не является продуктом VK и не аффилирован с VK.
         </div>
       </footer>
 

@@ -305,7 +305,7 @@ fieldset {
   font-family: inherit;
   font-size: var(--fs-sm);
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.35;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
@@ -316,13 +316,17 @@ fieldset {
   transition:
     background-color var(--dur) var(--ease-out),
     border-color var(--dur) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+    transform var(--dur-press) var(--ease-out);
 }
-.btn:hover {
-  background: var(--surface-sunk);
+/* Hover только для мыши: на тач-устройствах он срабатывает по тапу и залипает. */
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover {
+    background: var(--surface-sunk);
+  }
 }
+/* Нажатие должно ощущаться. Масштаб, а не сдвиг: элемент отвечает на палец. */
 .btn:active {
-  transform: translateY(1px);
+  transform: scale(0.97);
 }
 
 .btn--primary {
@@ -330,17 +334,16 @@ fieldset {
   color: #fff;
   border-color: transparent;
 }
-.btn--primary:hover {
-  background: var(--accent-strong);
-  color: #fff;
+@media (hover: hover) and (pointer: fine) {
+  .btn--primary:hover {
+    background: var(--accent-strong);
+    color: #fff;
+  }
 }
 
 .btn--ghost {
   background: transparent;
   border-color: var(--line);
-}
-.btn--ghost:hover {
-  background: var(--surface-sunk);
 }
 
 .btn--danger {
@@ -513,14 +516,21 @@ fieldset {
   }
 }
 
-/* Системная настройка движения: гасим переходы, контент оставляем на месте. */
+/* Системная настройка движения.
+
+   Убираем перемещение и масштабирование, но сохраняем переходы цвета и
+   прозрачности: они несут смысл (наведение, фокус, состояние), и глухое
+   обнуление всех переходов лишило бы интерфейс обратной связи. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-property: opacity, background-color, border-color, color, outline-color !important;
     scroll-behavior: auto !important;
+  }
+  .btn:active {
+    transform: none;
   }
 }
