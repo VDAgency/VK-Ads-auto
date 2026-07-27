@@ -394,11 +394,18 @@ class VkApiAdapter(PlatformAdapter):
         return [str(entry["id"]) for entry in items if "id" in entry]
 
     async def get_status(self, campaign_id: str) -> str:
-        """Текущий статус кампании (`active`/`blocked`/…); `unknown`, если поля нет."""
-        response = await self._request("GET", f"/ad_plans/{campaign_id}.json")
+        """Текущий статус кампании (`active`/`blocked`/…); `unknown`, если поля нет.
+
+        ⚠️ Читаем списком с явным `fields`, а НЕ через `/ad_plans/{id}.json`: одиночный
+        эндпоинт отдаёт 200, но БЕЗ поля `status` (боевая проверка 2026-07-27). Статус
+        оттуда всегда приходил `unknown`, и синхронизация статусов молча не работала.
+        """
+        response = await self._request(
+            "GET", "/ad_plans.json", params={"_id": campaign_id, "fields": "id,status"}
+        )
         response.raise_for_status()
-        payload = response.json()
-        status = payload.get("status") if isinstance(payload, dict) else None
+        items = response.json().get("items") or []
+        status = items[0].get("status") if items and isinstance(items[0], dict) else None
         return str(status) if status else "unknown"
 
     async def get_stats(self, campaign_id: str) -> dict[str, float]:

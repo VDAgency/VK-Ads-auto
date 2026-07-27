@@ -385,9 +385,11 @@ def test_create_campaign_without_spec_still_sends_one_campaign() -> None:
 
 
 def test_get_status_reads_ad_plan_status() -> None:
+    # Статус живёт только в списочном ответе: у `/ad_plans/{id}.json` этого поля нет
+    # вовсе (боевая проверка 2026-07-27) — подробности в tests/test_vk_read_shapes.py.
     def scenario(router: respx.MockRouter) -> Awaitable[str]:
-        router.get(f"{BASE_URL}/ad_plans/555.json").mock(
-            return_value=httpx.Response(200, json={"id": 555, "status": "active"})
+        router.get(f"{BASE_URL}/ad_plans.json").mock(
+            return_value=httpx.Response(200, json={"items": [{"id": 555, "status": "active"}]})
         )
         return _adapter().get_status("555")
 
@@ -396,8 +398,8 @@ def test_get_status_reads_ad_plan_status() -> None:
 
 def test_get_status_unknown_when_field_missing() -> None:
     def scenario(router: respx.MockRouter) -> Awaitable[str]:
-        router.get(f"{BASE_URL}/ad_plans/555.json").mock(
-            return_value=httpx.Response(200, json={"id": 555})
+        router.get(f"{BASE_URL}/ad_plans.json").mock(
+            return_value=httpx.Response(200, json={"items": [{"id": 555}]})
         )
         return _adapter().get_status("555")
 
