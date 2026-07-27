@@ -1,7 +1,7 @@
 """Оркестрация запуска кампании через `PlatformAdapter`.
 
 Ядро не знает про площадку и про её внутреннюю иерархию (у VK — ad_plan →
-ad_group → banner): оно отдаёт адаптеру всю спеку одним вызовом
+campaigns → banners): оно отдаёт адаптеру всю спеку одним вызовом
 `create_campaign_from_spec` и, если разрешён автозапуск, просит запустить.
 Реальные мутации идут только с боевым адаптером и при снятых предохранителях.
 """
@@ -15,7 +15,7 @@ from integrations.adapter import PlatformAdapter
 from services.mapping import CampaignSpec
 
 # Бриф задаёт бюджет на срок кампании; MVP-срок — месяц. Дневной лимит нужен
-# площадке (у VK бюджет живёт на уровне группы объявлений).
+# площадке (у VK бюджет живёт на уровне вложенной кампании, не плана).
 DEFAULT_TERM_DAYS = 30
 
 
@@ -57,6 +57,9 @@ async def run_campaign(
         title=title,
         body=body,
         budget_limit_day=budget_limit_day,
+        # Безопасность: VK создаёт кампанию активной, поэтому решение о трате
+        # денег передаём прямо в создание, а не отдельным шагом после него.
+        activate=autostart,
     )
     if not autostart:
         return LaunchResult(campaign_id=campaign_id, launched=False)

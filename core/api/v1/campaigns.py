@@ -24,6 +24,9 @@ DEFAULT_ACCOUNT_ID = 1
 class CampaignStopOut(BaseModel):
     campaign_id: int
     status: str
+    # `None` — кампании не было на площадке (заглушка/сбой при создании): статус
+    # сменили у себя, но останавливать во внешней системе было нечего.
+    external_id: str | None = None
 
 
 @router.post("/{campaign_id}/stop")
@@ -39,4 +42,6 @@ async def stop(
     if campaign is None:
         raise HTTPException(status_code=404, detail="campaign_not_found")
     await session.commit()
-    return CampaignStopOut(campaign_id=campaign.id, status=campaign.status)
+    return CampaignStopOut(
+        campaign_id=campaign.id, status=campaign.status, external_id=campaign.external_id
+    )

@@ -16,6 +16,10 @@ from config.settings import get_settings
 
 _TIMEOUT = httpx.Timeout(10.0)
 
+# Загрузка креатива тянет за собой создание кампании на площадке (кабинет,
+# ad_plan/ad_group/banner, модерация) — ждём заметно дольше обычного (spec §5).
+_LAUNCH_TIMEOUT = httpx.Timeout(360.0)
+
 
 class CoreUnavailable(RuntimeError):
     """Ядро недоступно (сеть/таймаут/5xx) — показать заглушку оператору."""
@@ -38,6 +42,14 @@ class CreativeRejected(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class CampaignNotFound(RuntimeError):
+    """Ядро не нашло кампанию (404) — показать оператору «кампания не найдена»."""
+
+
+class CampaignStopFailed(RuntimeError):
+    """Площадка/канал не приняли остановку (502) — это не «ядро лежит»."""
 
 
 class UserbotUnavailable(RuntimeError):
@@ -112,6 +124,9 @@ class BriefCard:
     fields: list[BriefFieldItem]
     has_creative: bool
     campaign_status: str | None
+    # Распознанная площадка подписки — приходит из ядра готовой строкой.
+    surface_title: str = ""
+    surface_needs_creative: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +136,19 @@ class CreativeResult:
     campaign_status: str
     campaign_id: int
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignStopped:
+    """Итог остановки кампании (зеркало `CampaignStopOut` ядра).
+
+    `external_id is None` — кампании не было на площадке: статус сменили у себя,
+    останавливать во внешней системе было нечего.
+    """
+
+    campaign_id: int
+    status: str
+    external_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +175,41 @@ class CabinetStats:
     ctr: float
     cpc: float
     is_mock: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AdAccountItem:
+    """Рекламный кабинет оператора (зеркало `AdAccountOut` ядра).
+
+    Токена здесь нет и быть не может — только хвост из четырёх символов.
+    """
+
+    id: int
+    title: str
+    external_id: str
+    username: str | None
+    token_tail: str
+    advertiser_kind: str
+    advertiser_name: str | None
+    advertiser_inn: str | None
+    status: str
+    health: str
+    health_checked_at: str | None
+    health_error: str | None
+    balance_rub: str | None
+    is_usable: bool
+
+
+class AdAccountRejected(RuntimeError):
+    """Ядро отказалось заводить кабинет — причина уже пригодна для показа."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class AdAccountNotFound(RuntimeError):
+    """Кабинета нет (404) — вероятно, его уже удалили из другого окна."""
 
 
 def _base_url() -> str:
@@ -196,6 +259,8 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         ],
         has_creative=bool(payload.get("has_creative", False)),
         campaign_status=payload.get("campaign_status"),
+        surface_title=str(payload.get("surface_title") or ""),
+        surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
     )
 
 
@@ -245,6 +310,8 @@ def _creative_reject_reason(detail: Any) -> str:
                 + ", ".join(str(item) for item in missing)
                 + ". Внесите правки и повторите."
             )
+    if detail == "goal_not_supported":
+        return "Эта цель рекламы ещё не реализована. Пока доступны «Подписчики»."
     return "Креатив не принят. Проверьте файл и текст."
 
 
@@ -256,22 +323,28 @@ async def upload_creative(
     height: int,
     title: str,
     body: str,
+    ad_account_id: int | None = None,
+    goal: str | None = None,
 ) -> CreativeResult:
     """`POST /briefs/{id}/creative`: отправить креатив (триггер запуска РК).
+
+    `ad_account_id`/`goal` — выбор оператора, сделанный до загрузки материалов.
 
     404 → `BriefNotFound`; 413/422 → `CreativeRejected`; сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/creative"
-    payload = {
+    payload: dict[str, Any] = {
         "media_b64": media_b64,
         "media_type": media_type,
         "width": width,
         "height": height,
         "title": title,
         "body": body,
+        "ad_account_id": ad_account_id,
+        "goal": goal,
     }
     try:
-        async with httpx.AsyncClient(timeout=_INVITE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
             response = await client.post(url, json=payload)
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
@@ -284,6 +357,12 @@ async def upload_creative(
         with contextlib.suppress(ValueError):
             detail = response.json().get("detail")
         raise CreativeRejected(_creative_reject_reason(detail))
+    if response.status_code == 409:
+        # Кабинет выбран, но токеном воспользоваться нельзя (удалён, сменился ключ).
+        raise CreativeRejected(
+            "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
+            "Выберите другой кабинет или добавьте его заново через /cabinets."
+        )
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()
@@ -291,6 +370,62 @@ async def upload_creative(
         campaign_status=str(data["campaign_status"]),
         campaign_id=int(data["campaign_id"]),
         message=str(data["message"]),
+    )
+
+
+async def launch_brief(brief_id: int) -> CreativeResult:
+    """`POST /briefs/{id}/launch`: запустить кампанию без креатива.
+
+    Для площадок, где объявлением служит сам объект (пост, клип, трек). Ошибки
+    разбираются так же, как у загрузки креатива: 404 → `BriefNotFound`,
+    422 → `CreativeRejected`, сеть/5xx → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
+    try:
+        async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
+            response = await client.post(url, json={})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise BriefNotFound(str(brief_id))
+    if response.status_code == 422:
+        detail: Any = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        raise CreativeRejected(_creative_reject_reason(detail))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    data = response.json()
+    return CreativeResult(
+        campaign_status=str(data["campaign_status"]),
+        campaign_id=int(data["campaign_id"]),
+        message=str(data["message"]),
+    )
+
+
+async def stop_campaign(campaign_id: int) -> CampaignStopped:
+    """`POST /campaigns/{id}/stop`: остановить кампанию на площадке.
+
+    404 → `CampaignNotFound`; 502 (канал не принял остановку) → `CampaignStopFailed`;
+    прочие 5xx и сеть → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/campaigns/{campaign_id}/stop"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise CampaignNotFound(str(campaign_id))
+    if response.status_code == 502:
+        raise CampaignStopFailed(str(campaign_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    payload = response.json()
+    return CampaignStopped(
+        campaign_id=int(payload["campaign_id"]),
+        status=str(payload["status"]),
+        external_id=payload.get("external_id"),
     )
 
 
@@ -548,3 +683,109 @@ async def kotbot_submit_code(attempt_id: str, code: str) -> None:
         {"attempt_id": attempt_id, "code": code},
         request_timeout=_KOTBOT_AUTH_TIMEOUT,
     )
+
+
+# --- рекламные кабинеты (spec 2026-07-27 §10) --------------------------------
+
+
+def _to_ad_account(payload: dict[str, Any]) -> AdAccountItem:
+    return AdAccountItem(
+        id=int(payload["id"]),
+        title=str(payload["title"]),
+        external_id=str(payload["external_id"]),
+        username=payload.get("username"),
+        token_tail=str(payload.get("token_tail", "")),
+        advertiser_kind=str(payload.get("advertiser_kind", "owner")),
+        advertiser_name=payload.get("advertiser_name"),
+        advertiser_inn=payload.get("advertiser_inn"),
+        status=str(payload.get("status", "active")),
+        health=str(payload.get("health", "unknown")),
+        health_checked_at=payload.get("health_checked_at"),
+        health_error=payload.get("health_error"),
+        balance_rub=payload.get("balance_rub"),
+        is_usable=bool(payload.get("is_usable", False)),
+    )
+
+
+async def list_ad_accounts() -> list[AdAccountItem]:
+    """`GET /ad-accounts`: рекламные кабинеты оператора (без токенов)."""
+    payload = await _get("/ad-accounts")
+    return [_to_ad_account(item) for item in payload.get("items", [])]
+
+
+_AD_ACCOUNT_ERRORS = {
+    "invalid_token": "VK не принял этот токен. Проверьте, что скопирован весь `access_token`.",
+    "duplicate_account": "Такой кабинет уже добавлен.",
+    "vk_unreachable": "VK сейчас не отвечает. Попробуйте ещё раз через минуту.",
+    "encryption_key_missing": (
+        "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
+        "без него токен негде хранить. Нужна помощь администратора."
+    ),
+}
+
+
+async def add_ad_account(
+    token: str,
+    *,
+    title: str | None = None,
+    advertiser_kind: str = "owner",
+    advertiser_name: str | None = None,
+    advertiser_inn: str | None = None,
+) -> AdAccountItem:
+    """`POST /ad-accounts`: добавить кабинет по токену.
+
+    Токен уходит только сюда и обратно не возвращается. Понятные отказы ядра
+    (битый токен, дубль, VK лежит) превращаются в `AdAccountRejected`.
+    """
+    url = f"{_base_url()}/api/v1/ad-accounts"
+    payload: dict[str, Any] = {
+        "token": token,
+        "title": title,
+        "advertiser_kind": advertiser_kind,
+        "advertiser_name": advertiser_name,
+        "advertiser_inn": advertiser_inn,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code in (400, 409, 422, 500, 503):
+        detail = ""
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", ""))
+        raise AdAccountRejected(
+            _AD_ACCOUNT_ERRORS.get(detail, "Не получилось добавить кабинет, проверьте токен.")
+        )
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    return _to_ad_account(response.json())
+
+
+async def check_ad_account(ad_account_id: int) -> AdAccountItem:
+    """`POST /ad-accounts/{id}/check`: проверить токен прямо сейчас."""
+    url = f"{_base_url()}/api/v1/ad-accounts/{ad_account_id}/check"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise AdAccountNotFound(str(ad_account_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    return _to_ad_account(response.json())
+
+
+async def delete_ad_account(ad_account_id: int) -> None:
+    """`DELETE /ad-accounts/{id}`: удалить кабинет (токен стирается безвозвратно)."""
+    url = f"{_base_url()}/api/v1/ad-accounts/{ad_account_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.delete(url)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise AdAccountNotFound(str(ad_account_id))
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")

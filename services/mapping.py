@@ -11,10 +11,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from services.brief_parser import Gender, Goal, ParsedBrief
+from services.brief_parser import Gender, Goal, ParsedBrief, TargetType
 
 # Цель «подписчики/вступления в сообщество» в VK Ads API.
 SOCIAL_ENGAGEMENT = "socialengagement"
+
+# Площадка подписки — нейтральные значения, общие для любых рекламных систем.
+# Пусто = неизвестно (адаптер догадывается по ссылке, как раньше).
+OBJECT_KIND_COMMUNITY = TargetType.COMMUNITY.value
+OBJECT_KIND_PERSONAL = TargetType.PERSONAL_PAGE.value
+OBJECT_KIND_NEWSLETTER = TargetType.NEWSLETTER.value
+OBJECT_KIND_VK_CHANNEL = TargetType.VK_CHANNEL.value
+OBJECT_KIND_MAX_CHANNEL = TargetType.MAX_CHANNEL.value
+OBJECT_KIND_OK_COMMUNITY = TargetType.OK_COMMUNITY.value
+OBJECT_KIND_OK_PROFILE = TargetType.OK_PROFILE.value
+OBJECT_KIND_DZEN_CHANNEL = TargetType.DZEN_CHANNEL.value
+OBJECT_KIND_VK_POST_COMMUNITY = TargetType.VK_POST_COMMUNITY.value
+OBJECT_KIND_VK_POST_PERSONAL = TargetType.VK_POST_PERSONAL.value
+OBJECT_KIND_VK_POST_PROMOTED = TargetType.VK_POST_PROMOTED.value
+OBJECT_KIND_VK_MUSIC = TargetType.VK_MUSIC.value
+OBJECT_KIND_VK_CLIP = TargetType.VK_CLIP.value
+OBJECT_KIND_LEAD_FORM = TargetType.LEAD_FORM.value
 
 _VK_AGE_MIN = 14
 _VK_AGE_MAX = 75
@@ -28,6 +45,9 @@ class CampaignSpec:
     name: str
     object_url: str
     geo_raw: str  # текстом из брифа; в region id переводит адаптер (live API)
+    # Тип объекта из брифа: короткий адрес (vk.ru/имя) сам по себе человека от
+    # сообщества не отличает, поэтому подсказка из брифа авторитетнее ссылки.
+    object_kind: str = ""
     age_list: list[int] = field(default_factory=list)  # пусто = без возрастного таргетинга
     sex: list[str] = field(default_factory=list)  # [] = любой; ["male"]/["female"]
     budget_rub: int | None = None
@@ -66,6 +86,7 @@ def build_campaign_spec(brief: ParsedBrief) -> CampaignSpec:
         name=name,
         object_url=brief.object_url,
         geo_raw=audience.geo,
+        object_kind=brief.target_type.value,
         age_list=_age_list(audience.age_from, audience.age_to),
         sex=_sex(audience.gender),
         budget_rub=brief.budget.amount_rub,

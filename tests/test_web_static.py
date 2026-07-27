@@ -188,9 +188,22 @@ def test_admin_page_served_with_sections() -> None:
     assert "Пришли брифы" in body
     assert "Ждём брифы" in body
     assert "Кампании" in body
+    assert "Рекламные кабинеты" in body  # управление кабинетами доступно и в вебе
     assert "adm-gate" in body  # экран «вход только из бота»
     assert "adm-nav__btn" in body  # навигация разделов
     assert 'id="app"' in body
+
+
+def test_admin_page_never_ships_a_token_field_value() -> None:
+    """Токен кабинета вводится, но не выводится: в разметке его быть не должно.
+
+    Проверка грубая по построению — именно поэтому и полезная: если кто-то
+    добавит показ токена в списке, тест это заметит.
+    """
+    client = TestClient(create_app())
+    body = client.get("/admin.html").text
+    assert "access_token=" not in body
+    assert "token_encrypted" not in body
 
 
 _BRIEF_PAGES = {
@@ -275,9 +288,11 @@ def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
     assert len(available) == 1
     assert 'value="подписчики"' in available[0]
     assert locked, "остальные цели должны быть заблокированы"
-    # Каждая заблокированная цель помечена «скоро» — клиент видит, что она
-    # существует, но ещё не подключена.
-    assert body.count('class="bf-choice__soon"') == len(locked)
+    # Каждый заблокированный вариант помечен «скоро» — клиент видит, что он
+    # существует, но ещё не подключён. Считаем по всем группам выбора, а не только
+    # по целям: непроверенные площадки блокируются тем же способом.
+    all_locked = re.findall(r'<input type="radio"[^>]*disabled[^>]*>', body)
+    assert body.count('class="bf-choice__soon"') == len(all_locked)
 
 
 def test_extensionless_path_serves_html_file() -> None:

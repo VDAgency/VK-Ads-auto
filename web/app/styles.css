@@ -534,3 +534,9 @@ fieldset {
     transform: none;
   }
 }
+
+/* Вторичная строка внутри карточки или строки списка. */
+.muted {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}

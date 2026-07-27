@@ -39,10 +39,29 @@ class Gender(Enum):
 
 
 class TargetType(Enum):
-    """Объект рекламы: личная страница или сообщество/группа."""
+    """Куда привлекаем подписчиков — площадка подписки.
+
+    Значения совпадают с ключами справочника площадок `integrations/vk_surfaces.py`:
+    именно по ним адаптер выбирает пакет VK, цель кампании и шаблоны объявления.
+    Подписка возможна на шесть разных площадок, а не только на сообщество и страницу
+    (живой справочник пакетов VK, 2026-07-27).
+    """
 
     PERSONAL_PAGE = "personal_page"
     COMMUNITY = "community"
+    NEWSLETTER = "newsletter"
+    VK_CHANNEL = "vk_channel"
+    MAX_CHANNEL = "max_channel"
+    OK_COMMUNITY = "ok_community"
+    OK_PROFILE = "ok_profile"
+    DZEN_CHANNEL = "dzen_channel"
+    # Смежные цели: продвижение готового объекта и сбор заявок.
+    VK_POST_COMMUNITY = "vk_post_community"
+    VK_POST_PERSONAL = "vk_post_personal"
+    VK_POST_PROMOTED = "vk_post_promoted"
+    VK_MUSIC = "vk_music"
+    VK_CLIP = "vk_clip"
+    LEAD_FORM = "lead_form"
 
 
 class OrgType(Enum):
@@ -208,8 +227,43 @@ def parse_materials(value: str) -> Materials:
 
 
 def parse_target_type(value: str) -> TargetType:
-    """Разобрать «куда привлекаем». «Сообщество/группа» → COMMUNITY, иначе личная страница."""
+    """Разобрать «куда привлекаем» — площадку подписки.
+
+    Порядок проверок важен: «сообщество в Одноклассниках» обязано попасть в ОК, а не в
+    ВК, поэтому площадка ОК распознаётся раньше общего слова «сообщество». Пустое или
+    непонятое значение — личная страница, как было исторически.
+    """
     text = _clean(value).lower()
+
+    # Смежные цели распознаём раньше подписных: «пост сообщества» — это пост, а не
+    # сообщество, и «лид-форма» не имеет отношения к площадкам подписки.
+    if "лид" in text or "форма" in text or "заявк" in text:
+        return TargetType.LEAD_FORM
+    if "клип" in text:
+        return TargetType.VK_CLIP
+    if "музык" in text or "трек" in text:
+        return TargetType.VK_MUSIC
+    if "пост" in text:
+        if "сайт" in text or "переход" in text:
+            return TargetType.VK_POST_PROMOTED
+        if "страниц" in text or "личн" in text:
+            return TargetType.VK_POST_PERSONAL
+        return TargetType.VK_POST_COMMUNITY
+
+    is_ok = "однокласс" in text or "ok.ru" in text or "ок " in f" {text}"
+    if is_ok:
+        if "профил" in text or "страниц" in text:
+            return TargetType.OK_PROFILE
+        return TargetType.OK_COMMUNITY
+
+    if "рассылк" in text:
+        return TargetType.NEWSLETTER
+    if "дзен" in text or "dzen" in text:
+        return TargetType.DZEN_CHANNEL
+    if "max" in text or "макс" in text:
+        return TargetType.MAX_CHANNEL
+    if "канал" in text:
+        return TargetType.VK_CHANNEL
     if "сообществ" in text or "группа" in text or "группу" in text:
         return TargetType.COMMUNITY
     return TargetType.PERSONAL_PAGE
@@ -289,10 +343,16 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
     amount, needs_discussion = parse_budget(get("budget"))
     age_from, age_to = parse_age(get("age_from"), get("age_to"))
 
-    if variant is BriefVariant.COMMUNITY:
+    # Площадку выбирает клиент в обеих формах брифа: подписка возможна не только на
+    # сообщество. Пустое поле у бизнес-брифа — сообщество, у физлица — личная страница:
+    # так ведут себя значения по умолчанию в формах.
+    raw_target = get("target_type")
+    if raw_target:
+        target_type = parse_target_type(raw_target)
+    elif variant is BriefVariant.COMMUNITY:
         target_type = TargetType.COMMUNITY
     else:
-        target_type = parse_target_type(get("target_type"))
+        target_type = TargetType.PERSONAL_PAGE
 
     contact = Contact(
         email=get("email") or None,

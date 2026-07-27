@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BriefForm, type BriefRow } from "@/components/BriefForm";
+import { BRIEF_SURFACES } from "@/lib/briefSurfaces";
 
 import "../brief.css";
 
@@ -19,6 +20,13 @@ const BUDGET_OPTIONS = [
   { value: "до 50 000 ₽", label: "до 50 000 ₽" },
   { value: "готов обсудить", label: "Готов(а) обсудить" },
 ];
+
+// Площадки подписки — единый список для обеих форм брифа (web/lib/briefSurfaces.ts).
+const SURFACE_OPTIONS = BRIEF_SURFACES.map((surface) => ({
+  value: surface.value,
+  label: surface.label,
+  disabled: !surface.enabled,
+}));
 
 const TERM_OPTIONS = [
   { value: "1 неделя", label: "1 неделя" },
@@ -147,10 +155,7 @@ const ROWS: BriefRow[] = [
     label: "Куда привлекаем подписчиков?",
     required: true,
     error: "Выберите вариант",
-    options: [
-      { value: "личная страница", label: "Личная страница" },
-      { value: "сообщество", label: "Сообщество / группа" },
-    ],
+    options: SURFACE_OPTIONS,
   },
 
   { kind: "section", num: 3, title: "Кого хотите привлечь" },

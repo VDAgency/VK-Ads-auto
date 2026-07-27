@@ -60,6 +60,7 @@ def test_field_keys_match_web_form_names_community() -> None:
         "org_type",
         "tax_id",
         "org_name",
+        "target_type",
         "object_url",
         "vk_ad_cabinet_id",
         "site_url",

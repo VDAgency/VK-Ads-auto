@@ -423,3 +423,52 @@
   font-family: var(--font-mono);
   font-weight: 600;
 }
+
+/* Карточка формы добавления кабинета и статическая строка списка.
+   `.adm-row` рассчитана на клик по всей строке; у кабинетов кликают кнопки
+   внутри, поэтому курсор и подсветку по наведению снимаем. */
+.adm-card {
+  padding: 14px;
+  border: 1px solid var(--line, #e3e7ee);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  margin-bottom: 12px;
+}
+
+.adm-row--static {
+  cursor: default;
+  align-items: center;
+}
+
+.adm-row--static:hover {
+  border-color: var(--line, #e3e7ee);
+}
+
+/* Площадка, как её понял разбор брифа: ошибка должна быть видна до запуска. */
+.adm-card__surface {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--accent-strong);
+}
+
+/* Строка-карточка без действия: используется списком рекламных кабинетов. */
+.adm-row--static {
+  display: block;
+  cursor: default;
+}
+.adm-row--static:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+/* Панель действий над списком кабинетов: обычный ряд кнопок, а не сегменты. */
+.adm-nav--actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: 0;
+  background: none;
+}

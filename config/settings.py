@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     vk_ads_access_token: SecretStr = SecretStr("")
     vk_ads_refresh_token: SecretStr = SecretStr("")
     vk_ads_token_type: str = "Bearer"
+    # Ключ шифрования токенов рекламных кабинетов в БД (Fernet, base64 32 байта).
+    # Пусто = «не сконфигурировано»: приложение поднимается, но операции с
+    # кабинетами отвечают понятной ошибкой (spec 2026-07-27 §6).
+    vk_ads_secret_key: SecretStr = SecretStr("")
+    # Сколько минут доверяем прошлому health-check кабинета, прежде чем перепроверить.
+    # VK ограничивает 3 rps — фонового опроса нет, проверяем по требованию (§7).
+    ad_account_health_ttl_minutes: int = 15
     # Боевое создание КАБИНЕТОВ VK разрешено только после подтверждения агентского
     # статуса ИП (CLAUDE.md §1.4). Флаг не ослабляется предохранителями ниже.
     vk_agency_confirmed: bool = False

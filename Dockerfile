@@ -17,6 +17,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy
 
+# ffmpeg — для сборки статичного ролика из присланной клиентом картинки
+# (integrations/vk_video.py). Отдельный микросервис под это не заводим.
+RUN apt-get update     && apt-get install -y --no-install-recommends ffmpeg     && rm -rf /var/lib/apt/lists/*
+
 # uv из официального образа.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 

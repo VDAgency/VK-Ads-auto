@@ -18,9 +18,12 @@ from db.repositories import (
     get_creative_for_brief,
     get_latest_campaign_for_brief,
 )
+from integrations.vk_surfaces import surface_for
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_fields import apply_edits, numbered
+from services.brief_parser import parse_target_type
+from services.goals import target_title
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,9 +49,17 @@ class BriefCardView:
     fields: list[BriefFieldView]
     has_creative: bool
     campaign_status: str | None
+    # Площадка подписки, как её понял разбор брифа. Клиент пишет её словами, площадок
+    # шесть, и непонятое значение молча трактуется как сообщество — поэтому распознанный
+    # вариант считаем здесь, один раз, и показываем и в боте, и в веб-кабинете.
+    surface_title: str
+    # Нужен ли креатив этой площадке. Продвижение готового поста обходится без него,
+    # и интерфейсы не должны просить у оператора картинку, которая никуда не пойдёт.
+    surface_needs_creative: bool
 
 
 async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> BriefCardView:
+    kind = parse_target_type(brief.payload.get("target_type", "")).value
     client = (
         await get_client(session, account_id, brief.client_id)
         if brief.client_id is not None
@@ -71,6 +82,8 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         fields=fields,
         has_creative=creative is not None,
         campaign_status=campaign.status if campaign is not None else None,
+        surface_title=target_title(kind),
+        surface_needs_creative=surface_for(kind).needs_creative,
     )
 
 

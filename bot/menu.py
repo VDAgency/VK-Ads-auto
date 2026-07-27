@@ -15,7 +15,10 @@ from aiogram.types import BotCommand
 _COMMANDS: tuple[tuple[str, str], ...] = (
     ("send_brief", "Отправить клиенту бриф"),
     ("pending", "Кто ещё не прислал бриф"),
+    ("cabinets", "Рекламные кабинеты"),
     ("stats", "Статистика рекламных кабинетов"),
+    ("stop_campaign", "Остановить кампанию"),
+    ("surfaces", "Куда привлекаем подписчиков"),
     ("admin", "Ссылка на веб-админку"),
     ("link_userbot", "Подключить юзер-бота"),
     ("link_kotbot", "Подключить kotbot"),

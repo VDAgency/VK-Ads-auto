@@ -15,7 +15,7 @@ from services.edit_parser import parse_edits
 
 from bot import api_client
 from bot.access import OperatorOnly
-from bot.api_client import BriefCard, BriefNotFound, CoreUnavailable
+from bot.api_client import BriefCard, BriefNotFound, CoreUnavailable, CreativeRejected
 from bot.keyboards import brief_card_keyboard
 from bot.states import EditBrief
 
@@ -53,12 +53,41 @@ def _render_card(card: BriefCard) -> str:
     lines = [f"📋 Бриф №{card.brief_id} · {variant} · {status}", header_who, ""]
     lines += [f"{field.n}. {field.label}: {field.value or '—'}" for field in card.fields]
     lines.append("")
+    if card.surface_title:
+        # Клиент пишет площадку словами; показываем, как её понял разбор, — ошибка
+        # в поле видна до запуска, а не после.
+        lines.append(f"🎯 Площадка: {card.surface_title} (список — /surfaces)")
     lines.append("🖼 Креатив: " + ("загружен" if card.has_creative else "не загружен"))
     return "\n".join(lines)
 
 
 async def _send_card(message: Message, card: BriefCard) -> None:
-    await message.answer(_render_card(card), reply_markup=brief_card_keyboard(card.brief_id))
+    await message.answer(
+        _render_card(card),
+        reply_markup=brief_card_keyboard(card.brief_id, needs_creative=card.surface_needs_creative),
+    )
+
+
+@router.callback_query(F.data.startswith("launch:"))
+async def launch_without_creative(callback: CallbackQuery) -> None:
+    """Запустить кампанию для площадки, которой креатив не нужен.
+
+    Объявлением служит сам пост, клип или трек — просить у оператора картинку,
+    которая никуда не пойдёт, было бы выдумкой.
+    """
+    brief_id = int((callback.data or "").split(":", 1)[1])
+    if isinstance(callback.message, Message):
+        try:
+            result = await api_client.launch_brief(brief_id)
+        except BriefNotFound:
+            await callback.message.answer(_NOT_FOUND)
+        except CreativeRejected as exc:
+            await callback.message.answer(f"Запустить не вышло: {exc}")
+        except CoreUnavailable:
+            await callback.message.answer(_UNAVAILABLE)
+        else:
+            await callback.message.answer(result.message)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("brief:"))

@@ -10,6 +10,7 @@ from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import (
+    AdAccount,
     Brief,
     BriefInvite,
     Cabinet,
@@ -578,3 +579,152 @@ async def set_campaign_status(
         campaign.launched_at = launched_at
     await session.flush()
     return campaign
+
+
+# --- Рекламные кабинеты (AdAccount, spec 2026-07-27 §4) -----------------------
+#
+# Все выборки скоупятся по `account_id` и по умолчанию скрывают архивные строки:
+# удалённый кабинет обязан исчезнуть из выбора, но остаться в истории кампаний.
+
+ACTIVE = "active"
+ARCHIVED = "archived"
+
+
+async def list_ad_accounts(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    include_archived: bool = False,
+) -> Sequence[AdAccount]:
+    """Кабинеты тенанта, свежие сверху. Архивные скрыты, если не попросили явно."""
+    stmt = select(AdAccount).where(AdAccount.account_id == account_id)
+    if not include_archived:
+        stmt = stmt.where(AdAccount.status == ACTIVE)
+    stmt = stmt.order_by(AdAccount.id.desc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_ad_account(
+    session: AsyncSession, account_id: int, ad_account_id: int
+) -> AdAccount | None:
+    """Кабинет тенанта по id (включая архивный — нужен для остановки старых кампаний)."""
+    stmt = select(AdAccount).where(
+        AdAccount.account_id == account_id, AdAccount.id == ad_account_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def find_active_ad_account_by_external_id(
+    session: AsyncSession, account_id: int, external_id: str
+) -> AdAccount | None:
+    """Активный кабинет с таким VK-id — защита от повторного добавления."""
+    stmt = select(AdAccount).where(
+        AdAccount.account_id == account_id,
+        AdAccount.external_id == external_id,
+        AdAccount.status == ACTIVE,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def count_active_ad_accounts(session: AsyncSession, account_id: int) -> int:
+    """Сколько активных кабинетов у тенанта (решает, нужен ли посев из `.env`)."""
+    stmt = (
+        select(func.count())
+        .select_from(AdAccount)
+        .where(AdAccount.account_id == account_id, AdAccount.status == ACTIVE)
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def create_ad_account(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    title: str,
+    external_id: str,
+    username: str | None,
+    token_encrypted: str,
+    refresh_encrypted: str | None,
+    token_tail: str,
+    advertiser_kind: str,
+    advertiser_name: str | None = None,
+    advertiser_inn: str | None = None,
+    health: str = "healthy",
+    balance_rub: str | None = None,
+) -> AdAccount:
+    """Завести кабинет. Токен приходит уже зашифрованным — сырой сюда не попадает."""
+    row = AdAccount(
+        account_id=account_id,
+        title=title,
+        external_id=external_id,
+        username=username,
+        token_encrypted=token_encrypted,
+        refresh_encrypted=refresh_encrypted,
+        token_tail=token_tail,
+        advertiser_kind=advertiser_kind,
+        advertiser_name=advertiser_name,
+        advertiser_inn=advertiser_inn,
+        status=ACTIVE,
+        health=health,
+        health_checked_at=datetime.now(UTC),
+        balance_rub=balance_rub,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def set_ad_account_health(
+    session: AsyncSession,
+    account_id: int,
+    ad_account_id: int,
+    health: str,
+    *,
+    error: str | None = None,
+    balance_rub: str | None = None,
+) -> AdAccount | None:
+    """Записать результат health-check. `None` — нет такого кабинета у тенанта."""
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        return None
+    row.health = health
+    row.health_error = error
+    row.health_checked_at = datetime.now(UTC)
+    if balance_rub is not None:
+        row.balance_rub = balance_rub
+    await session.flush()
+    return row
+
+
+async def archive_ad_account(
+    session: AsyncSession, account_id: int, ad_account_id: int
+) -> AdAccount | None:
+    """Мягкое удаление: убрать из выбора и БЕЗВОЗВРАТНО затереть оба секрета.
+
+    Строка остаётся, чтобы у прошлых кампаний сохранилась связь «где запускали».
+    Повторная архивация безопасна (идемпотентна).
+    """
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        return None
+    row.status = ARCHIVED
+    row.token_encrypted = None
+    row.refresh_encrypted = None
+    row.health = "unknown"
+    row.health_error = None
+    if row.archived_at is None:
+        row.archived_at = datetime.now(UTC)
+    await session.flush()
+    return row
+
+
+async def rename_ad_account(
+    session: AsyncSession, account_id: int, ad_account_id: int, title: str
+) -> AdAccount | None:
+    """Переименовать кабинет (название из VK — лишь значение по умолчанию)."""
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        return None
+    row.title = title
+    await session.flush()
+    return row

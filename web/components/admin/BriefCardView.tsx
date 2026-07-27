@@ -87,6 +87,26 @@ export function BriefCardView({
     }
   }
 
+  async function launchWithoutCreative() {
+    // Продвижение готового объекта: креатива нет, запуск — отдельным действием.
+    onFlash({ text: "Запуск…", ok: true });
+    try {
+      const data = await adminFetch<{ message: string }>(`/briefs/${id}/launch`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      onFlash({ text: data.message, ok: true });
+      setCard(await adminFetch<BriefCard>(`/briefs/${id}`));
+    } catch (error) {
+      let reason = "Запустить не вышло.";
+      if (error instanceof ApiError) {
+        const detail = error.detail as { missing?: string[] } | undefined;
+        if (detail?.missing) reason = `Бриф неполный: ${detail.missing.join(", ")}`;
+      }
+      onFlash({ text: reason, ok: false });
+    }
+  }
+
   async function uploadCreative() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
@@ -155,6 +175,14 @@ export function BriefCardView({
           {[card.client.email, card.client.phone, card.client.telegram].filter(Boolean).join(" · ")}
         </p>
 
+        {card.surface_title ? (
+          // Клиент выбирает площадку словами; показываем, как её понял разбор
+          // брифа, чтобы ошибка в поле была видна до запуска, а не после.
+          <p className="adm-card__surface">
+            Площадка по разбору брифа: <strong>{card.surface_title}</strong>
+          </p>
+        ) : null}
+
         {/* Таблица, а не сплошной список: номер — рабочий инструмент, по нему
             идут правки `номер.значение`, и он обязан находиться взглядом. */}
         <dl className="adm-fields">
@@ -179,14 +207,26 @@ export function BriefCardView({
         >
           Внести правки
         </button>
-        <button
-          className="btn btn--primary"
-          id="creative-toggle"
-          type="button"
-          onClick={() => setShowCreative((value) => !value)}
-        >
-          Загрузить креатив
-        </button>
+        {card.surface_needs_creative === false ? (
+          // Объявлением служит сам пост, клип или трек — просить картинку не за чем.
+          <button
+            className="btn btn--primary"
+            id="launch-no-creative"
+            type="button"
+            onClick={() => void launchWithoutCreative()}
+          >
+            Запустить без креатива
+          </button>
+        ) : (
+          <button
+            className="btn btn--primary"
+            id="creative-toggle"
+            type="button"
+            onClick={() => setShowCreative((value) => !value)}
+          >
+            Загрузить креатив
+          </button>
+        )}
       </div>
 
       <div className="adm-panel" id="edit-box" hidden={!showEdits}>

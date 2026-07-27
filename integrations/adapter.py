@@ -70,13 +70,14 @@ class PlatformAdapter(ABC):
         title: str | None = None,
         body: str | None = None,
         budget_limit_day: float | None = None,
+        activate: bool = False,
     ) -> str:
         """Создать кампанию целиком по спеке; вернуть её идентификатор.
 
         Единственная операция запуска, которую знает ядро: как площадка разложит
-        спеку по своим уровням (у VK — ad_plan → ad_group → banner) — её дело
-        (CLAUDE.md §1.3). Дефолт повторяет прежнее поведение: одна кампания по
-        цели из спеки плюс, при наличии, загрузка креатива.
+        спеку по своим уровням (у VK — ad_plan → campaigns → banners одним
+        запросом) — её дело (CLAUDE.md §1.3). Дефолт повторяет прежнее поведение:
+        одна кампания по цели из спеки плюс, при наличии, загрузка креатива.
         """
         campaign_id = await self.create_campaign(cabinet_id, spec.objective)
         if creative_ref:

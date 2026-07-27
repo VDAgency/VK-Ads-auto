@@ -8,16 +8,30 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from core.api.v1 import admin, admin_data, briefs, cabinet, cabinets, campaigns, invites
+from core.api.v1 import (
+    ad_accounts,
+    admin,
+    admin_ad_accounts,
+    admin_data,
+    briefs,
+    cabinet,
+    cabinets,
+    campaigns,
+    invites,
+    stats,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
+router.include_router(ad_accounts.router)
 router.include_router(admin.router)
+router.include_router(admin_ad_accounts.router)
 router.include_router(admin_data.router)
 router.include_router(briefs.router)
 router.include_router(cabinet.router)
 router.include_router(cabinets.router)
 router.include_router(campaigns.router)
 router.include_router(invites.router)
+router.include_router(stats.router)
 
 
 @router.get("/ping")
