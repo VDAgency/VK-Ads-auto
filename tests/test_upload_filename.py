@@ -47,9 +47,11 @@ def test_upload_sends_real_filename_with_extension(tmp_path: Path) -> None:
 
 @respx.mock
 def test_upload_keeps_video_extension(tmp_path: Path) -> None:
+    # Видео уходит в СВОЙ эндпоинт: в статике оно отвергается как
+    # `format_not_supported` (боевая проверка 2026-07-27).
     creative = tmp_path / "promo.mp4"
     creative.write_bytes(b"\x00\x00\x00\x18ftypmp42")
-    route = respx.post(f"{BASE_URL}/content/static.json").mock(
+    route = respx.post(f"{BASE_URL}/content/video.json").mock(
         return_value=httpx.Response(200, json={"id": 42})
     )
 
