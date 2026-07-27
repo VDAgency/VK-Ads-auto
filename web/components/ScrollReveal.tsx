@@ -25,12 +25,20 @@ export function ScrollReveal() {
     }
 
     // Всё, что попадает в первый экран, показываем немедленно.
-    const deferred = items.filter((el) => {
-      if (el.getBoundingClientRect().top < window.innerHeight) {
+    //
+    // Сначала читаем геометрию всех блоков, и только потом ставим классы:
+    // чередование чтения и записи заставляет браузер пересчитывать раскладку
+    // на каждой итерации.
+    const viewportHeight = window.innerHeight;
+    const tops = items.map((el) => el.getBoundingClientRect().top);
+
+    const deferred: HTMLElement[] = [];
+    items.forEach((el, index) => {
+      if (tops[index] < viewportHeight) {
         el.classList.add("is-visible");
-        return false;
+      } else {
+        deferred.push(el);
       }
-      return true;
     });
 
     if (deferred.length === 0) return;

@@ -101,6 +101,8 @@ function ReferralBlock({ url }: { url: string }) {
       </p>
       <div className="cab-copy">
         <input
+          id="referral-url"
+          name="referral_url"
           className="cab-copy__field"
           value={url}
           readOnly
