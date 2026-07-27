@@ -39,6 +39,36 @@ class CreativeError(Exception):
         super().__init__(code)
 
 
+async def launch_without_creative(
+    session: AsyncSession,
+    account_id: int,
+    brief_id: int,
+    *,
+    settings: Settings | None = None,
+    ad_account_id: int | None = None,
+    goal: str | None = None,
+) -> LaunchOutcome:
+    """Запустить кампанию без креатива — для площадок, которым он не нужен.
+
+    Продвижение готового поста, клипа или трека: объявлением служит сам объект, и
+    просить у оператора картинку не за чем. Бросает `UnsupportedGoalError`, если
+    площадка брифа креатив всё-таки требует, — молча запускать пустое объявление
+    там, где нужен макет, нельзя.
+    """
+    return await launch_from_creative(
+        session,
+        account_id,
+        brief_id,
+        media_type="",
+        file_path=None,
+        title=None,
+        body=None,
+        settings=settings,
+        ad_account_id=ad_account_id,
+        goal=goal,
+    )
+
+
 async def intake_creative(
     session: AsyncSession,
     account_id: int,
@@ -85,10 +115,10 @@ async def intake_creative(
         session,
         account_id,
         brief_id,
-        media_type,
-        path,
-        title or None,
-        body or None,
+        media_type=media_type,
+        file_path=path,
+        title=title or None,
+        body=body or None,
         settings=settings,
         ad_account_id=ad_account_id,
         goal=goal,

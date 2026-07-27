@@ -293,7 +293,7 @@ async def _prepare_on_platform(
     adapter: PlatformAdapter,
     settings: Settings,
     *,
-    creative_ref: str,
+    creative_ref: str | None,
     title: str | None,
     body: str | None,
     ad_account: AdAccountView | None = None,
@@ -334,7 +334,7 @@ async def launch_from_creative(
     account_id: int,
     brief_id: int,
     media_type: str,
-    file_path: str,
+    file_path: str | None,
     title: str | None,
     body: str | None,
     *,
@@ -373,16 +373,19 @@ async def launch_from_creative(
     parsed = parse_brief(brief.payload, BriefVariant(brief.variant))
     spec = build_campaign_spec(parsed)
 
-    session.add(
-        Creative(
-            account_id=account_id,
-            brief_id=brief_id,
-            media_type=media_type,
-            file_path=file_path,
-            title=title,
-            body=body,
+    # Продвижение готового поста обходится без креатива: объявлением служит сам пост,
+    # и требовать от оператора картинку было бы выдумкой на пустом месте.
+    if file_path is not None:
+        session.add(
+            Creative(
+                account_id=account_id,
+                brief_id=brief_id,
+                media_type=media_type,
+                file_path=file_path,
+                title=title,
+                body=body,
+            )
         )
-    )
 
     channel, adapter, fallback = await _select_channel(cfg, router, vk_token)
 

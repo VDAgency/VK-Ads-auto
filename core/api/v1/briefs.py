@@ -17,7 +17,11 @@ from services.auth_magiclink import generate_token
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
 from services.briefs import InviteTokenError, intake_brief
-from services.creative_intake import CreativeError, intake_creative
+from services.creative_intake import (
+    CreativeError,
+    intake_creative,
+    launch_without_creative,
+)
 from services.launch_service import BriefNotFoundError, UnsupportedGoalError
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -215,6 +219,31 @@ async def edit_brief(
     await session.commit()
     card = to_card_out(view)
     return BriefEditOut(**card.model_dump(), unknown=unknown)
+
+
+@router.post("/{brief_id}/launch", status_code=201)
+async def launch_brief(
+    brief_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CreativeLaunchOut:
+    """Запустить кампанию без креатива — для площадок, которым он не нужен.
+
+    Продвижение готового поста, клипа или трека: объявлением служит сам объект.
+    Требовать при этом картинку было бы выдумкой, поэтому у таких брифов запуск
+    отдельным действием.
+    """
+    try:
+        outcome = await launch_without_creative(session, DEFAULT_ACCOUNT_ID, brief_id)
+    except BriefNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="brief_not_found") from exc
+    except BriefValidationError as exc:
+        raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    await session.commit()
+    return CreativeLaunchOut(
+        campaign_status=outcome.campaign_status,
+        campaign_id=outcome.campaign_id,
+        message=outcome.message,
+    )
 
 
 @router.post("/{brief_id}/creative", status_code=201)
