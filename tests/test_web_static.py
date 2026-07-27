@@ -275,9 +275,11 @@ def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
     assert len(available) == 1
     assert 'value="подписчики"' in available[0]
     assert locked, "остальные цели должны быть заблокированы"
-    # Каждая заблокированная цель помечена «скоро» — клиент видит, что она
-    # существует, но ещё не подключена.
-    assert body.count('class="bf-choice__soon"') == len(locked)
+    # Каждый заблокированный вариант помечен «скоро» — клиент видит, что он
+    # существует, но ещё не подключён. Считаем по всем группам выбора, а не только
+    # по целям: непроверенные площадки блокируются тем же способом.
+    all_locked = re.findall(r'<input type="radio"[^>]*disabled[^>]*>', body)
+    assert body.count('class="bf-choice__soon"') == len(all_locked)
 
 
 def test_extensionless_path_serves_html_file() -> None:
