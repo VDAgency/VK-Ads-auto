@@ -72,7 +72,8 @@ COMMUNITY_FIELDS: list[BriefField] = [
     BriefField("tax_id", "ИНН / ОГРН / ОГРНИП"),
     BriefField("org_name", "Наименование организации"),
     # Секция 2 — продукт и объект рекламы.
-    BriefField("object_url", "Ссылка на сообщество VK"),
+    BriefField("target_type", "Куда привлекаем"),
+    BriefField("object_url", "Ссылка на объект продвижения"),
     BriefField("vk_ad_cabinet_id", "ID кабинета VK Реклама"),
     BriefField("site_url", "Сайт"),
     BriefField("product_description", "Что продвигаем"),

@@ -43,10 +43,10 @@ def _mock_vk() -> dict[str, respx.Route]:
         "create": respx.post(f"{BASE_URL}/ad_plans.json").mock(
             return_value=httpx.Response(200, json={"id": _PLAN_ID})
         ),
-        "read": respx.get(f"{BASE_URL}/ad_plans.json").mock(
-            return_value=httpx.Response(
-                200, json={"items": [{"id": _PLAN_ID, "campaigns": [{"id": _GROUP_ID}]}]}
-            )
+        # Группы плана читаются через /ad_groups.json: вложенное поле `campaigns`
+        # у /ad_plans.json на чтение приходит пустым (боевая проверка 2026-07-27).
+        "read": respx.get(f"{BASE_URL}/ad_groups.json").mock(
+            return_value=httpx.Response(200, json={"items": [{"id": _GROUP_ID}]})
         ),
         "stop_plan": respx.post(f"{BASE_URL}/ad_plans/{_PLAN_ID}.json").mock(
             return_value=httpx.Response(204)
