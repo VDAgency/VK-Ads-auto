@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from integrations.vk_surfaces import SURFACES
+from integrations.vk_surfaces import (
+    GOAL_ENGAGEMENT,
+    GOAL_LEADS,
+    GOAL_SUBSCRIPTION,
+    SURFACES,
+)
 
 from services.brief_parser import Goal, TargetType
 
@@ -40,6 +45,11 @@ class SubscriptionTarget:
     title: str
     hint: str
     available: bool
+    # Цель кампании: подписка, вовлечение в готовый объект или сбор заявок.
+    goal: str
+    # Нужен ли клиенту креатив. Продвижение поста обходится без него: объявлением
+    # служит сам пост, и просить у клиента картинку незачем.
+    needs_creative: bool
 
     @property
     def target_type(self) -> TargetType:
@@ -59,9 +69,25 @@ def subscription_targets() -> tuple[SubscriptionTarget, ...]:
             title=surface.title,
             hint=surface.hint,
             available=surface.verified,
+            goal=surface.goal,
+            needs_creative=surface.needs_creative,
         )
         for surface in SURFACES
     )
+
+
+def targets_for_goal(goal: str) -> tuple[SubscriptionTarget, ...]:
+    """Площадки одной цели: подписка, вовлечение или заявки."""
+    return tuple(target for target in subscription_targets() if target.goal == goal)
+
+
+def goal_titles() -> dict[str, str]:
+    """Человеческие названия целей для интерфейсов."""
+    return {
+        GOAL_SUBSCRIPTION: "Подписчики",
+        GOAL_ENGAGEMENT: "Вовлечение в готовый объект",
+        GOAL_LEADS: "Заявки через лид-форму",
+    }
 
 
 def target_title(kind: str) -> str:

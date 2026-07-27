@@ -38,8 +38,10 @@ def _image(tmp_path: Path, width: int, height: int) -> str:
 
 
 def test_every_surface_has_icon_and_one_main_slot() -> None:
+    # Площадки продвижения готового поста шаблонов не имеют вовсе: объявлением
+    # служит сам пост, и креатив у клиента не запрашивается.
     for surface in SURFACES:
-        assert surface.patterns, f"{surface.kind} без шаблонов"
+        assert bool(surface.patterns) == surface.needs_creative, surface.kind
         for pattern in surface.patterns:
             assert pattern.media_slot != ICON_SLOT
             assert pattern.media_slot in CONTENT_SLOTS

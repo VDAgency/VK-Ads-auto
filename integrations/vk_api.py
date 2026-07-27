@@ -277,7 +277,7 @@ class VkApiAdapter(PlatformAdapter):
         ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
         content: dict[str, str] = {}
         pattern = ad_object.surface.default_pattern
-        if creative_ref:
+        if creative_ref and ad_object.surface.needs_creative:
             # Иконка обязательна в КАЖДОМ шаблоне VK, отдельного файла под неё нет —
             # готовим оба слота из одного присланного креатива. Медиа грузится ДО
             # плана: id нужен уже в теле вложенного banner.
@@ -496,7 +496,7 @@ def _campaign_body(
     body: dict[str, Any] = {
         "name": spec.name,
         "package_id": ad_object.package_id,
-        "autobidding_mode": AUTOBIDDING_MAX_GOALS,
+        "autobidding_mode": ad_object.surface.autobidding,
         "targetings": dict(targetings),
         "banners": [dict(banner) for banner in banners],
     }
@@ -508,7 +508,7 @@ def _campaign_body(
 def _banner_body(
     ad_object: AdObject,
     *,
-    pattern: Pattern,
+    pattern: Pattern | None,
     title: str,
     text: str,
     content: Mapping[str, str],
@@ -528,15 +528,22 @@ def _banner_body(
     `url_object_type` в запросе доступны лишь на чтение (`read_only_field`), а без `id`
     приходит `required / Empty value` (боевая проверка 2026-07-27).
     """
+    if pattern is None:
+        # Продвижение готового поста: объявлением служит сам пост, содержимого нет.
+        return {"urls": {ad_object.surface.url_slot: {"id": int(url_id)}}}
+
     textblocks: dict[str, dict[str, str]] = {
         pattern.title_slot: {"text": _fit(title, text_limit(pattern.title_slot))},
         pattern.text_slot: {"text": _fit(text, text_limit(pattern.text_slot))},
     }
     if pattern.cta_slot:
         textblocks[pattern.cta_slot] = {"text": cta or ad_object.surface.default_cta}
-    if pattern.name_slot:
-        # Дзен показывает имя канала отдельной строкой; берём заголовок объявления.
-        textblocks[pattern.name_slot] = {"text": _fit(title, text_limit(pattern.name_slot))}
+    for slot in pattern.extra_slots:
+        # Короткие слоты (имя канала, подзаголовок) заполняем заголовком, длинные —
+        # текстом объявления: так подпись остаётся осмысленной, а не обрубком.
+        limit = text_limit(slot)
+        source = title if limit <= text_limit(SLOT_TITLE) else text
+        textblocks[slot] = {"text": _fit(source, limit)}
     if about_company:
         # Юр. данные рекламодателя. Слот необязательный во всех шаблонах площадок.
         textblocks[SLOT_ABOUT_COMPANY] = {

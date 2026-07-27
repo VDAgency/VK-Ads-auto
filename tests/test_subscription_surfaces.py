@@ -65,7 +65,9 @@ def test_unknown_wording_stays_personal_page() -> None:
 def test_subscription_targets_expose_all_surfaces_to_interfaces() -> None:
     targets = subscription_targets()
     assert len(targets) == len(SURFACES)
-    assert all(target.available for target in targets), "все площадки прошли боевую проверку"
+    # Непроверенные показываем, но выбрать не даём — список остаётся честным.
+    unverified = [t.kind for t in targets if not t.available]
+    assert unverified == ["vk_clip"], unverified
     assert target_title("newsletter") == "Рассылка ВКонтакте"
     assert target_title("нет такой") == "нет такой"
 
@@ -142,8 +144,9 @@ def test_each_surface_sends_its_own_package_and_objective(tmp_path) -> None:  # 
         assert payload["objective"] == surface.objective, kind
         assert campaign["package_id"] == surface.package_id, kind
 
-        textblocks = campaign["banners"][0]["textblocks"]
         pattern = surface.default_pattern
+        assert pattern is not None, kind
+        textblocks = campaign["banners"][0]["textblocks"]
         assert pattern.title_slot in textblocks, kind
         assert pattern.text_slot in textblocks, kind
         if pattern.cta_slot:  # у Дзена кнопки нет вовсе
@@ -212,3 +215,61 @@ def test_dzen_accepts_only_images() -> None:
 
     assert not DZEN_CHANNEL.patterns_for(is_video=True)
     assert DZEN_CHANNEL.patterns_for(is_video=False)
+
+
+def test_engagement_surfaces_need_no_creative() -> None:
+    """Продвижение готового поста обходится без креатива — объявлением служит пост."""
+    from integrations.vk_surfaces import (
+        VK_MUSIC,
+        VK_POST_COMMUNITY,
+        VK_POST_PERSONAL,
+        VK_POST_PROMOTED,
+    )
+
+    for surface in (VK_POST_COMMUNITY, VK_POST_PERSONAL, VK_POST_PROMOTED, VK_MUSIC):
+        assert not surface.needs_creative, surface.kind
+        assert not surface.patterns, surface.kind
+        assert surface.url_slot == "vk_post", surface.kind
+
+
+def test_post_banner_carries_only_the_link(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from PIL import Image
+
+    creative = tmp_path / "square.png"
+    Image.new("RGB", (900, 900), (5, 5, 5)).save(creative)
+
+    # Креатив передан, но площадке он не нужен — в объявление уйдёт одна ссылка.
+    payload = _created_plan("vk_post_community", "https://vk.com/x?w=wall-1_2", str(creative))
+    banner = payload["campaigns"][0]["banners"][0]
+    assert set(banner) == {"urls"}
+    assert "vk_post" in banner["urls"]
+
+
+def test_clip_uses_fixed_bidding() -> None:
+    # Брендовый пакет отвергает оптимизацию под цель: `unallowed_value`.
+    from integrations.vk_surfaces import VK_CLIP, VK_POST_COMMUNITY
+
+    assert VK_CLIP.autobidding == "fixed"
+    assert VK_POST_COMMUNITY.autobidding == "max_goals"
+
+
+def test_lead_form_sends_every_required_text(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """У лид-форм пять обязательных текстов — пропуск любого ломает подбор шаблона."""
+    from PIL import Image
+
+    creative = tmp_path / "square.png"
+    Image.new("RGB", (900, 900), (5, 5, 5)).save(creative)
+
+    payload = _created_plan("lead_form", "https://vk.com/lead", str(creative))
+    textblocks = payload["campaigns"][0]["banners"][0]["textblocks"]
+    for slot in ("title_40_vkads", "text_90", "title_30_additional", "text_220", "cta_leadads"):
+        assert slot in textblocks, slot
+    assert len(textblocks["text_90"]["text"]) <= 90
+    assert len(textblocks["title_30_additional"]["text"]) <= 30
+
+
+def test_only_the_clip_is_unverified() -> None:
+    # Всё остальное прошло боевое создание; клип ждёт настоящей ссылки.
+    from integrations.vk_surfaces import SURFACES
+
+    assert [s.kind for s in SURFACES if not s.verified] == ["vk_clip"]

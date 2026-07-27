@@ -59,6 +59,9 @@ TEXT_SLOT_LIMITS: dict[str, int] = {
     "name_140": 140,
     "title_25": 25,
     "text_40": 40,
+    # Лид-формы: у них самый богатый набор обязательных текстов.
+    "text_220": 220,
+    "text_long": 2000,
 }
 
 # Соотношения сторон, которые различает VK.
@@ -88,6 +91,19 @@ TEXT_SHORT = "text_90"
 # требует собственный слот.
 URL_SLOT_PRIMARY = "primary"
 URL_SLOT_DZEN = "dzen_publication"
+# Продвижение уже существующего поста, клипа или трека: объявлением служит сам объект.
+URL_SLOT_POST = "vk_post"
+URL_SLOT_CLIP = "vk_clip"
+
+# Режим ставок. У подписных и лидовых пакетов это оптимизация под цель, у брендовых
+# (клипы) — фиксированная ставка: `max_goals` там отвергается как `unallowed_value`.
+BIDDING_MAX_GOALS = "max_goals"
+BIDDING_FIXED = "fixed"
+
+# Цель кампании — по ней интерфейсы группируют площадки.
+GOAL_SUBSCRIPTION = "subscription"
+GOAL_ENGAGEMENT = "engagement"
+GOAL_LEADS = "leads"
 
 _DURATION_RE = re.compile(r"_(\d+)s$")
 
@@ -127,8 +143,10 @@ class Pattern:
     cta_slot: str | None
     text_slot: str
     title_slot: str = SLOT_TITLE
-    # Дзен требует ещё имя канала (`name_140`); у остальных площадок такого слота нет.
-    name_slot: str | None = None
+    # Слоты, обязательные сверх заголовка, текста и кнопки: имя канала у Дзена,
+    # короткое описание и подпись под кнопкой у лид-форм. Пропуск любого из них —
+    # `bad_value: At least one pattern must be in package's settings`.
+    extra_slots: tuple[str, ...] = ()
 
     @property
     def is_video(self) -> bool:
@@ -161,6 +179,11 @@ class Surface:
     default_cta: str
     patterns: tuple[Pattern, ...]
     url_slot: str = URL_SLOT_PRIMARY
+    goal: str = GOAL_SUBSCRIPTION
+    autobidding: str = BIDDING_MAX_GOALS
+    # Продвижение готового поста креатива не требует: объявлением служит сам пост,
+    # и VK принимает объявление вообще без содержимого и текстов.
+    needs_creative: bool = True
     # Прошла ли площадка боевое создание кампании в живом кабинете. Непроверенные
     # в интерфейсе показываются как «скоро» и клиенту не предлагаются.
     verified: bool = False
@@ -174,12 +197,13 @@ class Surface:
         return tuple(pattern for pattern in self.patterns if pattern.is_video is is_video)
 
     @property
-    def default_pattern(self) -> Pattern:
+    def default_pattern(self) -> Pattern | None:
         """Шаблон, когда креатива ещё нет: нужен ради имён слотов кнопки и текста.
 
         Первым в каждом наборе идёт квадратная картинка — самый нейтральный вариант.
+        У площадок продвижения поста шаблонов нет вовсе, и это не ошибка.
         """
-        return self.patterns[0]
+        return self.patterns[0] if self.patterns else None
 
 
 def _patterns(
@@ -188,11 +212,11 @@ def _patterns(
     table: dict[int, str],
     *,
     title: str = SLOT_TITLE,
-    name: str | None = None,
+    extra: tuple[str, ...] = (),
 ) -> tuple[Pattern, ...]:
     """Собрать шаблоны площадки из таблицы «id шаблона → основной медиа-слот»."""
     return tuple(
-        Pattern(pattern_id, slot, cta, text, title, name) for pattern_id, slot in table.items()
+        Pattern(pattern_id, slot, cta, text, title, extra) for pattern_id, slot in table.items()
     )
 
 
@@ -397,7 +421,117 @@ DZEN_CHANNEL = Surface(
             581: "image_1080x1350",
         },
         title="title_25",
-        name="name_140",
+        extra=("name_140",),
+    ),
+)
+
+# --- Продвижение готового поста, клипа и трека -------------------------------------
+# Отдельное семейство: объявлением служит сам объект, поэтому креатив и тексты не
+# нужны — VK принимает объявление с одной только ссылкой (боевая проверка 2026-07-27).
+# Клиент присылает ссылку на конкретный пост, а не на сообщество.
+VK_POST_COMMUNITY = Surface(
+    kind="vk_post_community",
+    title="Пост сообщества ВКонтакте",
+    hint="ссылка на конкретный пост: vk.com/…?w=wall-123_456",
+    package_id=3194,
+    objective="socialengagement",
+    default_cta="",
+    verified=True,
+    url_slot=URL_SLOT_POST,
+    goal=GOAL_ENGAGEMENT,
+    needs_creative=False,
+    patterns=(),
+)
+
+VK_POST_PERSONAL = Surface(
+    kind="vk_post_personal",
+    title="Пост личной страницы ВКонтакте",
+    hint="ссылка на конкретный пост страницы: vk.com/…?w=wall123_456",
+    package_id=3270,
+    objective="socialengagement_profile",
+    default_cta="",
+    verified=True,
+    url_slot=URL_SLOT_POST,
+    goal=GOAL_ENGAGEMENT,
+    needs_creative=False,
+    patterns=(),
+)
+
+VK_POST_PROMOTED = Surface(
+    kind="vk_post_promoted",
+    title="Пост с переходом на сайт",
+    hint="ссылка на пост со ссылкой внутри: vk.com/…?w=wall-123_456",
+    package_id=4654,
+    objective="promoted_vk_post",
+    default_cta="",
+    verified=True,
+    url_slot=URL_SLOT_POST,
+    goal=GOAL_ENGAGEMENT,
+    needs_creative=False,
+    patterns=(),
+)
+
+VK_MUSIC = Surface(
+    kind="vk_music",
+    title="Музыка ВКонтакте",
+    hint="ссылка на трек или подборку",
+    package_id=3235,
+    objective="socialaudio",
+    default_cta="",
+    verified=True,
+    url_slot=URL_SLOT_POST,
+    goal=GOAL_ENGAGEMENT,
+    needs_creative=False,
+    patterns=(),
+)
+
+# Клип идёт по брендовому пакету, а он не принимает оптимизацию под цель:
+# `max_goals` → `autobidding_mode: unallowed_value`, работает только `fixed`.
+# ⚠️ `verified=False`: режим ставок и слот ссылки VK принял, но боевого создания не
+# было — под рукой не оказалось настоящего клипа, а выдуманный адрес отвергается на
+# уровне `urls`. Ставить `True` только после запуска на реальной ссылке.
+VK_CLIP = Surface(
+    kind="vk_clip",
+    title="Клип ВКонтакте",
+    hint="ссылка на клип: vk.com/clip-123_456",
+    package_id=3785,
+    objective="branding_socialengagement",
+    default_cta="",
+    url_slot=URL_SLOT_CLIP,
+    goal=GOAL_ENGAGEMENT,
+    autobidding=BIDDING_FIXED,
+    needs_creative=False,
+    patterns=(),
+)
+
+# --- Лид-формы ---------------------------------------------------------------------
+# Объект рекламы — лид-форма, созданная в интерфейсе VK: эндпоинта для её создания нет
+# (`/lead_forms.json` и соседние → 404), поэтому оператор делает форму руками и
+# присылает ссылку. Тексты богаче обычных: помимо заголовка нужны короткое описание
+# и подпись под кнопкой.
+LEAD_FORMS = Surface(
+    kind="lead_form",
+    title="Лид-форма ВКонтакте",
+    hint="ссылка на лид-форму, созданную в кабинете VK",
+    package_id=3215,
+    objective="leadads",
+    default_cta="enroll",
+    verified=True,
+    goal=GOAL_LEADS,
+    patterns=_patterns(
+        "cta_leadads",
+        "text_90",
+        {
+            507: "image_600x600",
+            506: "image_1080x607",
+            239: "image_607x1080",
+            508: "image_1080x1350",
+            503: "video_square_180s",
+            505: "video_landscape_180s",
+            502: "video_portrait_9_16_180s",
+            504: "video_portrait_4_5_180s",
+        },
+        extra=("title_30_additional", "text_220"),
     ),
 )
 
@@ -410,6 +544,12 @@ SURFACES: tuple[Surface, ...] = (
     OK_COMMUNITY,
     OK_PROFILE,
     DZEN_CHANNEL,
+    VK_POST_COMMUNITY,
+    VK_POST_PERSONAL,
+    VK_POST_PROMOTED,
+    VK_MUSIC,
+    VK_CLIP,
+    LEAD_FORMS,
 )
 
 _BY_KIND: dict[str, Surface] = {surface.kind: surface for surface in SURFACES}
