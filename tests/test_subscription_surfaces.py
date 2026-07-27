@@ -133,6 +133,7 @@ def test_each_surface_sends_its_own_package_and_objective(tmp_path) -> None:  # 
         "max_channel": "https://max.ru/some_channel",
         "ok_community": "https://ok.ru/group/70000001051417",
         "ok_profile": "https://ok.ru/profile/580483489443",
+        "dzen_channel": "https://dzen.ru/tehnologii",
     }
     for kind, url in cases.items():
         surface = surface_for(kind)
@@ -143,9 +144,10 @@ def test_each_surface_sends_its_own_package_and_objective(tmp_path) -> None:  # 
 
         textblocks = campaign["banners"][0]["textblocks"]
         pattern = surface.default_pattern
-        assert pattern.cta_slot in textblocks, kind
-        assert textblocks[pattern.cta_slot] == {"text": surface.default_cta}, kind
+        assert pattern.title_slot in textblocks, kind
         assert pattern.text_slot in textblocks, kind
+        if pattern.cta_slot:  # у Дзена кнопки нет вовсе
+            assert textblocks[pattern.cta_slot] == {"text": surface.default_cta}, kind
 
 
 def test_channels_cut_the_text_to_ninety_characters(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -166,3 +168,47 @@ def test_communities_exclude_existing_members_but_others_do_not() -> None:
         assert resolve_ad_object("https://x/y", kind).is_community, kind
     for kind in ("personal_page", "newsletter", "vk_channel", "max_channel", "ok_profile"):
         assert not resolve_ad_object("https://x/y", kind).is_community, kind
+
+
+def test_dzen_is_the_odd_one_out(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """У Дзена свои правила, и объявление обязано их соблюдать.
+
+    Ссылка идёт в слот `dzen_publication`, кнопки нет вовсе, заголовок ограничен
+    25 символами, и требуется отдельное имя канала (боевая проверка 2026-07-27).
+    """
+    from PIL import Image
+
+    creative = tmp_path / "square.png"
+    Image.new("RGB", (900, 900), (5, 5, 5)).save(creative)
+
+    payload = _created_plan("dzen_channel", "https://dzen.ru/tehnologii", str(creative))
+    banner = payload["campaigns"][0]["banners"][0]
+
+    assert "dzen_publication" in banner["urls"]
+    assert "primary" not in banner["urls"]
+
+    textblocks = banner["textblocks"]
+    assert not [slot for slot in textblocks if slot.startswith("cta")], "у Дзена кнопки нет"
+    assert "name_140" in textblocks
+    assert len(textblocks["title_25"]["text"]) <= 25
+    assert len(textblocks["text_40"]["text"]) <= 40
+
+
+def test_other_surfaces_keep_the_primary_url_slot(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from PIL import Image
+
+    creative = tmp_path / "square.png"
+    Image.new("RGB", (900, 900), (5, 5, 5)).save(creative)
+
+    banner = _created_plan("community", "https://vk.ru/c", str(creative))["campaigns"][0][
+        "banners"
+    ][0]
+    assert "primary" in banner["urls"]
+
+
+def test_dzen_accepts_only_images() -> None:
+    # Видео-шаблонов у пакета нет: подсовывать ролик бессмысленно.
+    from integrations.vk_surfaces import DZEN_CHANNEL
+
+    assert not DZEN_CHANNEL.patterns_for(is_video=True)
+    assert DZEN_CHANNEL.patterns_for(is_video=False)
