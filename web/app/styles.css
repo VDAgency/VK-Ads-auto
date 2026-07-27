@@ -1,302 +1,526 @@
 /* ==========================================================================
-   Базовые стили и токены дизайн-системы проекта.
+   styles.css — базовые элементы и общий слой компонентов.
 
-   Источник правды по значениям — docs/design.md; менять здесь и там синхронно.
-   Эстетика «операционного пульта»: спокойный тёмно-чернильный каркас, точная
-   сетка, один яркий синий акцент. Сигнатура — нумерованное поле `.field` с
-   моно-маркером `.num`: номер несёт смысл, по нему оператор правит сводку в
-   боте форматом `номер.значение`.
+   Значения не задаёт: всё берётся из tokens.css. Смысл системы — DESIGN.md.
+   Пластика компонентов снята с модалки входа (LoginModal): белая карточка,
+   крупный радиус, мягкая тень одного уровня, ясная вертикальная иерархия.
 
-   ВНИМАНИЕ по шрифтам: `--sans` — системный стек, как записано в docs/design.md.
-   docs/ДИЗАЙН-СИСТЕМА.md §4 считает системные шрифты анти-паттерном и требует
-   кириллический набор через next/font. Противоречие зафиксировано осознанно:
-   миграция на Next была переносом, а не редизайном. Решается в дизайн-сессии,
-   тогда же сюда переезжает и остальная система (Tailwind + shadcn).
+   Имена классов сохранены с прежней версии (topbar, wrap, card, field, btn,
+   note, result), чтобы кабинет, админка и инструкция продолжали работать без
+   правок разметки.
    ========================================================================== */
 
-:root {
-  --ink: #0b1221;
-  --paper: #f7f8fa;
-  --surface: #ffffff;
-  --accent: #2a6bff;
-  --muted: #5b6678;
-  --line: #e3e7ee;
-  --success: #12a594;
-  --danger: #e5484d;
-  --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
-  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-* {
-  box-sizing: border-box;
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  font-family: var(--sans);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
   color: var(--ink);
   background: var(--paper);
-  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* --------------------------------------------------------------------------
+   Фокус — общее правило для всего приложения.
+
+   Непрозрачный контур: полупрозрачное кольцо не даёт 3:1 ни при какой alpha
+   (замер прежнего варианта — 1.27:1 при норме WCAG 2.2 SC 1.4.11). outline,
+   а не box-shadow — иначе фокус исчезает в режиме высокой контрастности.
+   -------------------------------------------------------------------------- */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-sm);
+}
+
+/* --------------------------------------------------------------------------
+   Типографика
+   -------------------------------------------------------------------------- */
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 var(--space-3);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--fs-3xl);
+}
+h2 {
+  font-size: var(--fs-2xl);
+}
+h3 {
+  font-size: var(--fs-xl);
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0 0 var(--space-4);
+}
+
+.lead {
+  font-size: var(--fs-lg);
+  line-height: var(--lh-base);
+  color: var(--muted);
+  margin: 0 0 var(--space-8);
+  max-width: 60ch;
+  text-wrap: pretty;
 }
 
 a {
   color: var(--accent);
+  text-underline-offset: 3px;
+}
+a:hover {
+  color: var(--accent-strong);
+}
+
+/* Кикер над заголовком. Прежний цвет давал 4.25:1 — ниже AA для 13px. */
+.eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-2);
+}
+
+.section-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: var(--space-10) 0 var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* --------------------------------------------------------------------------
+   Каркас страницы
+   -------------------------------------------------------------------------- */
+
+/* Ссылка «к содержимому»: видна только при фокусе с клавиатуры. Без неё
+   пользователь обязан протабывать шапку на каждой загрузке. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) 0;
+  font-weight: 600;
+  text-decoration: none;
+}
+.skip-link:focus-visible {
+  left: 0;
 }
 
 .topbar {
-  background: var(--ink);
-  color: #fff;
-  padding: 16px 24px;
+  background: var(--ink-surface);
+  color: var(--on-ink);
+  padding: var(--space-4) var(--space-6);
 }
 .topbar .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 .topbar .brand span {
-  color: var(--accent);
+  color: var(--accent-on-dark);
 }
 
 .wrap {
-  max-width: 720px;
+  max-width: var(--w-form);
   margin: 0 auto;
-  padding: 32px 20px 80px;
+  padding: var(--space-10) var(--space-5) var(--space-24);
 }
 .wrap--wide {
-  max-width: 1080px;
+  max-width: var(--w-wide);
 }
 
-h1 {
-  font-size: 40px;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-  margin: 0 0 12px;
-}
-h2 {
-  font-size: 28px;
-  letter-spacing: -0.01em;
-  margin: 0 0 8px;
-}
-.lead {
-  font-size: 18px;
-  color: var(--muted);
-  margin: 0 0 32px;
-}
-.eyebrow {
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-/* Hero (landing) */
-.hero {
-  padding: 56px 0 24px;
-}
-.cards {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: 1fr 1fr;
-  margin-top: 24px;
-}
+/* --------------------------------------------------------------------------
+   Карточка — базовая поверхность. Карточек внутри карточек не делаем.
+   -------------------------------------------------------------------------- */
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 24px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-card);
 }
 .card h3 {
-  margin: 0 0 6px;
-  font-size: 20px;
+  margin: 0 0 var(--space-2);
 }
 .card p {
   color: var(--muted);
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
+}
+.card p:last-child {
+  margin-bottom: 0;
 }
 
-/* Form fields with mono number markers (signature) */
+.cards {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  margin-top: var(--space-6);
+}
+
+/* --------------------------------------------------------------------------
+   Поля ввода
+   -------------------------------------------------------------------------- */
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 var(--space-2);
+}
+
 .field {
   display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: 12px;
-  margin-bottom: 20px;
+  grid-template-columns: 2.5rem 1fr;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
   align-items: start;
 }
+/* Моно-маркер номера. Номер несёт смысл: по нему идут правки в боте. */
 .field .num {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
   color: var(--accent);
-  font-size: 15px;
-  padding-top: 30px;
+  padding-top: 1.9rem;
 }
-.field label {
+.field label,
+.form-field label {
   display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: var(--space-2);
 }
 .field .hint {
-  font-size: 12px;
+  display: block;
+  font-size: var(--fs-xs);
   color: var(--muted);
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
+
+.form-field {
+  margin-bottom: var(--space-4);
+}
+
 .field input,
 .field select,
-.field textarea {
+.field textarea,
+.form-field input,
+.form-field select,
+.form-field textarea {
   width: 100%;
-  font-family: var(--sans);
-  font-size: 15px;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  min-height: 2.75rem; /* 44px — тач-таргет */
+  transition:
+    border-color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
 }
-.field textarea {
-  min-height: 76px;
+.field textarea,
+.form-field textarea {
+  min-height: 5rem;
   resize: vertical;
 }
-.field input:focus,
-.field select:focus,
-.field textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+.field input::placeholder,
+.field textarea::placeholder,
+.form-field input::placeholder {
+  color: #68738a; /* 4.76:1 на белом */
 }
+.field input:hover,
+.field select:hover,
+.field textarea:hover,
+.form-field input:hover {
+  border-color: var(--ink);
+}
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.form-field input:focus-visible,
+.form-field select:focus-visible,
+.form-field textarea:focus-visible {
+  border-color: var(--accent);
+}
+
 .field.invalid input,
 .field.invalid select,
 .field.invalid textarea {
   border-color: var(--danger);
 }
 .field .error {
-  color: var(--danger);
-  font-size: 12px;
-  margin-top: 4px;
   display: none;
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  margin-top: var(--space-1);
 }
 .field.invalid .error {
   display: block;
 }
 
-/* Полноширинное поле (кабинет/модалка): одна колонка, крупный читаемый ввод.
-   Отдельно от .field (там grid 40px 1fr под мономаркер .num для форм брифа). */
-.form-field {
-  margin-bottom: 16px;
-}
-.form-field label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-.form-field input {
-  width: 100%;
-  font-family: var(--sans);
-  font-size: 16px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px 14px;
-}
-.form-field input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-fieldset {
-  border: 0;
-  padding: 0;
-  margin: 0 0 8px;
-}
-.section-title {
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 28px 0 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--line);
-}
-
+/* --------------------------------------------------------------------------
+   Кнопки. Высота ≥ 44px — тач-таргет.
+   -------------------------------------------------------------------------- */
 .btn {
-  font-family: var(--sans);
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  padding: var(--space-3) var(--space-5);
+  font-family: inherit;
+  font-size: var(--fs-sm);
   font-weight: 600;
-  border-radius: 8px;
-  padding: 12px 20px;
-  cursor: pointer;
+  line-height: 1.2;
   border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line-input);
   text-decoration: none;
-  display: inline-block;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
+.btn:hover {
+  background: var(--surface-sunk);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
 .btn--primary {
   background: var(--accent);
   color: #fff;
+  border-color: transparent;
 }
 .btn--primary:hover {
-  background: #1f59e0;
+  background: var(--accent-strong);
+  color: #fff;
 }
+
 .btn--ghost {
   background: transparent;
-  color: var(--ink);
   border-color: var(--line);
 }
-.btn[disabled] {
+.btn--ghost:hover {
+  background: var(--surface-sunk);
+}
+
+.btn--danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn[disabled],
+.btn[aria-disabled="true"] {
   opacity: 0.55;
   cursor: not-allowed;
 }
+.btn[disabled]:active {
+  transform: none;
+}
 
-.note {
-  background: var(--surface);
+/* --------------------------------------------------------------------------
+   Бейджи и статусы — один словарь на все зоны.
+   -------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: var(--surface-sunk);
+  color: var(--ink);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px;
+}
+.badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: transparent;
+}
+.badge--vk {
+  background: #e7f0ff;
+  color: #0052b8;
+  border-color: transparent;
+}
+.badge--warn {
+  background: #f7ece4;
+  color: var(--warn);
+  border-color: transparent;
+}
+.badge--danger {
+  background: #f8e9e9;
+  color: var(--danger);
+  border-color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Служебные блоки
+   -------------------------------------------------------------------------- */
+.note {
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-4);
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-sm);
 }
+
 .result {
-  border-radius: 10px;
-  padding: 16px;
-  margin-top: 20px;
   display: none;
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-top: var(--space-5);
+  font-size: var(--fs-sm);
+  border: 1px solid transparent;
 }
-.result.show {
+.result.show,
+.result.is-shown {
   display: block;
 }
 .result.ok {
-  background: rgba(18, 165, 148, 0.1);
-  border: 1px solid var(--success);
-  color: #0c6b60;
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 .result.err {
-  background: rgba(229, 72, 77, 0.08);
-  border: 1px solid var(--danger);
-  color: #a3262b;
+  background: #f8e9e9;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
-@media (max-width: 640px) {
-  h1 {
-    font-size: 30px;
-  }
-  .cards {
-    grid-template-columns: 1fr;
+/* --------------------------------------------------------------------------
+   Дорожка статуса — главный элемент клиентского кабинета.
+   -------------------------------------------------------------------------- */
+.track {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.track__step {
+  display: grid;
+  grid-template-columns: 1.75rem 1fr;
+  gap: var(--space-3);
+  align-items: start;
+}
+.track__dot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 2px solid var(--line-input);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+/* Соединительная линия между шагами. */
+.track__step:not(:last-child) .track__dot::after {
+  content: "";
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: var(--space-6);
+  background: var(--line);
+}
+.track__step.is-done .track__dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.track__step.is-done:not(:last-child) .track__dot::after {
+  background: var(--accent);
+}
+.track__step.is-current .track__dot {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.track__title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.track__step.is-todo .track__title {
+  color: var(--muted);
+}
+.track__desc {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   Адаптив
+   -------------------------------------------------------------------------- */
+@media (max-width: 40rem) {
+  .wrap {
+    padding: var(--space-8) var(--space-4) var(--space-16);
   }
   .field {
-    grid-template-columns: 28px 1fr;
-    gap: 8px;
+    grid-template-columns: 1.75rem 1fr;
+    gap: var(--space-2);
   }
   .field .num {
-    padding-top: 28px;
-    font-size: 13px;
+    padding-top: 1.85rem;
+    font-size: var(--fs-2xs);
   }
 }
 
+/* Системная настройка движения: гасим переходы, контент оставляем на месте. */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-    animation: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
