@@ -18,8 +18,13 @@ from aiogram.types import CallbackQuery, Message
 from bot import api_client
 from bot.access import OperatorOnly
 from bot.api_client import BriefNotFound, CoreUnavailable, CreativeRejected
-from bot.keyboards import brief_card_keyboard, creative_confirm_keyboard
-from bot.states import UploadCreative
+from bot.keyboards import (
+    ad_account_pick_keyboard,
+    brief_card_keyboard,
+    creative_confirm_keyboard,
+    launch_goal_keyboard,
+)
+from bot.states import LaunchCampaign, UploadCreative
 
 router = Router(name="creative")
 router.message.filter(OperatorOnly())
@@ -35,14 +40,121 @@ _ASK_DESCRIPTION = (
     "(до 220). Или отправьте «-», чтобы без описания."
 )
 _TOO_BIG = "Файл больше 20 МБ — Telegram не даёт боту его скачать. Пришлите версию полегче."
+_ASK_CABINET = "В каком рекламном кабинете запускаем кампанию?"
+_NO_CABINETS = (
+    "⚠️ Ни одного рекламного кабинета не добавлено — запускать некуда.\n"
+    "Добавьте кабинет командой /cabinets и повторите."
+)
+_NO_LIVE_CABINETS = (
+    "⚠️ Ни один кабинет сейчас не годится: VK не принимает их токены.\n"
+    "Откройте /cabinets, проверьте кабинеты и обновите токен."
+)
+
+# Цели рекламы: (код, подпись, реализована ли). Нереализованные показываем
+# «серыми» — оператор видит план, но выбрать не может, а ядро всё равно
+# отклонит такую цель (services/launch_service.SUPPORTED_GOALS).
+GOALS: list[tuple[str, str, bool]] = [
+    ("subscribers", "👥 Подписчики", True),
+    ("messages", "✉️ Сообщения в сообщество", False),
+    ("lead_form", "📝 Заявки — лид-форма", False),
+    ("senler", "🤖 Заявка через Senler", False),
+]
 
 
 @router.callback_query(F.data.startswith("creative:"))
 async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
-    """Начать загрузку креатива по кнопке карточки брифа."""
+    """Начать запуск по кнопке карточки брифа: сперва кабинет, потом цель.
+
+    Кабинет и цель спрашиваем ДО материалов (spec 2026-07-27 §9): если живого
+    кабинета нет, оператор узнает об этом сразу, а не после выгрузки видео.
+    """
     brief_id = int((callback.data or "").split(":", 1)[1])
-    await state.set_state(UploadCreative.waiting_media)
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    message = callback.message
+
+    try:
+        accounts = await api_client.list_ad_accounts()
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    usable = [item for item in accounts if item.is_usable]
+    if not accounts:
+        await message.answer(_NO_CABINETS)
+        await callback.answer()
+        return
+    if not usable:
+        await message.answer(_NO_LIVE_CABINETS)
+        await callback.answer()
+        return
+
+    await state.set_state(LaunchCampaign.choosing_cabinet)
     await state.update_data(brief_id=brief_id)
+    if len(usable) == 1:
+        # Один кабинет — выбирать не из чего, но подтверждение показываем:
+        # оператор должен видеть, куда именно уедет кампания.
+        await _ask_goal(message, state, brief_id, usable[0].id, usable[0].title)
+    else:
+        await message.answer(
+            _ASK_CABINET,
+            reply_markup=ad_account_pick_keyboard(
+                [(item.id, f"{item.title} (id {item.external_id})") for item in usable],
+                f"launch:{brief_id}",
+            ),
+        )
+    await callback.answer()
+
+
+async def _ask_goal(
+    message: Message, state: FSMContext, brief_id: int, ad_account_id: int, title: str
+) -> None:
+    """Запомнить кабинет и предложить выбрать цель рекламы."""
+    await state.update_data(ad_account_id=ad_account_id)
+    await state.set_state(LaunchCampaign.choosing_goal)
+    await message.answer(
+        f"Кабинет: <b>{title}</b>\n\nВыберите цель рекламы:",
+        parse_mode="HTML",
+        reply_markup=launch_goal_keyboard(brief_id, GOALS),
+    )
+
+
+@router.callback_query(
+    F.data.startswith("adacc:launch:"), StateFilter(LaunchCampaign.choosing_cabinet)
+)
+async def picked_cabinet(callback: CallbackQuery, state: FSMContext) -> None:
+    """Оператор выбрал кабинет — переходим к цели."""
+    parts = (callback.data or "").split(":")
+    brief_id, ad_account_id = int(parts[2]), int(parts[3])
+    if isinstance(callback.message, Message):
+        try:
+            accounts = await api_client.list_ad_accounts()
+        except CoreUnavailable:
+            await callback.message.answer(_UNAVAILABLE)
+            await callback.answer()
+            return
+        title = next((a.title for a in accounts if a.id == ad_account_id), "выбранный кабинет")
+        await _ask_goal(callback.message, state, brief_id, ad_account_id, title)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "goal:soon")
+async def goal_not_ready(callback: CallbackQuery) -> None:
+    """Цель ещё не реализована — говорим честно, вместо подмены на «подписчиков»."""
+    await callback.answer(
+        "Эта цель ещё не реализована. Сейчас доступны «Подписчики».", show_alert=True
+    )
+
+
+@router.callback_query(F.data.startswith("goal:"), StateFilter(LaunchCampaign.choosing_goal))
+async def picked_goal(callback: CallbackQuery, state: FSMContext) -> None:
+    """Цель выбрана — только теперь просим материалы."""
+    parts = (callback.data or "").split(":")
+    goal = parts[1]
+    await state.update_data(goal=goal)
+    await state.set_state(UploadCreative.waiting_media)
     if isinstance(callback.message, Message):
         await callback.message.answer(_ASK_MEDIA)
     await callback.answer()
@@ -134,6 +246,8 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
             int(data["height"]),
             str(data.get("title", "")),
             str(data.get("body", "")),
+            ad_account_id=data.get("ad_account_id"),
+            goal=data.get("goal"),
         )
     except BriefNotFound:
         await state.clear()

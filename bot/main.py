@@ -13,6 +13,7 @@ from config.settings import get_settings
 
 from bot import api_client, kotbot_watch, userbot_watch
 from bot.handlers import (
+    ad_accounts,
     admin,
     brief_card,
     creative,
@@ -42,6 +43,7 @@ def build_dispatcher() -> Dispatcher:
     dispatcher.include_router(admin.router)
     dispatcher.include_router(link_userbot.router)
     dispatcher.include_router(link_kotbot.router)
+    dispatcher.include_router(ad_accounts.router)
     dispatcher.include_router(help_handler.router)
     # Визитка для чужих — последней: ловит только не-операторские апдейты.
     dispatcher.include_router(stranger.router)

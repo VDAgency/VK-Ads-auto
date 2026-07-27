@@ -69,15 +69,24 @@ def _photo(size: int = 1000) -> Any:
     return SimpleNamespace(file_id="fid", width=800, height=800, file_size=size)
 
 
-def test_start_creative_sets_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_creative_asks_for_cabinet_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Запуск начинается с выбора кабинета и цели (spec 2026-07-27 §9).
+
+    Раньше здесь сразу просили медиа; теперь материалы запрашиваются только
+    после того, как выяснилось, что запускать вообще есть куда.
+    """
     monkeypatch.setattr(creative, "Message", _FakeMessage)
+
+    async def no_accounts() -> list[Any]:
+        return []
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", no_accounts)
     callback = _FakeCallback("creative:7")
     state = _FakeState()
     asyncio.run(creative.start_creative(callback, state))
 
-    assert state.state == UploadCreative.waiting_media
-    assert state.data["brief_id"] == 7
-    assert any("фото" in text.lower() for text, _ in callback.message.answers)
+    assert state.state is None
+    assert any("некуда" in text for text, _ in callback.message.answers)
 
 
 def test_got_media_photo_advances_to_description() -> None:
@@ -144,6 +153,7 @@ def test_send_creative_uploads_and_confirms(monkeypatch: pytest.MonkeyPatch) -> 
         height: int,
         title: str,
         body: str,
+        **kwargs: Any,
     ) -> CreativeResult:
         captured.update(brief_id=brief_id, media_type=media_type, title=title)
         return CreativeResult(campaign_status="prepared", campaign_id=5, message="🚀 подготовлена")
