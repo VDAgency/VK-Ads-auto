@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -22,8 +22,12 @@ type FieldBase = {
   label: string;
   hint?: string;
   required?: boolean;
-  /** Текст под полем, когда сервер вернул его в `missing`. */
+  /** Текст под полем, когда оно осталось незаполненным. */
   error?: string;
+  /** Ограничение длины: без него в поле уходит текст любого размера. */
+  maxLength?: number;
+  /** Допустимый вид значения (атрибут pattern). */
+  pattern?: string;
 };
 
 export type BriefField =
@@ -66,6 +70,37 @@ function fieldNames(row: BriefRow): string[] {
   return [row.name];
 }
 
+/** Обязательные поля строки, оставшиеся пустыми. */
+function missingNames(row: BriefRow, payload: Record<string, string>): string[] {
+  if (row.kind === "section" || row.kind === "instruction" || row.kind === "notice") return [];
+  if (row.kind === "pair") return row.items.flatMap((item) => missingNames(item, payload));
+  if (row.kind === "age" || !row.required) return [];
+  return payload[row.name] ? [] : [row.name];
+}
+
+/** Все незаполненные обязательные поля — в порядке отображения. */
+function collectMissing(rows: BriefRow[], payload: Record<string, string>): string[] {
+  return rows.flatMap((row) => missingNames(row, payload));
+}
+
+/** Ключ черновика: у каждого варианта брифа свой. */
+function draftKey(variant: BriefVariant): string {
+  return `vk-ads-auto:brief-draft:${variant}`;
+}
+
+/** Прочитать черновик. Любая ошибка хранилища означает «черновика нет». */
+function readDraft(variant: BriefVariant): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(draftKey(variant));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Форма брифа.
  *
@@ -80,14 +115,77 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
   const [result, setResult] = useState<{ kind: ResultKind; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
-  function showResult(kind: ResultKind, message: string) {
+  function showResult(kind: ResultKind, message: string, scroll = true) {
     setResult({ kind, message });
-    // Прежнее поведение: подвести пользователя к сообщению о результате.
+    if (!scroll) return;
     requestAnimationFrame(() => {
       resultRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }
+
+  /**
+   * Подвести к первому незаполненному полю.
+   *
+   * Без этого человек, заполнивший 19–29 полей, получал общее сообщение внизу
+   * страницы и искал красные рамки прокруткой — на телефоне это около
+   * четырёх тысяч пикселей вслепую.
+   */
+  function focusFirstInvalid(name: string) {
+    const el = formRef.current?.querySelector<HTMLElement>(`[name="${name}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Фокус после прокрутки: иначе браузер сам дёрнет вид на своё место.
+    window.setTimeout(() => el.focus({ preventScroll: true }), 320);
+  }
+
+  /** Сохранить заполненное. Вызывается на каждый ввод и выбор. */
+  function saveDraft() {
+    const form = formRef.current;
+    if (!form) return;
+    const data: Record<string, string> = {};
+    for (const [name, value] of new FormData(form).entries()) {
+      if (typeof value === "string" && value !== "") data[name] = value;
+    }
+    try {
+      window.localStorage.setItem(draftKey(variant), JSON.stringify(data));
+    } catch {
+      // Приватный режим или переполненное хранилище: черновик не критичен.
+    }
+  }
+
+  function clearDraft() {
+    try {
+      window.localStorage.removeItem(draftKey(variant));
+    } catch {
+      // см. saveDraft
+    }
+  }
+
+  // Восстановление черновика. Обновление страницы, кнопка «назад» или звонок
+  // на телефоне прежде стирали все ответы без предупреждения.
+  useEffect(() => {
+    const draft = readDraft(variant);
+    const form = formRef.current;
+    if (!form || Object.keys(draft).length === 0) return;
+
+    for (const [name, value] of Object.entries(draft)) {
+      const el = form.elements.namedItem(name);
+      if (el instanceof RadioNodeList) {
+        for (const node of Array.from(el)) {
+          if (node instanceof HTMLInputElement && node.value === value) node.checked = true;
+        }
+      } else if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      ) {
+        el.value = value;
+      }
+    }
+    showResult("ok", "Мы восстановили то, что вы заполняли раньше.", false);
+  }, [variant]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,6 +201,22 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
     }
     for (const [name, value] of new FormData(form).entries()) {
       if (typeof value === "string") payload[name] = value.trim();
+    }
+
+    // Проверяем на клиенте, а не ждём ответа 422: незаполненное поле должно
+    // находиться до сетевого запроса, а не после него.
+    const missing = collectMissing(rows, payload);
+    if (missing.length > 0) {
+      setInvalid(new Set(missing));
+      focusFirstInvalid(missing[0]);
+      showResult(
+        "err",
+        missing.length === 1
+          ? "Одно обязательное поле не заполнено — мы к нему перешли."
+          : `Не заполнено обязательных полей: ${missing.length}. Мы перешли к первому.`,
+        false,
+      );
+      return;
     }
 
     setInvalid(new Set());
@@ -122,6 +236,7 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
       });
 
       form.reset();
+      clearDraft();
 
       // Авто-переброс в личный кабинет по magic-link из ответа. Ссылки нет —
       // показываем подтверждение (обратная совместимость).
@@ -134,8 +249,14 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
     } catch (error) {
       if (error instanceof ApiError && error.status === 422) {
         const detail = error.detail as { missing?: string[] } | undefined;
-        setInvalid(new Set(detail?.missing ?? []));
-        showResult("err", "Заполните обязательные поля, отмеченные красным.");
+        const serverMissing = detail?.missing ?? [];
+        setInvalid(new Set(serverMissing));
+        if (serverMissing.length > 0) {
+          focusFirstInvalid(serverMissing[0]);
+          showResult("err", "Заполните обязательные поля, отмеченные красным.", false);
+        } else {
+          showResult("err", "Заполните обязательные поля, отмеченные красным.");
+        }
       } else if (error instanceof ApiError) {
         showResult("err", "Не удалось отправить. Попробуйте позже.");
       } else {
@@ -148,7 +269,14 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
 
   return (
     <>
-      <form data-variant={variant} noValidate onSubmit={handleSubmit}>
+      <form
+        ref={formRef}
+        data-variant={variant}
+        noValidate
+        onSubmit={handleSubmit}
+        onInput={saveDraft}
+        onChange={saveDraft}
+      >
         {rows.map((row, index) => (
           <Row key={rowKey(row, index)} row={row} invalid={invalid} />
         ))}
@@ -240,6 +368,8 @@ function Field({ field, invalid }: { field: BriefField; invalid: ReadonlySet<str
             type="text"
             name="age_from"
             inputMode="numeric"
+            maxLength={3}
+            pattern="[0-9]{1,3}"
             placeholder="от"
             aria-label="Возраст от"
           />
@@ -247,6 +377,8 @@ function Field({ field, invalid }: { field: BriefField; invalid: ReadonlySet<str
             type="text"
             name="age_to"
             inputMode="numeric"
+            maxLength={3}
+            pattern="[0-9]{1,3}"
             placeholder="до"
             aria-label="Возраст до"
           />
@@ -298,6 +430,8 @@ function Field({ field, invalid }: { field: BriefField; invalid: ReadonlySet<str
           autoComplete={field.autoComplete}
           inputMode={field.inputMode}
           required={field.required}
+          maxLength={field.maxLength}
+          pattern={field.pattern}
           aria-invalid={isInvalid || undefined}
           aria-describedby={isInvalid && field.error ? errorId : undefined}
         />
@@ -310,6 +444,7 @@ function Field({ field, invalid }: { field: BriefField; invalid: ReadonlySet<str
           rows={field.rows}
           placeholder={field.placeholder}
           required={field.required}
+          maxLength={field.maxLength}
           aria-invalid={isInvalid || undefined}
           aria-describedby={isInvalid && field.error ? errorId : undefined}
         />
