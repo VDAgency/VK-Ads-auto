@@ -55,6 +55,13 @@ class TargetType(Enum):
     OK_COMMUNITY = "ok_community"
     OK_PROFILE = "ok_profile"
     DZEN_CHANNEL = "dzen_channel"
+    # Смежные цели: продвижение готового объекта и сбор заявок.
+    VK_POST_COMMUNITY = "vk_post_community"
+    VK_POST_PERSONAL = "vk_post_personal"
+    VK_POST_PROMOTED = "vk_post_promoted"
+    VK_MUSIC = "vk_music"
+    VK_CLIP = "vk_clip"
+    LEAD_FORM = "lead_form"
 
 
 class OrgType(Enum):
@@ -227,6 +234,21 @@ def parse_target_type(value: str) -> TargetType:
     непонятое значение — личная страница, как было исторически.
     """
     text = _clean(value).lower()
+
+    # Смежные цели распознаём раньше подписных: «пост сообщества» — это пост, а не
+    # сообщество, и «лид-форма» не имеет отношения к площадкам подписки.
+    if "лид" in text or "форма" in text or "заявк" in text:
+        return TargetType.LEAD_FORM
+    if "клип" in text:
+        return TargetType.VK_CLIP
+    if "музык" in text or "трек" in text:
+        return TargetType.VK_MUSIC
+    if "пост" in text:
+        if "сайт" in text or "переход" in text:
+            return TargetType.VK_POST_PROMOTED
+        if "страниц" in text or "личн" in text:
+            return TargetType.VK_POST_PERSONAL
+        return TargetType.VK_POST_COMMUNITY
 
     is_ok = "однокласс" in text or "ok.ru" in text or "ок " in f" {text}"
     if is_ok:
