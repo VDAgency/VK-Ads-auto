@@ -170,10 +170,14 @@ def campaign_objective(spec: CampaignSpec) -> str:
     return resolved
 
 
-def creative_pattern(spec: CampaignSpec, creative_ref: str) -> Pattern:
+def creative_pattern(
+    spec: CampaignSpec, creative_ref: str, *, prefer_video: bool = False
+) -> Pattern:
     """Шаблон объявления под присланный креатив и площадку из спеки."""
     return pattern_for_creative(
-        resolve_ad_object(spec.object_url, spec.object_kind).surface, creative_ref
+        resolve_ad_object(spec.object_url, spec.object_kind).surface,
+        creative_ref,
+        prefer_video=prefer_video,
     )
 
 
@@ -257,6 +261,7 @@ class VkApiAdapter(PlatformAdapter):
         body: str | None = None,
         budget_limit_day: float | None = None,
         activate: bool = False,
+        prefer_video: bool = False,
     ) -> str:
         """Собрать кампанию целиком одним вложенным запросом (плюс загрузка медиа).
 
@@ -271,7 +276,9 @@ class VkApiAdapter(PlatformAdapter):
             # Иконка обязательна в КАЖДОМ шаблоне VK, отдельного файла под неё нет —
             # готовим оба слота из одного присланного креатива. Медиа грузится ДО
             # плана: id нужен уже в теле вложенного banner.
-            pattern = pattern_for_creative(ad_object.surface, creative_ref)
+            pattern = pattern_for_creative(
+                ad_object.surface, creative_ref, prefer_video=prefer_video
+            )
             for slot in (ICON_SLOT, pattern.media_slot):
                 content[slot] = await self._upload_for_slot(
                     cabinet_id, creative_ref, slot, pattern.ratio

@@ -96,3 +96,36 @@ def test_real_ffmpeg_produces_a_playable_file(tmp_path: Path) -> None:
 
     out = asyncio.run(image_to_video(str(source), "9:16", tmp_path / "vid"))
     assert out.exists() and out.stat().st_size > 1000
+
+
+def test_video_ad_from_a_static_image_uses_the_video_slot(tmp_path: Path) -> None:
+    """Просьба «сделай видео» переводит объявление на видео-шаблон.
+
+    Без этого ветка сборки ролика недостижима: под картинку всегда находится
+    картиночный шаблон, и ffmpeg никогда бы не позвали.
+    """
+    from integrations.vk_creative_formats import pattern_for_creative
+    from integrations.vk_surfaces import VK_COMMUNITY
+    from PIL import Image
+
+    source = tmp_path / "tall.png"
+    Image.new("RGB", (1080, 1920), (1, 2, 3)).save(source)
+
+    plain = pattern_for_creative(VK_COMMUNITY, str(source))
+    asked = pattern_for_creative(VK_COMMUNITY, str(source), prefer_video=True)
+
+    assert not plain.is_video and plain.media_slot.startswith("image_")
+    assert asked.is_video and asked.ratio == plain.ratio
+
+
+def test_video_request_is_ignored_where_the_surface_has_no_video(tmp_path: Path) -> None:
+    # У Дзена видео-шаблонов нет: отказывать клиенту из-за формата нечестно,
+    # поэтому просьба тихо игнорируется в пользу картинки.
+    from integrations.vk_creative_formats import pattern_for_creative
+    from integrations.vk_surfaces import DZEN_CHANNEL
+    from PIL import Image
+
+    source = tmp_path / "tall.png"
+    Image.new("RGB", (1080, 1920), (1, 2, 3)).save(source)
+
+    assert not pattern_for_creative(DZEN_CHANNEL, str(source), prefer_video=True).is_video
