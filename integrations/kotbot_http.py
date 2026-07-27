@@ -190,6 +190,7 @@ class KotbotAdapter(PlatformAdapter):
         title: str | None = None,
         body: str | None = None,
         budget_limit_day: float | None = None,
+        activate: bool = False,
     ) -> str:
         """Кампания целиком одним вызовом ядра: спека + креатив + тексты.
 

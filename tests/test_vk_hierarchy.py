@@ -22,10 +22,8 @@ import respx
 from integrations.vk_api import (
     AUTOBIDDING_MAX_GOALS,
     BASE_URL,
-    IMAGE_CONTENT_SLOT,
     PACKAGE_COMMUNITY,
     PACKAGE_PROFILE,
-    VIDEO_CONTENT_SLOT,
     VkApiAdapter,
     _banner_body,
     _parse_summary,
@@ -33,7 +31,7 @@ from integrations.vk_api import (
     resolve_ad_object,
 )
 from pydantic import SecretStr
-from services.mapping import CampaignSpec
+from services.mapping import OBJECT_KIND_COMMUNITY, OBJECT_KIND_PERSONAL, CampaignSpec
 
 _REGIONS: list[dict[str, Any]] = [
     {"id": 188, "name": "Россия", "parent_id": None},
@@ -68,6 +66,23 @@ def _run(scenario: Callable[[respx.MockRouter], Awaitable[T]]) -> T:
         with respx.mock(assert_all_called=False) as router:
             router.get(f"{BASE_URL}/regions.json").mock(
                 return_value=httpx.Response(200, json={"items": _REGIONS})
+            )
+            # Объявление ссылается на объект рекламы только через id url-объекта.
+            router.post(f"{BASE_URL}/urls.json").mock(
+                return_value=httpx.Response(201, json={"id": 128898271})
+            )
+            # Создание неактивно по умолчанию: VK отдаёт кампанию активной, и адаптер
+            # сразу гасит её вместе с вложенными группами.
+            router.get(f"{BASE_URL}/ad_plans.json").mock(
+                return_value=httpx.Response(
+                    200, json={"items": [{"id": 26135882, "campaigns": [{"id": 147206867}]}]}
+                )
+            )
+            router.post(url__regex=rf"{BASE_URL}/ad_plans/\d+\.json").mock(
+                return_value=httpx.Response(204)
+            )
+            router.post(url__regex=rf"{BASE_URL}/ad_groups/\d+\.json").mock(
+                return_value=httpx.Response(204)
             )
             return await scenario(router)
 
@@ -237,22 +252,17 @@ def test_nested_banner_carries_textblocks_and_urls() -> None:
         "text_2000": {"text": "Текст объявления"},
         "cta_community_vk": {"text": "signUp"},
     }
-    assert banner["urls"] == {
-        "primary": {
-            "url": "https://vk.com/club228817082",
-            "url_object_id": "228817082",
-            "url_object_type": "vk_group",
-        }
-    }
+    # Ссылка задаётся ТОЛЬКО id заранее созданного url-объекта: сами `url` и
+    # `url_object_type` доступны в запросе лишь на чтение (боевая проверка 2026-07-27).
+    assert banner["urls"] == {"primary": {"id": 128898271}}
     assert banner["content"] == {}
 
 
-def test_nested_banner_omits_url_object_id_for_vanity_url() -> None:
+def test_vanity_url_also_goes_through_url_object() -> None:
+    # Короткий адрес VK разбирает сам при регистрации url-объекта, поэтому
+    # вытаскивать числовой id на своей стороне не требуется.
     banner = _nested_banner(_spec(object_url="https://vk.com/my_community"))
-    assert banner["urls"]["primary"] == {
-        "url": "https://vk.com/my_community",
-        "url_object_type": "vk_group",
-    }
+    assert banner["urls"]["primary"] == {"id": 128898271}
 
 
 def test_banner_texts_fall_back_to_campaign_name_and_are_trimmed() -> None:
@@ -271,8 +281,11 @@ def test_creative_is_uploaded_before_the_plan_and_lands_in_banner_slot() -> None
         )
 
         async def call() -> str:
-            path = Path(tempfile.gettempdir()) / "vk-ads-auto-test-creative.jpg"
-            path.write_bytes(b"\xff\xd8\xff")
+            # Нужна настоящая картинка: адаптер читает размеры и приводит её к слоту.
+            from PIL import Image
+
+            path = Path(tempfile.gettempdir()) / "vk-ads-auto-test-creative.png"
+            Image.new("RGB", (1080, 607), (10, 30, 60)).save(path)
             try:
                 await _adapter().create_campaign_from_spec("cab-1", _spec(), creative_ref=str(path))
             finally:
@@ -282,12 +295,17 @@ def test_creative_is_uploaded_before_the_plan_and_lands_in_banner_slot() -> None
         return call()
 
     banner = json.loads(_run(scenario))["campaigns"][0]["banners"][0]
-    assert banner["content"] == {"icon_256x256": {"id": 777}}
+    # Иконка обязательна в каждом шаблоне VK, поэтому один креатив занимает оба слота.
+    assert banner["content"] == {
+        "icon_256x256": {"id": 777},
+        "image_1080x607": {"id": 777},
+    }
 
 
 def test_content_slot_depends_on_media_kind() -> None:
-    assert content_slot("/data/creatives/1/ad.jpg") == IMAGE_CONTENT_SLOT
-    assert content_slot("/data/creatives/1/ad.MP4") == VIDEO_CONTENT_SLOT
+    # Слот подбирается по типу объекта: у сообщества доступна вертикаль, у профиля нет.
+    assert content_slot("/data/creatives/1/ad.MP4", OBJECT_KIND_COMMUNITY).startswith("video_")
+    assert content_slot("/data/creatives/1/ad.MP4", OBJECT_KIND_PERSONAL).startswith("video_")
 
 
 # --- построитель banner как чистая функция ----------------------------------------
@@ -296,6 +314,7 @@ def test_content_slot_depends_on_media_kind() -> None:
 def test_banner_body_adds_about_company_when_given() -> None:
     banner = _banner_body(
         _spec(),
+        url_id="128898271",
         title="З",
         text="Т",
         content={},
@@ -305,13 +324,13 @@ def test_banner_body_adds_about_company_when_given() -> None:
 
 
 def test_banner_body_omits_about_company_when_absent() -> None:
-    banner = _banner_body(_spec(), title="З", text="Т", content={})
+    banner = _banner_body(_spec(), title="З", text="Т", content={}, url_id="128898271")
     assert "about_company_115" not in banner["textblocks"]
 
 
 def test_banner_body_rejects_unknown_content_slot() -> None:
     with pytest.raises(ValueError, match="content slot"):
-        _banner_body(_spec(), title="З", text="Т", content={"banner_240x400": "777"})
+        _banner_body(_spec(), title="З", text="Т", content={"banner_240x400": "777"}, url_id="1")
 
 
 # --- контрактный create_campaign ---------------------------------------------------
@@ -331,9 +350,7 @@ def test_create_campaign_with_spec_builds_the_full_nested_plan() -> None:
 
     payload = json.loads(_run(scenario))
     assert payload["id"] == "555"
-    assert payload["body"]["campaigns"][0]["banners"][0]["urls"]["primary"]["url_object_id"] == (
-        "228817082"
-    )
+    assert payload["body"]["campaigns"][0]["banners"][0]["urls"]["primary"] == {"id": 128898271}
 
 
 def test_create_campaign_without_spec_still_sends_one_campaign() -> None:
@@ -383,19 +400,26 @@ def test_get_status_unknown_when_field_missing() -> None:
     assert _run(scenario) == "unknown"
 
 
-def test_stop_blocks_ad_plan() -> None:
-    def scenario(router: respx.MockRouter) -> Awaitable[str]:
-        route = router.post(f"{BASE_URL}/ad_plans/555.json").mock(
-            return_value=httpx.Response(200, json={})
-        )
-
-        async def call() -> str:
+def test_stop_blocks_ad_plan_and_its_groups() -> None:
+    # Остановки одного плана мало: деньги списываются по группам, гасим оба уровня.
+    def scenario(router: respx.MockRouter) -> Awaitable[list[tuple[str, str]]]:
+        async def call() -> list[tuple[str, str]]:
             await _adapter().stop("555")
-            return str(_body(route)["status"])
+            return [
+                (str(call_.request.url), json.loads(call_.request.content).get("status", ""))
+                for call_ in router.calls
+                if call_.request.method == "POST"
+            ]
 
         return call()
 
-    assert _run(scenario) == "blocked"
+    stopped = _run(scenario)
+    assert any(
+        url.endswith("/ad_plans/555.json") and status == "blocked" for url, status in stopped
+    )
+    assert any(
+        url.endswith("/ad_groups/147206867.json") and status == "blocked" for url, status in stopped
+    )
 
 
 # --- статистика: результат лежит в base.vk.result ---------------------------------

@@ -33,6 +33,17 @@ from services.brief_parser import TargetType
 from services.mapping import CampaignSpec
 
 from integrations.adapter import PlatformAdapter
+from integrations.vk_creative_formats import (
+    COMMUNITY_FORMATS,
+    ICON_SLOT,
+    PERSONAL_FORMATS,
+    cta_slot,
+    fit_to_slot,
+    image_size,
+    is_video,
+    pick_format,
+    slot_size,
+)
 from integrations.vk_geo import VkGeoResolver
 
 logger = logging.getLogger(__name__)
@@ -60,11 +71,12 @@ STATUS_BLOCKED = "blocked"
 # Слоты пакета 3122 (для 3268 набор не подтверждён — VERIFY).
 SLOT_TITLE = "title_40_vkads"
 SLOT_TEXT = "text_2000"
-SLOT_CTA = "cta_community_vk"
+# Слот кнопки зависит от типа объекта — берём из справочника форматов.
 SLOT_ABOUT_COMPANY = "about_company_115"
-IMAGE_CONTENT_SLOT = "icon_256x256"
-VIDEO_CONTENT_SLOT = "video_portrait_9_16_180s"
-CONTENT_SLOTS = frozenset({IMAGE_CONTENT_SLOT, VIDEO_CONTENT_SLOT})
+# Все медиа-слоты, известные справочнику шаблонов (icon + основной слот формата).
+CONTENT_SLOTS = frozenset(
+    {ICON_SLOT} | {fmt.slot for fmt in PERSONAL_FORMATS} | {fmt.slot for fmt in COMMUNITY_FORMATS}
+)
 DEFAULT_CTA = "signUp"
 
 # Ограничения слотов текстов пакета (title_40_vkads / text_2000).
@@ -178,13 +190,17 @@ def campaign_objective(spec: CampaignSpec) -> str:
     return resolved
 
 
-def content_slot(creative_ref: str) -> str:
-    """Слот медиа объявления по расширению файла: видео → видеослот, иначе картинка."""
-    return (
-        VIDEO_CONTENT_SLOT
-        if Path(creative_ref).suffix.lower() in _VIDEO_SUFFIXES
-        else IMAGE_CONTENT_SLOT
-    )
+def content_slot(creative_ref: str, object_kind: str) -> str:
+    """Основной медиа-слот под присланный креатив.
+
+    Подбор идёт по справочнику шаблонов: VK принимает объявление, только если его
+    содержимое совпадает с одним из разрешённых пакетом шаблонов. Видео размеры не
+    читаем — для него достаточно расширения, соотношение берём квадратное.
+    """
+    if is_video(creative_ref):
+        return pick_format(object_kind, width=1, height=1, is_video=True).slot
+    width, height = image_size(creative_ref)
+    return pick_format(object_kind, width=width, height=height, is_video=False).slot
 
 
 def _fit(text: str, limit: int) -> str:
@@ -266,6 +282,7 @@ class VkApiAdapter(PlatformAdapter):
         title: str | None = None,
         body: str | None = None,
         budget_limit_day: float | None = None,
+        activate: bool = False,
     ) -> str:
         """Собрать кампанию целиком одним вложенным запросом (плюс загрузка медиа).
 
@@ -275,15 +292,18 @@ class VkApiAdapter(PlatformAdapter):
         """
         content: dict[str, str] = {}
         if creative_ref:
-            # Медиа грузится ДО плана: id нужен уже в теле вложенного banner.
-            content[content_slot(creative_ref)] = await self.upload_creative(
-                cabinet_id, creative_ref
-            )
+            # Иконка обязательна в КАЖДОМ шаблоне VK, отдельного файла под неё нет —
+            # готовим оба слота из одного присланного креатива. Медиа грузится ДО
+            # плана: id нужен уже в теле вложенного banner.
+            main_slot = content_slot(creative_ref, spec.object_kind)
+            for slot in (ICON_SLOT, main_slot):
+                content[slot] = await self._upload_for_slot(cabinet_id, creative_ref, slot)
         banner = _banner_body(
             spec,
             title=_fit(title or spec.name, TITLE_MAX_LEN),
             text=_fit(body or spec.name, TEXT_MAX_LEN),
             content=content,
+            url_id=await self.create_url_object(spec.object_url),
         )
         campaign = _campaign_body(
             spec,
@@ -294,7 +314,36 @@ class VkApiAdapter(PlatformAdapter):
         payload = _ad_plan_body(
             name=spec.name, objective=campaign_objective(spec), campaigns=[campaign]
         )
-        return await self._post_ad_plan(payload)
+        plan_id = await self._post_ad_plan(payload)
+        if not activate:
+            # ⚠️ VK создаёт кампанию сразу в статусе `active` — не вызвать `launch()`
+            # НЕДОСТАТОЧНО, деньги начнут списываться (боевая проверка 2026-07-27).
+            # Поэтому гасим немедленно; по умолчанию создание неактивно.
+            logger.info("Campaign %s created inactive: stopping right after creation", plan_id)
+            await self.stop(plan_id)
+        return plan_id
+
+    async def _upload_for_slot(self, cabinet_id: str, creative_ref: str, slot: str) -> str:
+        """Подогнать креатив под размеры слота (если они заданы) и загрузить."""
+        target = slot_size(slot)
+        if target is None or is_video(creative_ref):
+            return await self.upload_creative(cabinet_id, creative_ref)
+        prepared = await asyncio.to_thread(
+            fit_to_slot, creative_ref, target, Path(creative_ref).parent / "_vk"
+        )
+        return await self.upload_creative(cabinet_id, str(prepared))
+
+    async def create_url_object(self, object_url: str) -> str:
+        """Зарегистрировать ссылку объекта рекламы и вернуть id url-объекта.
+
+        Объявление ссылается на объект рекламы только через этот id. VK сам
+        разбирает короткий (vanity) адрес: `https://vk.ru/fin_dolm` принимается
+        наравне с числовым `https://vk.com/id808632468` (боевая проверка 2026-07-27),
+        поэтому вытаскивать числовой идентификатор на своей стороне не требуется.
+        """
+        response = await self._request("POST", "/urls.json", json={"url": object_url})
+        response.raise_for_status()
+        return str(response.json()["id"])
 
     async def _post_ad_plan(self, body: Mapping[str, Any]) -> str:
         """Отправить тело плана и вернуть id созданного ad_plan."""
@@ -316,9 +365,15 @@ class VkApiAdapter(PlatformAdapter):
         return targetings
 
     async def upload_creative(self, campaign_id: str, creative_ref: str) -> str:
-        """Загрузить статичный креатив (multipart) и вернуть content id."""
-        content = await asyncio.to_thread(Path(creative_ref).read_bytes)
-        files = {"file": ("creative", content)}
+        """Загрузить статичный креатив (multipart) и вернуть content id.
+
+        Имя файла обязано нести расширение: VK определяет формат по нему, а не по
+        содержимому. С именем без расширения тот же PNG отвергается как
+        `format_not_supported` (боевая проверка 2026-07-27).
+        """
+        path = Path(creative_ref)
+        content = await asyncio.to_thread(path.read_bytes)
+        files = {"file": (path.name, content)}
         response = await self._request("POST", "/content/static.json", files=files)
         response.raise_for_status()
         return str(response.json()["id"])
@@ -331,11 +386,32 @@ class VkApiAdapter(PlatformAdapter):
         response.raise_for_status()
 
     async def stop(self, campaign_id: str) -> None:
-        """Остановить кампанию (в VK — статус `blocked`)."""
+        """Остановить кампанию и все её группы объявлений (в VK — статус `blocked`).
+
+        Гасим оба уровня: остановки одного `ad_plan` недостаточно, деньги списываются
+        по группам. Порядок именно такой — сперва план, потом группы, чтобы между
+        запросами ничего не успело открутиться.
+        """
         response = await self._request(
             "POST", f"/ad_plans/{campaign_id}.json", json={"status": STATUS_BLOCKED}
         )
         response.raise_for_status()
+        for group_id in await self._campaign_ids(campaign_id):
+            group = await self._request(
+                "POST", f"/ad_groups/{group_id}.json", json={"status": STATUS_BLOCKED}
+            )
+            group.raise_for_status()
+
+    async def _campaign_ids(self, campaign_id: str) -> list[str]:
+        """Id вложенных групп объявлений (в терминах API — `campaigns`)."""
+        response = await self._request(
+            "GET", "/ad_plans.json", params={"_id": campaign_id, "fields": "id,campaigns"}
+        )
+        response.raise_for_status()
+        items = response.json().get("items") or []
+        if not items:
+            return []
+        return [str(entry["id"]) for entry in items[0].get("campaigns") or [] if "id" in entry]
 
     async def get_status(self, campaign_id: str) -> str:
         """Текущий статус кампании (`active`/`blocked`/…); `unknown`, если поля нет."""
@@ -419,31 +495,29 @@ def _banner_body(
     title: str,
     text: str,
     content: Mapping[str, str],
+    url_id: str,
     cta: str = DEFAULT_CTA,
     about_company: str | None = None,
 ) -> dict[str, Any]:
-    """Тело вложенного объявления: медиа по слотам, тексты и ссылка на объект рекламы."""
-    ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
+    """Тело вложенного объявления: медиа по слотам, тексты и ссылка на объект рекламы.
+
+    `urls.primary` принимает ТОЛЬКО `id` заранее созданного url-объекта: поля `url` и
+    `url_object_type` в запросе доступны лишь на чтение (`read_only_field`), а без `id`
+    приходит `required / Empty value` (боевая проверка 2026-07-27).
+    """
     textblocks: dict[str, dict[str, str]] = {
         SLOT_TITLE: {"text": title},
         SLOT_TEXT: {"text": text},
-        SLOT_CTA: {"text": cta},
+        cta_slot(spec.object_kind): {"text": cta},
     }
     if about_company:
         # Юр. данные рекламодателя (347-ФЗ). VERIFY: обязательность при создании.
         textblocks[SLOT_ABOUT_COMPANY] = {"text": about_company}
 
-    primary: dict[str, str] = {
-        "url": ad_object.url,
-        "url_object_type": ad_object.url_object_type,
-    }
-    if ad_object.url_object_id is not None:
-        primary["url_object_id"] = ad_object.url_object_id
-
     return {
         "content": _content_body(content),
         "textblocks": textblocks,
-        "urls": {"primary": primary},
+        "urls": {"primary": {"id": int(url_id)}},
     }
 
 

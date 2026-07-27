@@ -19,6 +19,7 @@ dependencies = [
     "telethon>=1.36",
     "cryptography>=43.0",
     "playwright>=1.49",
+    "pillow>=12.3.0",
 ]
 
 [dependency-groups]
