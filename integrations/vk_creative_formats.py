@@ -70,17 +70,28 @@ def image_size(creative_ref: str) -> tuple[int, int]:
     raise ValueError(f"Неподдерживаемый формат картинки: {creative_ref}")
 
 
-def pattern_for_creative(surface: Surface, creative_ref: str) -> Pattern:
+def pattern_for_creative(
+    surface: Surface, creative_ref: str, *, prefer_video: bool = False
+) -> Pattern:
     """Подобрать шаблон объявления под присланный файл и выбранную площадку.
 
     У видео размеры не читаем — соотношение сторон контейнера без разбора кодека не
     получить, а площадки принимают квадрат почти везде. Для картинки соотношение
     считаем честно по заголовку файла.
+
+    `prefer_video` — просьба сделать видео-объявление из статичной картинки: ролик
+    соберётся сам (`integrations/vk_video.py`). Если у площадки видео-шаблонов нет
+    (Дзен, Одноклассники в вертикали), просьба игнорируется и берётся картиночный
+    шаблон — отказывать клиенту из-за формата нечестно.
     """
     if is_video(creative_ref):
         return pick_pattern(surface, ratio="1:1", is_video=True)
+
     width, height = image_size(creative_ref)
-    return pick_pattern(surface, ratio=ratio_of(width, height), is_video=False)
+    ratio = ratio_of(width, height)
+    if prefer_video and surface.patterns_for(is_video=True):
+        return pick_pattern(surface, ratio=ratio, is_video=True)
+    return pick_pattern(surface, ratio=ratio, is_video=False)
 
 
 def fit_to_slot(creative_ref: str, target: tuple[int, int], out_dir: Path) -> Path:
