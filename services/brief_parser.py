@@ -39,10 +39,21 @@ class Gender(Enum):
 
 
 class TargetType(Enum):
-    """Объект рекламы: личная страница или сообщество/группа."""
+    """Куда привлекаем подписчиков — площадка подписки.
+
+    Значения совпадают с ключами справочника площадок `integrations/vk_surfaces.py`:
+    именно по ним адаптер выбирает пакет VK, цель кампании и шаблоны объявления.
+    Подписка возможна на шесть разных площадок, а не только на сообщество и страницу
+    (живой справочник пакетов VK, 2026-07-27).
+    """
 
     PERSONAL_PAGE = "personal_page"
     COMMUNITY = "community"
+    NEWSLETTER = "newsletter"
+    VK_CHANNEL = "vk_channel"
+    MAX_CHANNEL = "max_channel"
+    OK_COMMUNITY = "ok_community"
+    OK_PROFILE = "ok_profile"
 
 
 class OrgType(Enum):
@@ -208,8 +219,26 @@ def parse_materials(value: str) -> Materials:
 
 
 def parse_target_type(value: str) -> TargetType:
-    """Разобрать «куда привлекаем». «Сообщество/группа» → COMMUNITY, иначе личная страница."""
+    """Разобрать «куда привлекаем» — площадку подписки.
+
+    Порядок проверок важен: «сообщество в Одноклассниках» обязано попасть в ОК, а не в
+    ВК, поэтому площадка ОК распознаётся раньше общего слова «сообщество». Пустое или
+    непонятое значение — личная страница, как было исторически.
+    """
     text = _clean(value).lower()
+
+    is_ok = "однокласс" in text or "ok.ru" in text or "ок " in f" {text}"
+    if is_ok:
+        if "профил" in text or "страниц" in text:
+            return TargetType.OK_PROFILE
+        return TargetType.OK_COMMUNITY
+
+    if "рассылк" in text:
+        return TargetType.NEWSLETTER
+    if "max" in text or "макс" in text:
+        return TargetType.MAX_CHANNEL
+    if "канал" in text:
+        return TargetType.VK_CHANNEL
     if "сообществ" in text or "группа" in text or "группу" in text:
         return TargetType.COMMUNITY
     return TargetType.PERSONAL_PAGE

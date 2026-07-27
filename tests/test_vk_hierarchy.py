@@ -22,14 +22,13 @@ import respx
 from integrations.vk_api import (
     AUTOBIDDING_MAX_GOALS,
     BASE_URL,
-    PACKAGE_COMMUNITY,
-    PACKAGE_PROFILE,
     VkApiAdapter,
     _banner_body,
     _parse_summary,
-    content_slot,
+    creative_pattern,
     resolve_ad_object,
 )
+from integrations.vk_surfaces import VK_COMMUNITY, VK_PERSONAL, pick_pattern
 from pydantic import SecretStr
 from services.mapping import OBJECT_KIND_COMMUNITY, OBJECT_KIND_PERSONAL, CampaignSpec
 
@@ -99,9 +98,9 @@ def _body(route: respx.Route) -> dict[str, Any]:
 
 def test_club_url_is_community() -> None:
     ad_object = resolve_ad_object("https://vk.com/club228817082")
-    assert ad_object.url_object_type == "vk_group"
+    assert ad_object.surface is VK_COMMUNITY
     assert ad_object.url_object_id == "228817082"
-    assert ad_object.package_id == PACKAGE_COMMUNITY
+    assert ad_object.package_id == VK_COMMUNITY.package_id
     assert ad_object.objective == "socialengagement"
 
 
@@ -111,15 +110,15 @@ def test_public_url_is_community() -> None:
 
 def test_personal_page_uses_profile_package_and_objective() -> None:
     ad_object = resolve_ad_object("https://vk.com/id777")
-    assert ad_object.url_object_type == "vk_user"
+    assert ad_object.surface is VK_PERSONAL
     assert ad_object.url_object_id == "777"
-    assert ad_object.package_id == PACKAGE_PROFILE
+    assert ad_object.package_id == VK_PERSONAL.package_id
     assert ad_object.objective == "socialengagement_profile"
 
 
 def test_vanity_url_defaults_to_community_without_object_id() -> None:
     ad_object = resolve_ad_object("https://vk.ru/my_community/?from=ads")
-    assert ad_object.package_id == PACKAGE_COMMUNITY
+    assert ad_object.package_id == VK_COMMUNITY.package_id
     assert ad_object.url_object_id is None
     assert ad_object.url == "https://vk.ru/my_community/?from=ads"
 
@@ -207,7 +206,7 @@ def test_ad_plan_objective_upgrades_for_personal_page() -> None:
 def test_nested_campaign_carries_package_autobidding_and_budget() -> None:
     campaign = _nested_campaign(_spec(), budget_limit_day=300)
     assert campaign["name"] == "Подписчики · Клиент"
-    assert campaign["package_id"] == PACKAGE_COMMUNITY
+    assert campaign["package_id"] == VK_COMMUNITY.package_id
     assert campaign["autobidding_mode"] == AUTOBIDDING_MAX_GOALS
     assert campaign["budget_limit_day"] == 300.0
 
@@ -233,7 +232,7 @@ def test_nested_campaign_omits_empty_sex_and_age() -> None:
 
 def test_nested_campaign_for_personal_page_uses_profile_package() -> None:
     campaign = _nested_campaign(_spec(object_url="https://vk.com/id777"))
-    assert campaign["package_id"] == PACKAGE_PROFILE
+    assert campaign["package_id"] == VK_PERSONAL.package_id
     assert "group_members" not in campaign["targetings"]
 
 
@@ -302,35 +301,42 @@ def test_creative_is_uploaded_before_the_plan_and_lands_in_banner_slot() -> None
     }
 
 
-def test_content_slot_depends_on_media_kind() -> None:
-    # Слот подбирается по типу объекта: у сообщества доступна вертикаль, у профиля нет.
-    assert content_slot("/data/creatives/1/ad.MP4", OBJECT_KIND_COMMUNITY).startswith("video_")
-    assert content_slot("/data/creatives/1/ad.MP4", OBJECT_KIND_PERSONAL).startswith("video_")
+def test_creative_pattern_depends_on_media_kind() -> None:
+    # Шаблон подбирается по площадке и типу файла: видео уходит в видео-слот.
+    for kind in (OBJECT_KIND_COMMUNITY, OBJECT_KIND_PERSONAL):
+        spec = _spec(object_kind=kind)
+        assert creative_pattern(spec, "/data/creatives/1/ad.MP4").media_slot.startswith("video_")
 
 
 # --- построитель banner как чистая функция ----------------------------------------
 
 
+def _banner(**kwargs: Any) -> dict[str, Any]:
+    """Объявление сообщества с квадратной картинкой — типовой случай."""
+    spec = _spec()
+    ad_object = resolve_ad_object(spec.object_url, spec.object_kind)
+    defaults: dict[str, Any] = {
+        "pattern": pick_pattern(ad_object.surface, ratio="1:1", is_video=False),
+        "title": "З",
+        "text": "Т",
+        "content": {},
+        "url_id": "128898271",
+    }
+    return _banner_body(ad_object, **{**defaults, **kwargs})
+
+
 def test_banner_body_adds_about_company_when_given() -> None:
-    banner = _banner_body(
-        _spec(),
-        url_id="128898271",
-        title="З",
-        text="Т",
-        content={},
-        about_company="ИП Иванов, ИНН 000000000000",
-    )
+    banner = _banner(about_company="ИП Иванов, ИНН 000000000000")
     assert banner["textblocks"]["about_company_115"] == {"text": "ИП Иванов, ИНН 000000000000"}
 
 
 def test_banner_body_omits_about_company_when_absent() -> None:
-    banner = _banner_body(_spec(), title="З", text="Т", content={}, url_id="128898271")
-    assert "about_company_115" not in banner["textblocks"]
+    assert "about_company_115" not in _banner()["textblocks"]
 
 
 def test_banner_body_rejects_unknown_content_slot() -> None:
     with pytest.raises(ValueError, match="content slot"):
-        _banner_body(_spec(), title="З", text="Т", content={"banner_240x400": "777"}, url_id="1")
+        _banner(content={"banner_240x400": "777"})
 
 
 # --- контрактный create_campaign ---------------------------------------------------
@@ -373,7 +379,7 @@ def test_create_campaign_without_spec_still_sends_one_campaign() -> None:
     # `campaigns: required`. Таргетинга и объявления у неё нет.
     campaigns = body["campaigns"]
     assert len(campaigns) == 1
-    assert campaigns[0]["package_id"] == PACKAGE_COMMUNITY
+    assert campaigns[0]["package_id"] == VK_COMMUNITY.package_id
     assert "banners" not in campaigns[0]
 
 
