@@ -146,6 +146,11 @@ export function BriefCardView({
             {field.n}. {field.label}: {field.value || "—"}
           </div>
         ))}
+        {card.surface_title ? (
+          // Клиент выбирает площадку словами; показываем, как её понял разбор брифа,
+          // чтобы ошибка в поле была видна до запуска, а не после.
+          <p>🎯 Площадка: {card.surface_title}</p>
+        ) : null}
         <p>🖼 Креатив: {card.has_creative ? "загружен" : "не загружен"}</p>
       </div>
 

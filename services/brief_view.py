@@ -21,6 +21,8 @@ from db.repositories import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_fields import apply_edits, numbered
+from services.brief_parser import parse_target_type
+from services.goals import target_title
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +48,10 @@ class BriefCardView:
     fields: list[BriefFieldView]
     has_creative: bool
     campaign_status: str | None
+    # Площадка подписки, как её понял разбор брифа. Клиент пишет её словами, площадок
+    # шесть, и непонятое значение молча трактуется как сообщество — поэтому распознанный
+    # вариант считаем здесь, один раз, и показываем и в боте, и в веб-кабинете.
+    surface_title: str
 
 
 async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> BriefCardView:
@@ -71,6 +77,7 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         fields=fields,
         has_creative=creative is not None,
         campaign_status=campaign.status if campaign is not None else None,
+        surface_title=target_title(parse_target_type(brief.payload.get("target_type", "")).value),
     )
 
 
