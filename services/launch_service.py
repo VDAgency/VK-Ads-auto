@@ -38,12 +38,22 @@ from integrations.channels import Channel, ChannelConfig, ChannelRouter, NoHealt
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.ad_accounts import (
+    AccountNotFoundError,
+    AdAccountView,
+    TokenUnavailableError,
+    get_account,
+    mark_unauthorized,
+    resolve_token,
+)
 from services.brief_parser import BriefVariant, ParsedBrief, parse_brief
 from services.launch import LaunchResult, daily_budget_rub, run_campaign
 from services.mapping import CampaignSpec, build_campaign_spec
 from services.notifier import notify_operator
+from services.secret_box import NotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +65,19 @@ STUB_CHANNEL = "stub"
 MODERATION_MARKERS = ("moder", "pending")
 
 
+# Цели рекламы, до которых доведена логика запуска. Остальные три из договора
+# (сообщения, лид-форма, Senler) появятся здесь по мере реализации — в боте и
+# вебе они уже показываются как «скоро» и физически не выбираются.
+SUBSCRIBERS_GOAL = "subscribers"
+SUPPORTED_GOALS = (SUBSCRIBERS_GOAL,)
+
+
 class BriefNotFoundError(Exception):
     """Брифа нет у тенанта — нельзя запустить кампанию."""
+
+
+class UnsupportedGoalError(Exception):
+    """Цель ещё не реализована — кампанию с ней не запускаем."""
 
 
 class CampaignStopError(Exception):
@@ -89,12 +110,22 @@ _FALLBACK_MSG = (
 )
 
 
-def _build_adapters(settings: Settings) -> dict[Channel, PlatformAdapter]:
-    """Адаптеры каналов по конфигу. VK-канал без разрешения — заглушка (фолбэк)."""
-    token = settings.vk_ads_access_token.get_secret_value()
+def _build_adapters(
+    settings: Settings, vk_token: SecretStr | None = None
+) -> dict[Channel, PlatformAdapter]:
+    """Адаптеры каналов по конфигу. VK-канал без разрешения — заглушка (фолбэк).
+
+    `vk_token` — токен рекламного кабинета, выбранного оператором. Если его нет
+    (кабинеты ещё не заведены), берём токен из окружения — прежнее поведение.
+
+    Предохранитель `vk_live_campaigns` проверяется ЗДЕСЬ, до и независимо от
+    выбора кабинета: живой кабинет с валидным токеном сам по себе ничего не
+    разрешает (CLAUDE.md §1.4).
+    """
+    token = vk_token if vk_token is not None else settings.vk_ads_access_token
     adapters: dict[Channel, PlatformAdapter] = {}
-    if token and settings.vk_live_campaigns:
-        adapters[Channel.VK_API] = VkApiAdapter(settings.vk_ads_access_token)
+    if token.get_secret_value() and settings.vk_live_campaigns:
+        adapters[Channel.VK_API] = VkApiAdapter(token)
     else:
         adapters[Channel.VK_API] = StubAdapter()
     if settings.kotbot_base_url:
@@ -115,14 +146,14 @@ def _channel_config(settings: Settings) -> ChannelConfig:
     return ChannelConfig(default=default, forced=forced)
 
 
-def _build_router(settings: Settings) -> ChannelRouter:
+def _build_router(settings: Settings, vk_token: SecretStr | None = None) -> ChannelRouter:
     """Роутер каналов: адаптеры + конфиг выбора (health-check и фолбэк внутри)."""
-    return ChannelRouter(_build_adapters(settings), _channel_config(settings))
+    return ChannelRouter(_build_adapters(settings, vk_token), _channel_config(settings))
 
 
-def _live_channel_expected(settings: Settings) -> bool:
+def _live_channel_expected(settings: Settings, vk_token: SecretStr | None = None) -> bool:
     """Ждали ли мы боевого канала (есть ли что «терять» при фолбэке на заглушку)."""
-    token = settings.vk_ads_access_token.get_secret_value()
+    token = (vk_token if vk_token is not None else settings.vk_ads_access_token).get_secret_value()
     return bool(settings.kotbot_base_url) or bool(token and settings.vk_live_campaigns)
 
 
@@ -132,16 +163,56 @@ def _channel_name(channel: Channel, adapter: PlatformAdapter) -> str:
 
 
 async def _select_channel(
-    settings: Settings, router: ChannelRouter | None
+    settings: Settings, router: ChannelRouter | None, vk_token: SecretStr | None = None
 ) -> tuple[Channel, PlatformAdapter, bool]:
     """Выбрать канал. Третий элемент — был ли фолбэк на заглушку с боевого канала."""
     try:
-        channel, adapter = await (router or _build_router(settings)).select()
+        channel, adapter = await (router or _build_router(settings, vk_token)).select()
     except NoHealthyChannelError:
         logger.warning("No healthy integration channel; falling back to stub")
         return Channel.VK_API, StubAdapter(), True
-    fallback = isinstance(adapter, StubAdapter) and _live_channel_expected(settings)
+    fallback = isinstance(adapter, StubAdapter) and _live_channel_expected(settings, vk_token)
     return channel, adapter, fallback
+
+
+def _validate_goal(goal: str | None) -> None:
+    """Отклонить цель, логики запуска для которой ещё нет.
+
+    Молча подменять цель нельзя: оператор увидел бы «запущено» и получил не ту
+    кампанию, за которую платит клиент.
+    """
+    if goal is not None and goal not in SUPPORTED_GOALS:
+        raise UnsupportedGoalError(goal)
+
+
+def _is_unauthorized(exc: BaseException) -> bool:
+    """Отличить «VK отклонил токен» от прочих отказов канала.
+
+    Смотрим на ответ httpx: 401/403 приходят из `raise_for_status()` адаптера.
+    """
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return status_code in (401, 403)
+
+
+async def _resolve_ad_account(
+    session: AsyncSession,
+    account_id: int,
+    ad_account_id: int | None,
+    settings: Settings,
+) -> tuple[AdAccountView | None, SecretStr | None]:
+    """Выбранный кабинет и его токен. Без выбора — `(None, None)`: токен из окружения.
+
+    Отдельная функция, потому что оба значения нужны в разных местах запуска:
+    токен уходит в адаптер, а сам кабинет — в `external_ref` и в `Campaign`.
+    """
+    if ad_account_id is None:
+        return None, None
+    view = await get_account(session, account_id, ad_account_id)
+    if view is None:
+        raise AccountNotFoundError(str(ad_account_id))
+    token = await resolve_token(session, account_id, ad_account_id, settings=settings)
+    return view, token
 
 
 async def _resolve_cabinet(
@@ -153,11 +224,21 @@ async def _resolve_cabinet(
     adapter: PlatformAdapter,
     channel_name: str,
     settings: Settings,
+    ad_account: AdAccountView | None = None,
 ) -> tuple[str, int | None]:
     """Reuse-or-create кабинет ДО кампании: (внешний ref для площадки, id строки БД).
 
-    Кабинет ищем по четвёрке (тенант, клиент, канал, объект рекламы). Если бриф
-    принёс готовый `vk_ad_cabinet_id` — используем его и НИЧЕГО не создаём.
+    Кабинет ищем по четвёрке (тенант, клиент, канал, объект рекламы).
+
+    Внешний ref берём у рекламного кабинета, выбранного оператором: именно его
+    токеном мы ходим в VK, значит там кампания и окажется.
+
+    Кабинет не выбран (кабинеты ещё не заведены) — остаётся прежний путь: ref из
+    поля брифа `vk_ad_cabinet_id`. Оно предназначено для kotbot и на выбор
+    доступа не влияет, но без него мы бы начали ЗАВОДИТЬ кабинеты на площадке
+    там, где раньше не заводили. Мутировать площадку из-за рефакторинга нельзя,
+    поэтому запасной путь сохранён.
+
     Боевое создание кабинета VK разрешает только `vk_agency_confirmed`.
     """
     if client_id is not None:
@@ -165,7 +246,7 @@ async def _resolve_cabinet(
         if existing is not None:
             return existing.external_ref or "", existing.id
 
-    external_ref = parsed.vk_ad_cabinet_id
+    external_ref = ad_account.external_id if ad_account is not None else parsed.vk_ad_cabinet_id
     if external_ref is None:
         if isinstance(adapter, VkApiAdapter) and not settings.vk_agency_confirmed:
             # Агентский статус ИП не подтверждён — кабинеты в VK не заводим (§1.4).
@@ -215,6 +296,7 @@ async def _prepare_on_platform(
     creative_ref: str,
     title: str | None,
     body: str | None,
+    ad_account: AdAccountView | None = None,
 ) -> tuple[int | None, LaunchResult, str]:
     """Кабинет и кампания на выбранном канале: (id кабинета, результат, статус).
 
@@ -231,6 +313,7 @@ async def _prepare_on_platform(
         adapter,
         _channel_name(channel, adapter),
         settings,
+        ad_account,
     )
     result = await run_campaign(
         adapter,
@@ -257,6 +340,8 @@ async def launch_from_creative(
     *,
     settings: Settings | None = None,
     router: ChannelRouter | None = None,
+    ad_account_id: int | None = None,
+    goal: str | None = None,
 ) -> LaunchOutcome:
     """Сохранить креатив, разложить бриф и создать кампанию. Коммит — на вызывающем.
 
@@ -264,13 +349,26 @@ async def launch_from_creative(
     (персистим ДО кампании, чтобы ретрай после таймаута переиспользовал кабинет)
     → создание кампании через адаптер → `Campaign`.
 
-    Бросает `BriefNotFoundError`, если брифа нет, и `BriefValidationError`
-    (из `parse_brief`), если брифу не хватает обязательных полей.
+    `ad_account_id` — рекламный кабинет, выбранный оператором: его токеном идёт
+    обращение к VK, в нём же окажется кампания. Не передан → работаем по токену
+    из окружения (поведение до мультикабинетности).
+
+    `goal` — цель рекламы. Сегодня реализована одна («подписчики»); неизвестное
+    значение отклоняется, чтобы кампания не ушла с чужой целью.
+
+    Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
+    (из `parse_brief`), `UnsupportedGoalError` и ошибки выбора кабинета
+    (`AccountNotFoundError`, `TokenUnavailableError`).
     """
     cfg = settings or get_settings()
+    _validate_goal(goal)
     brief = await get_brief(session, account_id, brief_id)
     if brief is None:
         raise BriefNotFoundError(str(brief_id))
+
+    # Кабинет разбираем до брифа: его пригодность от брифа не зависит, а оператор
+    # должен узнать про мёртвый доступ сразу, а не после разбора полей.
+    ad_account, vk_token = await _resolve_ad_account(session, account_id, ad_account_id, cfg)
 
     parsed = parse_brief(brief.payload, BriefVariant(brief.variant))
     spec = build_campaign_spec(parsed)
@@ -286,7 +384,7 @@ async def launch_from_creative(
         )
     )
 
-    channel, adapter, fallback = await _select_channel(cfg, router)
+    channel, adapter, fallback = await _select_channel(cfg, router, vk_token)
 
     async def prepare(platform: PlatformAdapter) -> tuple[int | None, LaunchResult, str]:
         return await _prepare_on_platform(
@@ -301,14 +399,21 @@ async def launch_from_creative(
             creative_ref=file_path,
             title=title,
             body=body,
+            ad_account=ad_account,
         )
 
     try:
         cabinet_id, result, status = await prepare(adapter)
-    except Exception:  # noqa: BLE001 — любой отказ канала → честный фолбэк, не 500
+    except Exception as exc:  # noqa: BLE001 — любой отказ канала → честный фолбэк, не 500
         if isinstance(adapter, StubAdapter):
             # Заглушка ничего не мутирует: её падение — баг, а не отказ канала.
             raise
+        # Отозванный токен — не «канал моргнул»: помечаем кабинет мёртвым сразу,
+        # чтобы оператор увидел причину в списке, а не гадал по фолбэку.
+        if ad_account is not None and _is_unauthorized(exc):
+            await mark_unauthorized(
+                session, account_id, ad_account.id, "VK отклонил токен при запуске"
+            )
         # Канал ответил отказом (нет флоу/переавторизация/сеть): успех не имитируем —
         # готовим кампанию на заглушке и честно говорим оператору, что запуска не было.
         logger.exception("Channel %s failed during launch; falling back to stub", channel.value)
@@ -322,6 +427,7 @@ async def launch_from_creative(
         brief_id=brief_id,
         client_id=brief.client_id,
         cabinet_id=cabinet_id,
+        ad_account_id=ad_account.id if ad_account is not None else None,
         status=status,
         objective=spec.objective,
         spec_json=asdict(spec),
@@ -349,17 +455,42 @@ def _outcome_message(status: str, *, is_live: bool, fallback: bool) -> str:
     return _PREPARED_MSG
 
 
-def adapter_for_channel(settings: Settings, channel_name: str) -> PlatformAdapter:
+def adapter_for_channel(
+    settings: Settings, channel_name: str, vk_token: SecretStr | None = None
+) -> PlatformAdapter:
     """Адаптер канала, которым кампания была создана (для остановки/статуса/статистики).
 
     Неизвестное имя канала (в т.ч. `stub`) → заглушка: боевых мутаций не делаем.
     """
-    adapters = _build_adapters(settings)
+    adapters = _build_adapters(settings, vk_token)
     try:
         channel = Channel(channel_name)
     except ValueError:
         return StubAdapter()
     return adapters.get(channel, StubAdapter())
+
+
+async def campaign_vk_token(
+    session: AsyncSession, account_id: int, campaign: Campaign, settings: Settings
+) -> SecretStr | None:
+    """Токен кабинета, в котором заведена кампания (для остановки и статистики).
+
+    При нескольких кабинетах токен из окружения больше не годится: остановить
+    кампанию можно только тем доступом, которым она создавалась. `None` — у
+    кампаний, созданных до мультикабинетности, либо если кабинет уже удалён
+    (тогда сработает прежний фолбэк на окружение).
+    """
+    if campaign.ad_account_id is None:
+        return None
+    try:
+        return await resolve_token(session, account_id, campaign.ad_account_id, settings=settings)
+    except (AccountNotFoundError, TokenUnavailableError, NotConfiguredError):
+        logger.warning(
+            "campaign %s references ad account %s without a usable token",
+            campaign.id,
+            campaign.ad_account_id,
+        )
+        return None
 
 
 async def campaign_channel(session: AsyncSession, account_id: int, campaign: Campaign) -> str:
@@ -390,7 +521,8 @@ async def stop_campaign(
         return None
 
     channel_name = await campaign_channel(session, account_id, campaign)
-    platform = adapter or adapter_for_channel(cfg, channel_name)
+    vk_token = await campaign_vk_token(session, account_id, campaign, cfg)
+    platform = adapter or adapter_for_channel(cfg, channel_name, vk_token)
     if campaign.external_id:
         try:
             await platform.stop(campaign.external_id)

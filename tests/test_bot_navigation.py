@@ -18,6 +18,7 @@ def test_menu_has_expected_commands() -> None:
     assert commands == {
         "send_brief",
         "pending",
+        "cabinets",
         "stats",
         "stop_campaign",
         "surfaces",

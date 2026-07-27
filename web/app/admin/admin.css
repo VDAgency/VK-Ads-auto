@@ -96,3 +96,23 @@ button.adm-back {
   padding: 0;
   color: var(--muted, #5b6678);
 }
+
+/* Карточка формы добавления кабинета и статическая строка списка.
+   `.adm-row` рассчитана на клик по всей строке; у кабинетов кликают кнопки
+   внутри, поэтому курсор и подсветку по наведению снимаем. */
+.adm-card {
+  padding: 14px;
+  border: 1px solid var(--line, #e3e7ee);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  margin-bottom: 12px;
+}
+
+.adm-row--static {
+  cursor: default;
+  align-items: center;
+}
+
+.adm-row--static:hover {
+  border-color: var(--line, #e3e7ee);
+}

@@ -51,11 +51,17 @@ async def intake_creative(
     title: str,
     body: str,
     settings: Settings | None = None,
+    ad_account_id: int | None = None,
+    goal: str | None = None,
 ) -> LaunchOutcome:
     """Декодировать, валидировать, сохранить креатив и подготовить/запустить кампанию.
 
+    `ad_account_id` и `goal` — выбор оператора (рекламный кабинет и цель). Оба
+    необязательны: без них поведение прежнее, поэтому старые вызовы не ломаются.
+
     Бросает `CreativeError` (битый base64 / слишком большой / невалидный), а также
-    `BriefNotFoundError` / `BriefValidationError` из `launch_from_creative`.
+    `BriefNotFoundError` / `BriefValidationError` / `UnsupportedGoalError` и ошибки
+    выбора кабинета из `launch_from_creative`.
     """
     try:
         raw = base64.b64decode(media_b64, validate=True)
@@ -84,4 +90,6 @@ async def intake_creative(
         title or None,
         body or None,
         settings=settings,
+        ad_account_id=ad_account_id,
+        goal=goal,
     )

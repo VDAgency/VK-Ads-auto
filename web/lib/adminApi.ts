@@ -103,3 +103,39 @@ export function contactLine(client: {
 }): string {
   return [client.email, client.phone, client.telegram].filter(Boolean).join(" · ");
 }
+
+/** Рекламный кабинет оператора (зеркало `AdAccountOut` ядра, spec 2026-07-27 §8.3).
+ *  Поля с токеном здесь нет и быть не может — только `token_tail`. */
+export type AdAccount = {
+  id: number;
+  title: string;
+  external_id: string;
+  username: string | null;
+  token_tail: string;
+  advertiser_kind: string;
+  advertiser_name: string | null;
+  advertiser_inn: string | null;
+  status: string;
+  health: string;
+  health_checked_at: string | null;
+  health_error: string | null;
+  balance_rub: string | null;
+  is_usable: boolean;
+};
+
+/** Человеческие подписи состояний health-check (те же, что в боте). */
+export const HEALTH_RU: Record<string, string> = {
+  healthy: "✅ жив",
+  unauthorized: "⛔ токен не принят",
+  error: "⚠️ VK не ответил",
+  unknown: "… не проверялся",
+};
+
+/** Причины отказа добавления кабинета — по коду `detail` из ядра. */
+export const AD_ACCOUNT_ERRORS: Record<string, string> = {
+  invalid_token: "VK не принял этот токен. Проверьте, что скопирован весь access_token.",
+  duplicate_account: "Такой кабинет уже добавлен.",
+  vk_unreachable: "VK сейчас не отвечает. Попробуйте ещё раз через минуту.",
+  encryption_key_missing:
+    "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — без него токен негде хранить.",
+};

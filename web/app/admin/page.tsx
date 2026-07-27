@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { AdAccounts } from "@/components/admin/AdAccounts";
 import { BriefCardView } from "@/components/admin/BriefCardView";
 import { BriefList, CampaignList, ClientDetailView, ClientList } from "@/components/admin/Lists";
 import { SendBrief } from "@/components/admin/SendBrief";
@@ -15,6 +16,7 @@ type Screen =
   | { kind: "clients" }
   | { kind: "briefs"; status: "recent" | "pending" }
   | { kind: "campaigns" }
+  | { kind: "adAccounts" }
   | { kind: "client"; id: number }
   | { kind: "brief"; id: number };
 
@@ -149,6 +151,9 @@ export default function AdminPage() {
             <button className="btn" type="button" onClick={() => go({ kind: "campaigns" })}>
               Кампании
             </button>
+            <button className="btn" type="button" onClick={() => go({ kind: "adAccounts" })}>
+              Рекламные кабинеты
+            </button>
             <button className="btn" id="logout" type="button" onClick={() => void logout()}>
               Выйти
             </button>
@@ -167,6 +172,7 @@ export default function AdminPage() {
               />
             ) : null}
             {auth === "ok" && screen.kind === "campaigns" ? <CampaignList /> : null}
+            {auth === "ok" && screen.kind === "adAccounts" ? <AdAccounts /> : null}
           </div>
 
           <div id="detail">

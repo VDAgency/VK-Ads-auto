@@ -40,3 +40,26 @@ class UploadCreative(StatesGroup):
 
     waiting_media = State()  # ждём фото/видео
     waiting_description = State()  # ждём заголовок + текст
+
+
+class AddAdAccount(StatesGroup):
+    """Сценарий «добавить рекламный кабинет» (spec 2026-07-27 §10).
+
+    Токен приходит сообщением, которое удаляется сразу после приёма, — тот же
+    приём, что для пароля в `/link_kotbot`.
+    """
+
+    choosing_kind = State()  # своя реклама / реклама третьего лица
+    entering_advertiser = State()  # название и ИНН конечного рекламодателя
+    entering_token = State()  # ввод токена (сообщение сразу удаляется)
+
+
+class LaunchCampaign(StatesGroup):
+    """Сценарий запуска: кабинет → цель → креатив (spec 2026-07-27 §9).
+
+    Кабинет и цель спрашиваем ДО материалов: если живого кабинета нет, оператор
+    узнает об этом сразу, а не после выгрузки видео.
+    """
+
+    choosing_cabinet = State()  # выбор рекламного кабинета
+    choosing_goal = State()  # выбор цели рекламы

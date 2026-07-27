@@ -142,3 +142,76 @@ def stats_period_keyboard(cabinet_id: str) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+# --- рекламные кабинеты (spec 2026-07-27 §10) --------------------------------
+
+
+def ad_accounts_keyboard(has_accounts: bool) -> InlineKeyboardMarkup:
+    """Действия над списком кабинетов. Кнопки удаления/проверки — только если есть что."""
+    rows = [[InlineKeyboardButton(text="➕ Добавить кабинет", callback_data="adacc:add")]]
+    if has_accounts:
+        rows.append(
+            [
+                InlineKeyboardButton(text="🔄 Проверить", callback_data="adacc:check"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data="adacc:del"),
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ad_account_pick_keyboard(items: list[tuple[int, str]], action: str) -> InlineKeyboardMarkup:
+    """Выбор кабинета из списка. `action` разводит сценарии: check / del / launch."""
+    rows = [
+        [InlineKeyboardButton(text=label[:60], callback_data=f"adacc:{action}:{account_id}")]
+        for account_id, label in items
+    ]
+    rows.append([InlineKeyboardButton(text="✖ Отмена", callback_data="adacc:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ad_account_kind_keyboard() -> InlineKeyboardMarkup:
+    """Чью рекламу размещаем в кабинете: владельца или третьего лица."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Свою рекламу", callback_data="adacckind:owner")],
+            [
+                InlineKeyboardButton(
+                    text="Рекламу третьего лица", callback_data="adacckind:third_party"
+                )
+            ],
+            [InlineKeyboardButton(text="✖ Отмена", callback_data="adacc:cancel")],
+        ]
+    )
+
+
+def ad_account_delete_confirm_keyboard(account_id: int) -> InlineKeyboardMarkup:
+    """Подтверждение удаления: токен стирается безвозвратно, спрашиваем явно."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Да, удалить", callback_data=f"adacc:delok:{account_id}"
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="adacc:cancel"),
+            ]
+        ]
+    )
+
+
+def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
+    """Выбор цели рекламы. `goals` = [(код, подпись, доступна)].
+
+    Нереализованные цели показываем «серыми»: оператор видит план развития, но
+    нажатие сообщает, что цель ещё не готова, — молча подменять цель нельзя.
+    """
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label if enabled else f"{label} — скоро",
+                callback_data=f"goal:{code}:{brief_id}" if enabled else "goal:soon",
+            )
+        ]
+        for code, label, enabled in goals
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
