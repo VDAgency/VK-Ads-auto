@@ -32,10 +32,10 @@ const TERM_OPTIONS = [
 // Значения материалов разбирает `parse_materials` в services/brief_parser.py
 // по ключевым словам «фото» / «видео» / «ничего нет» — менять только вместе с ним.
 const MATERIALS_OPTIONS = [
-  { value: "есть фото", label: "📸 Да, есть фото" },
-  { value: "есть видео", label: "🎬 Да, есть видео" },
-  { value: "есть фото и видео", label: "📸🎬 Есть и фото, и видео" },
-  { value: "ничего нет, нужна помощь", label: "❌ Ничего нет, нужна помощь" },
+  { value: "есть фото", label: "Да, есть фото" },
+  { value: "есть видео", label: "Да, есть видео" },
+  { value: "есть фото и видео", label: "Есть и фото, и видео" },
+  { value: "ничего нет, нужна помощь", label: "Ничего нет, нужна помощь" },
 ];
 
 // Значения разбирает `parse_org_type` в services/brief_parser.py.
@@ -72,6 +72,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "full_name",
+        maxLength: 120,
         label: "ФИО",
         placeholder: "Фамилия Имя Отчество",
         autoComplete: "name",
@@ -81,6 +82,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "company",
+        maxLength: 200,
         label: "Компания / проект",
         placeholder: "Название бизнеса",
       },
@@ -92,6 +94,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "phone",
+        maxLength: 24,
         label: "Телефон / WhatsApp",
         type: "tel",
         inputMode: "tel",
@@ -103,6 +106,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "telegram",
+        maxLength: 64,
         label: "Telegram",
         placeholder: "@username",
       },
@@ -111,6 +115,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "email",
+    maxLength: 254,
     label: "E-mail",
     type: "email",
     placeholder: "your@email.ru",
@@ -121,6 +126,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "niche",
+    maxLength: 200,
     label: "Ниша / сфера деятельности",
     placeholder: "Например: доставка еды, фитнес, интернет-магазин одежды…",
     required: true,
@@ -137,14 +143,17 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "tax_id",
+    maxLength: 12,
+    pattern: "[0-9]{10,12}",
     label: "ИНН / ОГРН / ОГРНИП",
-    hint: "Если есть — укажите для оформления рекламного кабинета и документов",
+    hint: "Если есть, укажите: понадобится для кабинета и документов",
     placeholder: "Например: 7707083893",
     inputMode: "numeric",
   },
   {
     kind: "input",
     name: "org_name",
+    maxLength: 200,
     label: "Наименование организации (для юр. лиц)",
     placeholder: "ООО «Название»",
   },
@@ -162,6 +171,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "object_url",
+    maxLength: 300,
     label: "Ссылка на объект продвижения",
     hint: "Ссылка именно на то, куда будем набирать подписчиков",
     type: "url",
@@ -172,8 +182,10 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "vk_ad_cabinet_id",
+    maxLength: 12,
+    pattern: "[0-9]{4,12}",
     label: "ID кабинета VK Реклама",
-    hint: "Номер вашего рекламного кабинета — без него мы не сможем запустить кампанию",
+    hint: "Номер вашего рекламного кабинета. Без него запустить кампанию не получится",
     inputMode: "numeric",
     placeholder: "например, 13410929",
     required: true,
@@ -186,6 +198,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "site_url",
+    maxLength: 300,
     label: "Ссылка на сайт (если есть)",
     type: "url",
     placeholder: "https://yoursite.ru",
@@ -193,6 +206,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "product_description",
+    maxLength: 1000,
     label: "Краткое описание продукта или услуги",
     hint: "Что продаёте? В чём суть? Какую проблему решаете?",
     placeholder: "Опишите продукт: что это, для кого, какой результат получает клиент…",
@@ -202,19 +216,22 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "avg_check",
+    maxLength: 100,
     label: "Средний чек / диапазон цен",
     placeholder: "Например: от 3 000 до 15 000 ₽",
   },
   {
     kind: "textarea",
     name: "usp",
-    label: "Ваше УТП — чем вы лучше конкурентов",
+    maxLength: 1000,
+    label: "Ваше УТП: чем вы лучше конкурентов",
     hint: "Почему клиенту стоит выбрать именно вас?",
     placeholder: "Бесплатная доставка, гарантия возврата, уникальная технология…",
   },
   {
     kind: "textarea",
     name: "offers",
+    maxLength: 1000,
     label: "Есть ли актуальные акции, скидки, спецпредложения?",
     rows: 3,
     placeholder: "Например: первый урок бесплатно, скидка 20% до конца месяца…",
@@ -224,6 +241,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "audience_description",
+    maxLength: 1000,
     label: "Кто ваш идеальный клиент?",
     hint: "Опишите типичного покупателя: кто он, чем занимается, какая у него боль?",
     placeholder: "Женщины 25–45, мамы в декрете, хотят подработку на дому…",
@@ -246,8 +264,9 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "geo",
+    maxLength: 300,
     label: "География продвижения",
-    hint: "Города, регионы, районы. Если вся Россия — так и напишите",
+    hint: "Города, регионы, районы. Если вся Россия, так и напишите",
     placeholder: "Москва, МО, Санкт-Петербург / вся Россия",
     required: true,
     error: "Укажите географию",
@@ -255,6 +274,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "exclusions",
+    maxLength: 500,
     label: "Кому НЕ нужно показывать рекламу?",
     hint: "Исключения: конкуренты, нецелевые города, возрастные группы",
     placeholder: "Например: дети до 18, конкуренты…",
@@ -304,8 +324,9 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "materials_url",
+    maxLength: 300,
     label: "Ссылка на рекламные материалы",
-    hint: "Если есть — пришлите ссылку на папку с фото и видео (Google Диск, Яндекс.Диск, облако)",
+    hint: "Пришлите ссылку на папку с фото и видео: Google Диск, Яндекс.Диск, облако",
     type: "url",
     placeholder: "https://disk.yandex.ru/...",
   },
@@ -314,6 +335,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "competitors",
+    maxLength: 1000,
     label: "Ссылки на конкурентов (2–3 шт.)",
     hint: "Укажите тех, кто уже рекламируется или на кого вы хотите быть похожи",
     rows: 3,
@@ -324,6 +346,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "extra",
+    maxLength: 2000,
     label: "Есть ли что-то ещё, что важно учесть?",
     hint: "Сезонность, ограничения, пожелания к креативам, особенности бизнеса…",
     rows: 4,
@@ -334,14 +357,14 @@ const ROWS: BriefRow[] = [
 export default function BriefCommunity() {
   return (
     <div className="bf">
+      <a className="bf-skip" href="#bf-main">
+        Перейти к форме
+      </a>
+
       <header className="bf-header">
         <div className="bf-header__inner">
           <Link className="bf-brand" href="/">
-            <span className="bf-brand__badge" aria-hidden="true">
-              VK
-            </span>
-            VK<span className="bf-brand__dot">·</span>Ads
-            <span className="bf-brand__dot">·</span>auto
+            Ads<span className="bf-brand__dot">·</span>auto
           </Link>
           <Link className="bf-header__back" href="/">
             На главную
@@ -349,27 +372,29 @@ export default function BriefCommunity() {
         </div>
       </header>
 
-      <div className="bf-hero">
-        <div className="bf-hero__badge">📋 Бриф</div>
-        <h1 className="bf-hero__title">Запуск таргетированной рекламы VK для бизнеса</h1>
-        <p className="bf-hero__sub">
-          Заполните бриф, чтобы мы подготовили стратегию продвижения и запустили рекламу максимально
-          эффективно. Поля со звёздочкой обязательны.
-        </p>
-      </div>
+      <main id="bf-main">
+        <div className="bf-hero">
+          <div className="bf-hero__badge">Бриф для бизнеса</div>
+          <h1 className="bf-hero__title">Реклама ВКонтакте для вашего бизнеса</h1>
+          <p className="bf-hero__sub">
+            Расскажите о продукте и о том, кого хотите привлечь — по этим ответам мы соберём
+            кампанию. Поля со звёздочкой обязательны, остальное можно пропустить.
+          </p>
+        </div>
 
-      <div className="bf-container">
-        <BriefForm
-          variant="community"
-          rows={ROWS}
-          footer={
-            <>
-              После отправки откроется ваш <strong>личный кабинет</strong>
-              <br />— там будет статус брифа и запуск кампании
-            </>
-          }
-        />
-      </div>
+        <div className="bf-container">
+          <BriefForm
+            variant="community"
+            rows={ROWS}
+            footer={
+              <>
+                После отправки откроется ваш <strong>личный кабинет</strong> — там будет статус
+                брифа и запуск кампании
+              </>
+            }
+          />
+        </div>
+      </main>
     </div>
   );
 }

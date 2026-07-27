@@ -11,13 +11,16 @@ export const metadata: Metadata = {
 export default function InstrukciyaVkCabinet() {
   return (
     <>
+      <a className="skip-link" href="#ins-main">
+        Перейти к инструкции
+      </a>
       <div className="topbar">
         <div className="brand">
-          VK<span>·</span>Ads автозапуск
+          Ads<span>·</span>auto
         </div>
       </div>
 
-      <main className="wrap">
+      <main className="wrap" id="ins-main">
         <div className="eyebrow">Инструкция</div>
         <h1>Как создать кабинет VK Реклама и узнать его ID</h1>
         <p className="lead">
@@ -34,7 +37,7 @@ export default function InstrukciyaVkCabinet() {
 
         <div className="steps">
           <div className="step">
-            <h3>Откройте сайт VK Реклама</h3>
+            <h2>Откройте сайт VK Реклама</h2>
             <p>
               Перейдите на <code>https://ads.vk.ru/</code> в браузере компьютера.
             </p>
@@ -42,7 +45,7 @@ export default function InstrukciyaVkCabinet() {
           </div>
 
           <div className="step">
-            <h3>Если вы уже где-то авторизованы — выйдите</h3>
+            <h2>Если вы уже где-то авторизованы — выйдите</h2>
             <p>
               Если в правом верхнем углу видно чужой профиль или другой аккаунт — нажмите «Выйти».
               Так вы точно создадите кабинет на нужный аккаунт.
@@ -50,12 +53,12 @@ export default function InstrukciyaVkCabinet() {
           </div>
 
           <div className="step">
-            <h3>Нажмите «Перейти в кабинет»</h3>
+            <h2>Нажмите «Перейти в кабинет»</h2>
             <p>Кнопка входа в кабинет — в правом верхнем углу страницы.</p>
           </div>
 
           <div className="step">
-            <h3>Войдите через почту</h3>
+            <h2>Войдите через почту</h2>
             <p>
               В окне VK ID выберите вход <b>через почту</b> (Mail). Важно: в этом браузере вы должны
               быть залогинены именно в той почте, которую хотите привязать к рекламному кабинету.
@@ -77,14 +80,14 @@ export default function InstrukciyaVkCabinet() {
           </div>
 
           <div className="step">
-            <h3>Создайте новый кабинет</h3>
+            <h2>Создайте новый кабинет</h2>
             <p>
               Если кабинета ещё нет — VK Реклама предложит его создать. Нажмите «Создать кабинет».
             </p>
           </div>
 
           <div className="step">
-            <h3>Выберите тип аккаунта</h3>
+            <h2>Выберите тип аккаунта</h2>
             <p>На экране «Регистрация кабинета» укажите:</p>
             <div className="mock">
               <div className="mock__bar">Регистрация кабинета</div>
@@ -117,7 +120,7 @@ export default function InstrukciyaVkCabinet() {
           </div>
 
           <div className="step">
-            <h3>Скопируйте ID кабинета и вставьте в бриф</h3>
+            <h2>Скопируйте ID кабинета и вставьте в бриф</h2>
             <p>
               Откройте в кабинете раздел <b>«Настройки»</b> (внизу левого меню) → вкладка{" "}
               <b>«Общие»</b>. В самом верху блока показан <b>ID кабинета</b> — скопируйте это число.

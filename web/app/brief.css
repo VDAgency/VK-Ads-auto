@@ -1,192 +1,143 @@
 /* ==========================================================================
-   brief.css — формы брифа (физлицо и юрлицо).
+   brief.css — формы брифа (частное лицо и бизнес).
 
-   Структура и UX перенесены с макетов заказчика (docs/references/*.html):
-   нумерованные секции, подсказка под каждым лейблом, карточки выбора вместо
-   серых select'ов, коробка с инструкцией, двухколоночные пары.
+   Структура и UX следуют макетам заказчика: нумерованные секции, подсказка
+   под каждым лейблом, карточки выбора вместо серых select'ов, коробка с
+   инструкцией, двухколоночные пары.
 
-   Палитра — НЕ из макетов (там тёмная тема), а наша, с лендинга и модалки
-   входа: VK-blue на светлом. Значения продублированы из landing.css
-   осознанно: там они живут под `.lp`, здесь под `.bf`, и это единственные две
-   области, где палитра бренда применяется. Менять — синхронно в обоих файлах.
-
-   Шрифт наследуется от styles.css (системный стек). Это зафиксированное
-   открытое место: макеты используют Manrope, docs/ДИЗАЙН-СИСТЕМА.md §4 требует
-   кириллический набор через next/font. Решается в дизайн-сессии на весь сайт
-   сразу, а не в одной форме.
+   Своей палитры больше нет: значения приходят из tokens.css. Прежняя версия
+   дублировала VK-синий из landing.css, и подсказки набирались цветом с
+   контрастом 3.64:1 — ниже нормы, при том что именно они объясняют поля
+   людям, не знакомым с рекламным кабинетом.
    ========================================================================== */
 
 .bf {
-  /* Палитра бренда — та же, что у лендинга (.lp в landing.css). */
-  --vk-blue: #0077ff;
-  --vk-blue-2: #2787f5;
-  --vk-blue-strong: #0062da;
-  --vk-blue-soft: rgba(0, 119, 255, 0.09);
-  --vk-blue-ring: rgba(0, 119, 255, 0.18);
-
-  --bf-ink: var(--ink, #0b1221);
-  --bf-muted: var(--muted, #5b6678);
-  --bf-faint: #7c8798;
-  --bf-paper: var(--paper, #f7f8fa);
-  --bf-surface: var(--surface, #ffffff);
-  --bf-line: var(--line, #e3e7ee);
-  --bf-tint: #eef4ff;
-  --bf-danger: var(--danger, #e5484d);
-
-  --bf-radius: 16px;
-  --bf-radius-sm: 12px;
-  --bf-radius-xs: 10px;
-  --bf-shadow: 0 12px 40px rgba(10, 47, 120, 0.1);
-  --bf-shadow-soft: 0 6px 24px rgba(10, 47, 120, 0.08);
-  --bf-maxw: 760px;
-
-  min-height: 100vh;
-  background: var(--bf-surface);
-  color: var(--bf-ink);
-  overflow-x: hidden;
-}
-
-.bf *,
-.bf *::before,
-.bf *::after {
-  box-sizing: border-box;
+  background: var(--paper);
+  min-height: 100dvh;
 }
 
 /* --------------------------------------------------------------------------
-   Шапка — облегчённая версия шапки лендинга, чтобы стиль не рвался
+   Шапка
    -------------------------------------------------------------------------- */
 .bf-header {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: saturate(140%) blur(12px);
-  -webkit-backdrop-filter: saturate(140%) blur(12px);
-  border-bottom: 1px solid var(--bf-line);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 .bf-header__inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  height: 64px;
-  max-width: var(--bf-maxw);
+  gap: var(--space-4);
+  max-width: var(--w-page);
   margin: 0 auto;
-  padding: 0 20px;
+  padding: var(--space-3) var(--space-5);
+  min-height: 4rem;
 }
 .bf-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  color: var(--bf-ink);
+  font-size: var(--fs-lg);
   font-weight: 700;
-  font-size: 18px;
-  letter-spacing: -0.01em;
-}
-.bf-brand__badge {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--bf-radius-xs);
-  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 800;
-  box-shadow: 0 4px 14px rgba(0, 119, 255, 0.35);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
 }
 .bf-brand__dot {
-  color: var(--vk-blue);
+  color: var(--accent);
 }
 .bf-header__back {
-  color: var(--bf-muted);
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding-inline: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--muted);
   text-decoration: none;
-  font-size: 15px;
-  font-weight: 500;
-  padding: 8px 12px;
-  border-radius: var(--bf-radius-xs);
-  transition:
-    color 0.2s ease,
-    background 0.2s ease;
+  border-radius: var(--radius-sm);
 }
-.bf-header__back:hover {
-  color: var(--bf-ink);
-  background: var(--bf-tint);
+@media (hover: hover) and (pointer: fine) {
+  .bf-header__back:hover {
+    color: var(--accent);
+  }
 }
 
 /* --------------------------------------------------------------------------
-   Герой
+   Ссылка «к форме»: видна только при фокусе с клавиатуры.
+   -------------------------------------------------------------------------- */
+.bf-skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) 0;
+  font-weight: 600;
+  text-decoration: none;
+}
+.bf-skip:focus-visible {
+  left: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Заголовок страницы
    -------------------------------------------------------------------------- */
 .bf-hero {
-  position: relative;
-  padding: 56px 20px 36px;
+  max-width: var(--w-form);
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-5) var(--space-8);
   text-align: center;
-  overflow: hidden;
-}
-/* Мягкое голубое свечение сверху — светлый аналог glow из макетов. */
-.bf-hero::before {
-  content: "";
-  position: absolute;
-  top: -320px;
-  left: 50%;
-  width: 720px;
-  height: 620px;
-  transform: translateX(-50%);
-  background: radial-gradient(circle, rgba(0, 119, 255, 0.14) 0%, transparent 70%);
-  pointer-events: none;
-}
-.bf-hero > * {
-  position: relative;
 }
 .bf-hero__badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  margin-bottom: 20px;
-  border-radius: 100px;
-  background: var(--vk-blue-soft);
-  border: 1px solid rgba(0, 119, 255, 0.18);
-  color: var(--vk-blue-strong);
-  font-size: 13px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-5);
 }
 .bf-hero__title {
-  margin: 0 0 14px;
-  font-size: clamp(26px, 4.4vw, 38px);
-  line-height: 1.15;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-3xl);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  margin: 0 0 var(--space-4);
+  text-wrap: balance;
 }
 .bf-hero__sub {
-  max-width: 540px;
+  font-size: var(--fs-base);
+  color: var(--muted);
+  max-width: 52ch;
   margin: 0 auto;
-  color: var(--bf-muted);
-  font-size: 16px;
-  line-height: 1.65;
+  text-wrap: pretty;
 }
 
 /* --------------------------------------------------------------------------
-   Контейнер и секции
+   Контейнер формы
    -------------------------------------------------------------------------- */
 .bf-container {
-  max-width: var(--bf-maxw);
+  max-width: var(--w-form);
   margin: 0 auto;
-  padding: 0 20px 80px;
+  padding: 0 var(--space-5) var(--space-24);
 }
 
-/* Строки формы рендерятся плоским списком, без обёртки-секции: заголовок сам
-   отбивает предыдущую секцию верхним отступом. */
+/* --------------------------------------------------------------------------
+   Секции
+   -------------------------------------------------------------------------- */
 .bf-section__head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 40px 0 22px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--bf-line);
+  gap: var(--space-4);
+  margin: var(--space-12) 0 var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line);
 }
 .bf-section__head:first-child {
   margin-top: 0;
@@ -195,422 +146,333 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--bf-radius-xs);
-  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 4px 14px rgba(0, 119, 255, 0.28);
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 .bf-section__title {
-  font-size: 20px;
-  font-weight: 700;
+  margin: 0;
+  font-size: var(--fs-xl);
   letter-spacing: -0.01em;
 }
 
 /* --------------------------------------------------------------------------
-   Поля
+   Поле
    -------------------------------------------------------------------------- */
 .bf-field {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-6);
 }
 .bf-field__label {
   display: block;
-  margin-bottom: 6px;
-  font-size: 14px;
+  font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--bf-ink);
+  color: var(--ink);
+  margin-bottom: var(--space-1);
 }
 .bf-req {
   margin-left: 2px;
-  color: var(--bf-danger);
+  color: var(--danger);
 }
 .bf-hint {
   display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--bf-faint);
-}
-.bf-link {
-  display: inline-block;
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--vk-blue-strong);
+  margin-bottom: var(--space-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  max-width: 62ch;
+  color: var(--muted);
 }
 
-/* Селекторы по ЭЛЕМЕНТУ, а не по `[type=...]`. У инпута без атрибута type
-   (браузер считает его текстовым) селектор по атрибуту не сработает, и поле
-   осталось бы без стилей — именно так и вышло с полями возраста. */
-.bf input:not([type="radio"]):not([type="checkbox"]),
-.bf textarea,
-.bf select {
+.bf input,
+.bf select,
+.bf textarea {
   width: 100%;
-  padding: 12px 14px;
   font-family: inherit;
-  font-size: 15px;
-  color: var(--bf-ink);
-  background: var(--bf-surface);
-  border: 1px solid var(--bf-line);
-  border-radius: var(--bf-radius-sm);
-  outline: none;
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  min-height: 2.75rem;
+  transition: border-color var(--dur) var(--ease-out);
+}
+.bf textarea {
+  min-height: 6rem;
+  resize: vertical;
 }
 .bf input::placeholder,
 .bf textarea::placeholder {
-  color: #9aa4b2;
+  color: #68738a; /* 4.76:1 на белом */
 }
-.bf input:focus,
-.bf textarea:focus,
-.bf select:focus {
-  border-color: var(--vk-blue);
-  box-shadow: 0 0 0 4px var(--vk-blue-ring);
+@media (hover: hover) and (pointer: fine) {
+  .bf input:hover,
+  .bf select:hover,
+  .bf textarea:hover {
+    border-color: var(--ink);
+  }
 }
-.bf textarea {
-  min-height: 96px;
-  line-height: 1.6;
-  resize: vertical;
-}
-
-/* Стрелка select'а — инлайновый SVG, чтобы не тянуть внешний файл. */
-.bf select {
-  appearance: none;
-  cursor: pointer;
-  padding-right: 40px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6678' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 14px center;
+.bf input:focus-visible,
+.bf select:focus-visible,
+.bf textarea:focus-visible {
+  border-color: var(--accent);
 }
 
-/* Незаполненное обязательное поле после ответа 422. */
+/* Незаполненное обязательное поле. */
 .bf-field.is-invalid input,
-.bf-field.is-invalid textarea,
-.bf-field.is-invalid select {
-  border-color: var(--bf-danger);
-  box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.14);
+.bf-field.is-invalid select,
+.bf-field.is-invalid textarea {
+  border-color: var(--danger);
 }
 .bf-field__error {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--bf-danger);
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--danger);
 }
 
-/* Пара полей в строку. */
+/* Пара полей в строку на десктопе. */
 .bf-two {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-.bf-two > .bf-field {
-  margin-bottom: 20px;
+  gap: var(--space-4);
 }
 
-/* Возраст: две узкие границы диапазона. Ширина задана явно — растянутые на всю
-   строку поля под «от» и «до» читаются как отдельные вопросы, а не как диапазон. */
+/* Возраст: два узких поля. */
 .bf-age {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 148px));
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 9rem));
+  gap: var(--space-3);
 }
 
 /* --------------------------------------------------------------------------
-   Карточки выбора (radio) — вместо серых select'ов
+   Карточки выбора
    -------------------------------------------------------------------------- */
 .bf-choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-2);
 }
 .bf-choice {
-  position: relative;
+  flex: 1 1 auto;
 }
-/* Инпут визуально скрыт, но остаётся фокусируемым с клавиатуры. */
 .bf-choice input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
-  margin: 0;
+  pointer-events: none;
 }
 .bf-choice label {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 11px 16px;
-  background: var(--bf-surface);
-  border: 1px solid var(--bf-line);
-  border-radius: var(--bf-radius-sm);
-  font-size: 14px;
-  font-weight: 500;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
   cursor: pointer;
-  user-select: none;
   transition:
-    border-color 0.18s ease,
-    background 0.18s ease,
-    color 0.18s ease;
+    border-color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
 }
-.bf-choice label:hover {
-  border-color: #c3cddc;
-  background: #fbfcfe;
+.bf-choice__mark {
+  flex-shrink: 0;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  border: 2px solid var(--line-input);
+  transition:
+    border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .bf-choice label:hover {
+    border-color: var(--ink);
+  }
 }
 .bf-choice input:checked + label {
-  background: var(--vk-blue-soft);
-  border-color: var(--vk-blue);
-  color: var(--vk-blue-strong);
-}
-/* Фокус с клавиатуры виден на карточке, а не на скрытом инпуте. */
-.bf-choice input:focus-visible + label {
-  border-color: var(--vk-blue);
-  box-shadow: 0 0 0 4px var(--vk-blue-ring);
-}
-
-.bf-choice__mark {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  border: 2px solid #c3cddc;
-  border-radius: 50%;
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease;
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .bf-choice input:checked + label .bf-choice__mark {
-  background: var(--vk-blue);
-  border-color: var(--vk-blue);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--surface);
+  background: var(--accent);
 }
-.bf-choice input:checked + label .bf-choice__mark::after {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #fff;
+/* Фокус виден на карточке, а не на скрытом инпуте. */
+.bf-choice input:focus-visible + label {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
 }
-
-/* Недоступная цель: видно, что она есть, но выбрать нельзя. */
 .bf-choice input:disabled + label {
+  opacity: 0.55;
   cursor: not-allowed;
-  background: var(--bf-paper);
-  border-style: dashed;
-  color: var(--bf-faint);
-}
-.bf-choice input:disabled + label:hover {
-  border-color: var(--bf-line);
-  background: var(--bf-paper);
-}
-.bf-choice input:disabled + label .bf-choice__mark {
-  border-color: #d7dde7;
 }
 .bf-choice__soon {
-  margin-left: 2px;
-  padding: 2px 8px;
-  border-radius: 100px;
-  background: var(--bf-line);
-  color: var(--bf-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  margin-left: auto;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 /* --------------------------------------------------------------------------
    Коробка с инструкцией и предупреждение
    -------------------------------------------------------------------------- */
 .bf-instruction {
-  margin: 4px 0 20px;
-  padding: 18px 20px;
-  background: var(--bf-tint);
-  border: 1px solid rgba(0, 119, 255, 0.16);
-  border-radius: var(--bf-radius);
+  margin: var(--space-4) 0 var(--space-6);
+  padding: var(--space-5);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .bf-instruction__title {
-  margin-bottom: 10px;
-  color: var(--vk-blue-strong);
-  font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  margin-bottom: var(--space-3);
 }
 .bf-instruction ol {
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--muted);
 }
-.bf-instruction li {
-  margin-bottom: 4px;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--bf-muted);
-}
-.bf-instruction li:last-child {
-  margin-bottom: 0;
+.bf-instruction strong {
+  color: var(--ink);
 }
 
 .bf-notice {
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-  padding: 14px 16px;
-  background: #fff8ec;
-  border: 1px solid #f3ddb5;
-  border-radius: var(--bf-radius-sm);
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: #7a5a1e;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4);
+  background: #f7ece4;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  color: var(--warn);
+}
+
+.bf-link {
+  display: inline-block;
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
    Отправка
    -------------------------------------------------------------------------- */
 .bf-submit {
-  padding: 24px 0 8px;
+  margin-top: var(--space-10);
   text-align: center;
 }
 .bf-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   width: 100%;
-  max-width: 340px;
-  padding: 16px 32px;
+  max-width: 22rem;
+  min-height: 3.25rem;
+  padding: var(--space-4) var(--space-8);
   font-family: inherit;
-  font-size: 16px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, var(--vk-blue) 0%, var(--vk-blue-2) 100%);
-  border: none;
-  border-radius: var(--bf-radius-sm);
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(0, 119, 255, 0.32);
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease,
-    filter 0.2s ease;
-}
-.bf-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 32px rgba(0, 119, 255, 0.38);
-}
-.bf-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 4px var(--vk-blue-ring);
-}
-.bf-btn:disabled {
-  cursor: not-allowed;
-  filter: grayscale(0.35);
-  opacity: 0.7;
-  box-shadow: none;
-}
-
-.bf-foot {
-  margin-top: 18px;
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--bf-faint);
-  text-align: center;
-}
-.bf-foot strong {
-  color: var(--vk-blue-strong);
+  font-size: var(--fs-base);
   font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .bf-btn:hover {
+    background: var(--accent-strong);
+  }
+}
+.bf-btn:active {
+  transform: scale(0.98);
+}
+.bf-btn[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.bf-btn[disabled]:active {
+  transform: none;
+}
+.bf-foot {
+  margin-top: var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--muted);
 }
 
-/* Полоса результата отправки. */
 .bf-result {
-  margin-top: 20px;
-  padding: 16px;
-  border-radius: var(--bf-radius-sm);
-  font-size: 14.5px;
-  line-height: 1.6;
   display: none;
+  max-width: var(--w-form);
+  margin: var(--space-5) auto 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: var(--fs-sm);
 }
 .bf-result.is-shown {
   display: block;
 }
 .bf-result.is-ok {
-  background: rgba(18, 165, 148, 0.1);
-  border: 1px solid var(--success, #12a594);
-  color: #0c6b60;
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 .bf-result.is-err {
-  background: rgba(229, 72, 77, 0.08);
-  border: 1px solid var(--bf-danger);
-  color: #a3262b;
+  background: #f8e9e9;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 /* --------------------------------------------------------------------------
    Мобильные
    -------------------------------------------------------------------------- */
-@media (max-width: 640px) {
+@media (max-width: 40rem) {
   .bf-hero {
-    padding: 36px 16px 26px;
-  }
-  .bf-hero::before {
-    width: 420px;
-    height: 380px;
-    top: -200px;
+    padding: var(--space-8) var(--space-4) var(--space-6);
+    text-align: left;
   }
   .bf-hero__sub {
-    font-size: 15px;
+    margin-inline: 0;
   }
   .bf-container {
-    padding: 0 16px 60px;
+    padding-inline: var(--space-4);
   }
-  .bf-section {
-    margin-bottom: 32px;
-  }
-  .bf-section__num {
-    width: 32px;
-    height: 32px;
-    font-size: 14px;
-  }
-  .bf-section__title {
-    font-size: 17px;
-  }
-
-  /* 16px — минимум, при котором iOS не зумит страницу на фокусе. */
-  .bf input:not([type="radio"]):not([type="checkbox"]),
-  .bf textarea,
-  .bf select {
-    font-size: 16px;
-    padding: 14px;
-  }
-
-  .bf-two {
+  .bf-two,
+  .bf-age {
     grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .bf-choices {
-    flex-direction: column;
-    gap: 8px;
   }
   .bf-choice {
-    width: 100%;
-  }
-  /* Крупная зона нажатия на палец. */
-  .bf-choice label {
-    width: 100%;
-    min-height: 48px;
-    padding: 13px 16px;
+    flex: 1 1 100%;
   }
   .bf-btn {
     max-width: none;
   }
-  .bf-instruction {
-    padding: 14px 16px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bf *,
-  .bf *::before,
-  .bf *::after {
-    transition: none !important;
-    animation: none !important;
-  }
-  .bf-btn:hover:not(:disabled) {
+  .bf-btn:active {
     transform: none;
   }
 }

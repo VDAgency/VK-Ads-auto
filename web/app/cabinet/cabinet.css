@@ -1,0 +1,209 @@
+/* ==========================================================================
+   cabinet.css — клиентский кабинет.
+
+   Прежде кабинет выглядел как отдельный продукт: чёрный топбар, серый фон,
+   плоские карточки с одной строкой текста и инлайновые стили в разметке.
+   Здесь то же семейство поверхностей, что на лендинге и в брифах, а главным
+   элементом стала дорожка статуса — она отвечает на вопрос «что сейчас
+   происходит», ради которого клиент и заходит.
+   ========================================================================== */
+
+.cab {
+  min-height: 100dvh;
+  background: var(--paper);
+}
+
+.cab-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.cab-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  max-width: var(--w-form);
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-5);
+  min-height: 4rem;
+}
+.cab-brand {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  text-decoration: none;
+}
+.cab-brand__dot {
+  color: var(--accent);
+}
+/* «Выйти» не должна выглядеть как рабочее действие — только как выход. */
+.cab-logout {
+  min-height: 2.5rem;
+  padding-inline: var(--space-4);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.cab-main {
+  padding-block: var(--space-12) var(--space-24);
+}
+.cab-narrow {
+  max-width: var(--w-form);
+  margin: 0 auto;
+  padding-inline: var(--space-5);
+}
+.cab-narrow > h1 {
+  font-size: var(--fs-3xl);
+  letter-spacing: -0.03em;
+  margin-bottom: var(--space-3);
+}
+
+/* --------------------------------------------------------------------------
+   Карточка
+   -------------------------------------------------------------------------- */
+.cab-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+.cab-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.cab-card h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+}
+.cab-card__sub {
+  margin: 0 0 var(--space-4);
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.cab-mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.cab-empty {
+  text-align: center;
+}
+.cab-empty p {
+  max-width: 46ch;
+  margin: 0 auto var(--space-5);
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   Реферальная ссылка. Прежде это был голый длинный URL без возможности
+   скопировать — на телефоне его приходилось выделять пальцем.
+   -------------------------------------------------------------------------- */
+.cab-copy {
+  display: flex;
+  gap: var(--space-2);
+}
+.cab-copy__field {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  min-height: 2.75rem;
+}
+.cab-copy__status {
+  margin: var(--space-2) 0 0;
+  min-height: 1.25rem;
+  font-size: var(--fs-xs);
+  color: var(--accent-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Контакты
+   -------------------------------------------------------------------------- */
+.cab-contacts {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 0;
+}
+.cab-contacts div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px dashed var(--line);
+}
+.cab-contacts dt {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.cab-contacts dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
+}
+
+/* --------------------------------------------------------------------------
+   Установка пароля при первом входе
+   -------------------------------------------------------------------------- */
+.cab-rule {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.cab-rule.is-ok {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+.cab-show {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+.cab-show input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+.cab-submit {
+  width: 100%;
+}
+
+@media (max-width: 40rem) {
+  .cab-main {
+    padding-block: var(--space-8) var(--space-16);
+  }
+  .cab-narrow {
+    padding-inline: var(--space-4);
+  }
+  .cab-card {
+    padding: var(--space-5);
+  }
+  .cab-copy {
+    flex-direction: column;
+  }
+  .cab-contacts div {
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .cab-contacts dd {
+    text-align: left;
+  }
+}

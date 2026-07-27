@@ -150,28 +150,52 @@ export function BriefCardView({
     <>
       <BackLink label="← к брифам" onClick={onBack} />
 
-      <div className="card">
-        <h3>
-          Бриф №{card.brief_id} · {VARIANT_RU[card.variant] ?? card.variant} ·{" "}
-          {STATUS_RU[card.status] ?? card.status}
-        </h3>
-        <p>
-          👤 {card.client.full_name || "—"}
-          <br />
+      <div className="adm-card">
+        <div className="adm-card__head">
+          <h2>
+            Бриф <span className="adm-mono">№{card.brief_id}</span>
+          </h2>
+          <span className="adm-badge">{VARIANT_RU[card.variant] ?? card.variant}</span>
+          <span
+            className={card.status === "launched" ? "adm-badge adm-badge--accent" : "adm-badge"}
+          >
+            {STATUS_RU[card.status] ?? card.status}
+          </span>
+          <span
+            className={
+              card.has_creative ? "adm-badge adm-badge--accent" : "adm-badge--wait adm-badge"
+            }
+          >
+            {card.has_creative ? "креатив загружен" : "креатива нет"}
+          </span>
+        </div>
+        <p className="adm-card__contacts">
+          {card.client.full_name || "Без имени"}
+          {" · "}
           {[card.client.email, card.client.phone, card.client.telegram].filter(Boolean).join(" · ")}
         </p>
-        <div className="section-title">Поля</div>
-        {card.fields.map((field) => (
-          <div key={field.n}>
-            {field.n}. {field.label}: {field.value || "—"}
-          </div>
-        ))}
+
         {card.surface_title ? (
-          // Клиент выбирает площадку словами; показываем, как её понял разбор брифа,
-          // чтобы ошибка в поле была видна до запуска, а не после.
-          <p>🎯 Площадка: {card.surface_title}</p>
+          // Клиент выбирает площадку словами; показываем, как её понял разбор
+          // брифа, чтобы ошибка в поле была видна до запуска, а не после.
+          <p className="adm-card__surface">
+            Площадка по разбору брифа: <strong>{card.surface_title}</strong>
+          </p>
         ) : null}
-        <p>🖼 Креатив: {card.has_creative ? "загружен" : "не загружен"}</p>
+
+        {/* Таблица, а не сплошной список: номер — рабочий инструмент, по нему
+            идут правки `номер.значение`, и он обязан находиться взглядом. */}
+        <dl className="adm-fields">
+          {card.fields.map((field) => (
+            <div className="adm-field" key={field.n}>
+              <dt className="adm-field__n">{field.n}</dt>
+              <dd className="adm-field__label">{field.label}</dd>
+              <dd className={field.value ? "adm-field__value" : "adm-field__value is-empty"}>
+                {field.value || "не заполнено"}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
 
       <div className="adm-actions">
@@ -181,7 +205,7 @@ export function BriefCardView({
           type="button"
           onClick={() => setShowEdits((value) => !value)}
         >
-          ✏️ Внести правки
+          Внести правки
         </button>
         {card.surface_needs_creative === false ? (
           // Объявлением служит сам пост, клип или трек — просить картинку не за чем.
@@ -191,7 +215,7 @@ export function BriefCardView({
             type="button"
             onClick={() => void launchWithoutCreative()}
           >
-            🚀 Запустить без креатива
+            Запустить без креатива
           </button>
         ) : (
           <button
@@ -200,23 +224,20 @@ export function BriefCardView({
             type="button"
             onClick={() => setShowCreative((value) => !value)}
           >
-            🖼 Загрузить креатив
+            Загрузить креатив
           </button>
         )}
       </div>
 
-      <div id="edit-box" hidden={!showEdits}>
-        <p className="note">
-          Формат: номер.значение, каждая с новой строки. Например:
-          <br />
-          1. Иван Петров
-          <br />
-          7. Москва
+      <div className="adm-panel" id="edit-box" hidden={!showEdits}>
+        <p className="adm-panel__hint">
+          {"Формат: номер.значение, по одной правке на строку. Например:\n" +
+            (card.fields[0] ? `${card.fields[0].n}. новое значение\n` : "") +
+            (card.fields[1] ? `${card.fields[1].n}. новое значение` : "")}
         </p>
         <textarea
           id="edits"
           rows={4}
-          style={{ width: "100%" }}
           value={edits}
           onChange={(event) => setEdits(event.target.value)}
         />
@@ -224,44 +245,47 @@ export function BriefCardView({
           className="btn btn--primary"
           id="edit-send"
           type="button"
-          style={{ marginTop: 8 }}
           onClick={() => void applyEdits()}
         >
           Применить
         </button>
       </div>
 
-      <div id="creative-box" hidden={!showCreative} style={{ marginTop: 12 }}>
-        <div className="field">
-          <div>
-            <label htmlFor="cr-file">Фото или видео</label>
-            <input type="file" id="cr-file" accept="image/*,video/*" ref={fileRef} />
-          </div>
+      <div className="adm-panel" id="creative-box" hidden={!showCreative}>
+        <div className="form-field">
+          <label htmlFor="cr-file">Фото или видео</label>
+          <input type="file" id="cr-file" accept="image/*,video/*" ref={fileRef} />
         </div>
-        <div className="field">
-          <div>
-            <label htmlFor="cr-title">Заголовок (до 40)</label>
-            <input id="cr-title" value={title} onChange={(event) => setTitle(event.target.value)} />
-          </div>
+        <div className="form-field">
+          <label htmlFor="cr-title">Заголовок</label>
+          <input
+            id="cr-title"
+            type="text"
+            maxLength={40}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          <p className="adm-panel__hint">{title.length} из 40</p>
         </div>
-        <div className="field">
-          <div>
-            <label htmlFor="cr-body">Текст (до 220)</label>
-            <textarea
-              id="cr-body"
-              rows={3}
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-            />
-          </div>
+        <div className="form-field">
+          <label htmlFor="cr-body">Текст</label>
+          <textarea
+            id="cr-body"
+            rows={3}
+            maxLength={220}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+          />
+          <p className="adm-panel__hint">{body.length} из 220</p>
         </div>
+        {/* Единственное необратимое действие в панели — отделено и названо прямо. */}
         <button
           className="btn btn--primary"
           id="cr-send"
           type="button"
           onClick={() => void uploadCreative()}
         >
-          Отправить (запустит РК)
+          Отправить и запустить кампанию
         </button>
       </div>
     </>

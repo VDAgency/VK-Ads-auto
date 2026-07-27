@@ -38,10 +38,10 @@ const TERM_OPTIONS = [
 // Значения материалов разбирает `parse_materials` в services/brief_parser.py
 // по ключевым словам «фото» / «видео» / «ничего нет» — менять только вместе с ним.
 const MATERIALS_OPTIONS = [
-  { value: "есть фото", label: "📸 Да, есть фото" },
-  { value: "есть видео", label: "🎬 Да, есть видео" },
-  { value: "есть фото и видео", label: "📸🎬 Есть и фото, и видео" },
-  { value: "ничего нет, нужна помощь", label: "❌ Ничего нет, нужна помощь" },
+  { value: "есть фото", label: "Да, есть фото" },
+  { value: "есть видео", label: "Да, есть видео" },
+  { value: "есть фото и видео", label: "Есть и фото, и видео" },
+  { value: "ничего нет, нужна помощь", label: "Ничего нет, нужна помощь" },
 ];
 
 // Порядок строк = порядок INDIVIDUAL_FIELDS в services/brief_fields.py.
@@ -51,6 +51,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "full_name",
+    maxLength: 120,
     label: "Как к вам обращаться",
     placeholder: "Фамилия Имя Отчество",
     autoComplete: "name",
@@ -63,6 +64,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "phone",
+        maxLength: 24,
         label: "Телефон / WhatsApp",
         type: "tel",
         inputMode: "tel",
@@ -74,6 +76,7 @@ const ROWS: BriefRow[] = [
       {
         kind: "input",
         name: "telegram",
+        maxLength: 64,
         label: "Telegram",
         placeholder: "@username",
       },
@@ -82,6 +85,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "email",
+    maxLength: 254,
     label: "E-mail",
     type: "email",
     placeholder: "your@email.ru",
@@ -92,8 +96,10 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "tax_id",
+    maxLength: 12,
+    pattern: "[0-9]{10,12}",
     label: "ИНН",
-    hint: "Если есть — укажите для оформления документов",
+    hint: "Если есть, укажите — понадобится для документов",
     placeholder: "Например: 7707083893",
     inputMode: "numeric",
   },
@@ -102,6 +108,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "object_url",
+    maxLength: 300,
     label: "Ссылка на личную страницу или сообщество ВК",
     hint: "Скопируйте ссылку из адресной строки браузера или из приложения",
     type: "url",
@@ -111,7 +118,7 @@ const ROWS: BriefRow[] = [
   },
   {
     kind: "instruction",
-    title: "📌 Как скопировать ссылку на свою страницу ВК",
+    title: "Как скопировать ссылку на свою страницу ВК",
     steps: [
       <>
         Откройте приложение ВКонтакте или зайдите на <strong>vk.com</strong>
@@ -129,8 +136,10 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "vk_ad_cabinet_id",
+    maxLength: 12,
+    pattern: "[0-9]{4,12}",
     label: "ID кабинета VK Реклама",
-    hint: "Номер вашего рекламного кабинета — без него мы не сможем запустить кампанию",
+    hint: "Номер вашего рекламного кабинета. Без него запустить кампанию не получится",
     inputMode: "numeric",
     placeholder: "например, 13410929",
     required: true,
@@ -153,6 +162,7 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "audience_description",
+    maxLength: 1000,
     label: "Кто ваш идеальный подписчик?",
     hint: "Опишите, каких людей вы хотите видеть в подписчиках",
     placeholder: "Например: девушки 20–35, интересуются модой и красотой, живут в крупных городах…",
@@ -175,8 +185,9 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "geo",
+    maxLength: 300,
     label: "География",
-    hint: "Из каких городов или регионов нужны подписчики? Если неважно — напишите «вся Россия»",
+    hint: "Из каких городов или регионов нужны подписчики? Если неважно, напишите «вся Россия»",
     placeholder: "Москва, СПб / вся Россия",
     required: true,
     error: "Укажите географию",
@@ -213,8 +224,9 @@ const ROWS: BriefRow[] = [
   {
     kind: "input",
     name: "materials_url",
+    maxLength: 300,
     label: "Ссылка на рекламные материалы",
-    hint: "Если есть — пришлите ссылку на папку с фото и видео (Google Диск, Яндекс.Диск, облако)",
+    hint: "Пришлите ссылку на папку с фото и видео: Google Диск, Яндекс.Диск, облако",
     type: "url",
     placeholder: "https://disk.yandex.ru/...",
   },
@@ -223,14 +235,16 @@ const ROWS: BriefRow[] = [
   {
     kind: "textarea",
     name: "competitors",
+    maxLength: 1000,
     label: "Ссылки на конкурентов или примеры",
-    hint: "Если есть кто-то, на кого вы хотите быть похожи — пришлите ссылки",
+    hint: "Если есть кто-то, на кого вы хотите быть похожи, пришлите ссылки",
     rows: 3,
     placeholder: "https://vk.com/example1\nhttps://vk.com/example2",
   },
   {
     kind: "textarea",
     name: "extra",
+    maxLength: 2000,
     label: "Есть ли что-то ещё, что важно учесть?",
     rows: 3,
     placeholder: "Любая дополнительная информация",
@@ -240,14 +254,14 @@ const ROWS: BriefRow[] = [
 export default function BriefIndividual() {
   return (
     <div className="bf">
+      <a className="bf-skip" href="#bf-main">
+        Перейти к форме
+      </a>
+
       <header className="bf-header">
         <div className="bf-header__inner">
           <Link className="bf-brand" href="/">
-            <span className="bf-brand__badge" aria-hidden="true">
-              VK
-            </span>
-            VK<span className="bf-brand__dot">·</span>Ads
-            <span className="bf-brand__dot">·</span>auto
+            Ads<span className="bf-brand__dot">·</span>auto
           </Link>
           <Link className="bf-header__back" href="/">
             На главную
@@ -255,27 +269,29 @@ export default function BriefIndividual() {
         </div>
       </header>
 
-      <div className="bf-hero">
-        <div className="bf-hero__badge">📋 Бриф</div>
-        <h1 className="bf-hero__title">Подписчики на вашу страницу или сообщество ВКонтакте</h1>
-        <p className="bf-hero__sub">
-          Заполните короткую анкету — мы подготовим стратегию и запустим рекламу для привлечения
-          подписчиков. Поля со звёздочкой обязательны.
-        </p>
-      </div>
+      <main id="bf-main">
+        <div className="bf-hero">
+          <div className="bf-hero__badge">Бриф</div>
+          <h1 className="bf-hero__title">Подписчики на вашу страницу или сообщество ВКонтакте</h1>
+          <p className="bf-hero__sub">
+            Ответьте на вопросы о продвижении — по ним мы соберём кампанию. Займёт около десяти
+            минут. Поля со звёздочкой обязательны, остальное можно пропустить.
+          </p>
+        </div>
 
-      <div className="bf-container">
-        <BriefForm
-          variant="individual"
-          rows={ROWS}
-          footer={
-            <>
-              После отправки откроется ваш <strong>личный кабинет</strong>
-              <br />— там будет статус брифа и запуск кампании
-            </>
-          }
-        />
-      </div>
+        <div className="bf-container">
+          <BriefForm
+            variant="individual"
+            rows={ROWS}
+            footer={
+              <>
+                После отправки откроется ваш <strong>личный кабинет</strong> — там будет статус
+                брифа и запуск кампании
+              </>
+            }
+          />
+        </div>
+      </main>
     </div>
   );
 }

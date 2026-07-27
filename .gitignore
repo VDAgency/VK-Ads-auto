@@ -57,3 +57,12 @@ docs/
 
 # Claude Code local state (worktrees, session artifacts)
 .claude/
+
+# Impeccable artifacts — business context, keep out of the public repo
+PRODUCT.md
+DESIGN.md
+.impeccable/
+
+# Манифест локально установленных skills (сами скиллы лежат в .claude/ и не
+# коммитятся) — лок-файл без них смысла в репозитории не имеет
+skills-lock.json

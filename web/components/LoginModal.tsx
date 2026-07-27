@@ -209,8 +209,8 @@ export function LoginModal() {
         </button>
 
         <div className="lp-modal__head">
-          <span className="lp-badge lp-modal__badge" aria-hidden="true">
-            ВК
+          <span className="lp-modal__badge" aria-hidden="true">
+            A
           </span>
           <span className="lp-modal__kicker">
             <span className="lp-modal__live" aria-hidden="true"></span>Личный кабинет
@@ -300,8 +300,8 @@ export function LoginModal() {
           <button
             className={
               loggingIn
-                ? "lp-btn lp-btn--primary lp-modal__submit is-loading"
-                : "lp-btn lp-btn--primary lp-modal__submit"
+                ? "btn btn--primary lp-modal__submit is-loading"
+                : "btn btn--primary lp-modal__submit"
             }
             id="lm-login"
             type="submit"
@@ -345,11 +345,7 @@ export function LoginModal() {
             {linkMsg?.text}
           </div>
           <button
-            className={
-              sendingLink
-                ? "lp-btn lp-btn--outline lp-modal__submit is-loading"
-                : "lp-btn lp-btn--outline lp-modal__submit"
-            }
+            className={sendingLink ? "btn lp-modal__submit is-loading" : "btn lp-modal__submit"}
             id="lm-forgot-send"
             type="submit"
             disabled={sendingLink}

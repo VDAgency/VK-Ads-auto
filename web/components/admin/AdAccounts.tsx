@@ -116,13 +116,13 @@ export function AdAccounts() {
 
   return (
     <>
-      <div className="adm-nav">
+      <div className="adm-nav adm-nav--actions">
         <button
           className="btn btn--primary"
           type="button"
           onClick={() => setShowForm((open) => !open)}
         >
-          {showForm ? "Свернуть" : "➕ Добавить кабинет"}
+          {showForm ? "Свернуть" : "Добавить кабинет"}
         </button>
       </div>
 
