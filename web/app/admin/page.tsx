@@ -81,22 +81,41 @@ export default function AdminPage() {
     location.href = "/admin.html";
   }
 
+  /** Активен ли раздел — чтобы оператор видел, где находится. */
+  function isActive(kind: Screen["kind"], status?: "recent" | "pending") {
+    if (screen.kind !== kind) return false;
+    if (kind === "briefs" && screen.kind === "briefs") return screen.status === status;
+    return true;
+  }
+
   return (
-    <>
-      <header className="topbar">
-        <div className="brand">
-          VK<span>·</span>Ads<span>·</span>auto · админ
+    <div className="adm-shell">
+      <header className="adm-header">
+        <div className="adm-header__inner">
+          <span className="adm-brand">
+            Ads<span className="adm-brand__dot">·</span>auto
+            <span className="adm-brand__role">панель оператора</span>
+          </span>
+          {auth === "ok" ? (
+            <button
+              className="btn btn--ghost adm-logout"
+              type="button"
+              onClick={() => void logout()}
+            >
+              Выйти
+            </button>
+          ) : null}
         </div>
       </header>
 
-      <main className="wrap">
+      <main className="adm-main">
         {/* Нужен вход */}
-        <section id="need-auth" hidden={auth !== "need"}>
+        <section className="adm-gate" hidden={auth !== "need"}>
           <div className="eyebrow">Админ-панель</div>
           <h2>Вход только из бота</h2>
           <p className="lead">
             Откройте админку из Telegram-бота командой <strong>/admin</strong> — бот пришлёт ссылку
-            для входа (действует 15 минут).
+            для входа. Она действует 15 минут.
           </p>
           <div className="result err" id="auth-error" hidden={!authError}>
             {authError}
@@ -105,52 +124,82 @@ export default function AdminPage() {
 
         {/* Приложение */}
         <section id="app" hidden={auth !== "ok"}>
-          <div className="eyebrow">Админ-панель оператора</div>
-
           <div className="adm-tiles" id="tiles">
-            {overview
-              ? (
-                  [
-                    ["Клиенты", overview.clients],
-                    ["Ждём брифы", overview.pending],
-                    ["Пришли (неделя)", overview.recent],
-                    ["Кампании", overview.campaigns],
-                  ] as const
-                ).map(([label, value]) => (
-                  <div className="adm-tile" key={label}>
-                    <b>{value}</b>
-                    <span>{label}</span>
-                  </div>
-                ))
-              : null}
+            {overview ? (
+              <>
+                <button
+                  className={`adm-tile${isActive("clients") ? " is-active" : ""}`}
+                  type="button"
+                  onClick={() => go({ kind: "clients" })}
+                >
+                  <b>{overview.clients}</b>
+                  <span>Клиенты</span>
+                </button>
+                <button
+                  className={`adm-tile${overview.pending > 0 ? " is-alert" : ""}${
+                    isActive("briefs", "pending") ? " is-active" : ""
+                  }`}
+                  type="button"
+                  onClick={() => go({ kind: "briefs", status: "pending" })}
+                >
+                  <b>{overview.pending}</b>
+                  <span>Ждём брифы</span>
+                </button>
+                <button
+                  className={`adm-tile${isActive("briefs", "recent") ? " is-active" : ""}`}
+                  type="button"
+                  onClick={() => go({ kind: "briefs", status: "recent" })}
+                >
+                  <b>{overview.recent}</b>
+                  <span>Пришли за неделю</span>
+                </button>
+                <button
+                  className={`adm-tile${isActive("campaigns") ? " is-active" : ""}`}
+                  type="button"
+                  onClick={() => go({ kind: "campaigns" })}
+                >
+                  <b>{overview.campaigns}</b>
+                  <span>Кампании</span>
+                </button>
+              </>
+            ) : null}
           </div>
 
           <div className="adm-nav">
-            <button className="btn btn--primary" type="button" onClick={() => go({ kind: "send" })}>
-              📨 Отправить бриф
+            <button
+              className={`adm-nav__btn${isActive("send") ? " is-active" : ""}`}
+              type="button"
+              onClick={() => go({ kind: "send" })}
+            >
+              Отправить бриф
             </button>
-            <button className="btn" type="button" onClick={() => go({ kind: "clients" })}>
+            <button
+              className={`adm-nav__btn${isActive("clients") ? " is-active" : ""}`}
+              type="button"
+              onClick={() => go({ kind: "clients" })}
+            >
               Клиенты
             </button>
             <button
-              className="btn"
+              className={`adm-nav__btn${isActive("briefs", "recent") ? " is-active" : ""}`}
               type="button"
               onClick={() => go({ kind: "briefs", status: "recent" })}
             >
               Пришли брифы
             </button>
             <button
-              className="btn"
+              className={`adm-nav__btn${isActive("briefs", "pending") ? " is-active" : ""}`}
               type="button"
               onClick={() => go({ kind: "briefs", status: "pending" })}
             >
               Ждём брифы
             </button>
-            <button className="btn" type="button" onClick={() => go({ kind: "campaigns" })}>
+            <button
+              className={`adm-nav__btn${isActive("campaigns") ? " is-active" : ""}`}
+              type="button"
+              onClick={() => go({ kind: "campaigns" })}
+            >
               Кампании
-            </button>
-            <button className="btn" id="logout" type="button" onClick={() => void logout()}>
-              Выйти
             </button>
           </div>
 
@@ -195,6 +244,6 @@ export default function AdminPage() {
           </div>
         </section>
       </main>
-    </>
+    </div>
   );
 }

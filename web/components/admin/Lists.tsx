@@ -18,22 +18,41 @@ function Row({
   title,
   subtitle,
   badge,
+  badgeKind,
+  extra,
   onClick,
 }: {
   title: string;
   subtitle?: string;
   badge: string;
+  badgeKind?: "accent" | "wait";
+  /** Дополнительный бейдж слева от основного (например, срок ожидания). */
+  extra?: { text: string; kind: "wait" };
   onClick?: () => void;
 }) {
   return (
     <button className="adm-row" type="button" onClick={onClick}>
-      <div>
-        <strong>{title}</strong>
-        {subtitle ? <div className="muted">{subtitle}</div> : null}
-      </div>
-      <span className="adm-badge">{badge}</span>
+      <span className="adm-row__main">
+        <span className="adm-row__title">{title}</span>
+        {subtitle ? <span className="adm-row__meta">{subtitle}</span> : null}
+      </span>
+      <span className="adm-row__side">
+        {extra ? <span className={`adm-badge adm-badge--${extra.kind}`}>{extra.text}</span> : null}
+        <span className={badgeKind ? `adm-badge adm-badge--${badgeKind}` : "adm-badge"}>
+          {badge}
+        </span>
+      </span>
     </button>
   );
+}
+
+/** «3 дня» / «11 дней» — падеж важен, оператор читает это десятки раз в день. */
+function daysLabel(days: number): string {
+  const mod10 = days % 10;
+  const mod100 = days % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${days} день`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${days} дня`;
+  return `${days} дней`;
 }
 
 export function BackLink({ label, onClick }: { label: string; onClick: () => void }) {
@@ -46,6 +65,7 @@ export function BackLink({ label, onClick }: { label: string; onClick: () => voi
 
 export function ClientList({ onOpenClient }: { onOpenClient: (id: number) => void }) {
   const [items, setItems] = useState<ClientRow[] | null>(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     void adminFetch<{ items: ClientRow[] }>("/clients")
@@ -54,19 +74,42 @@ export function ClientList({ onOpenClient }: { onOpenClient: (id: number) => voi
   }, []);
 
   if (items === null) return null;
-  if (!items.length) return <p className="note">Клиентов пока нет.</p>;
+  if (!items.length) return <p className="adm-empty">Клиентов пока нет.</p>;
+
+  // Поиск по имени и контактам. При сотнях клиентов список без него
+  // неприменим, а на сервере фильтрации нет.
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? items.filter((client) =>
+        `${client.full_name ?? ""} ${contactLine(client)}`.toLowerCase().includes(needle),
+      )
+    : items;
 
   return (
     <>
-      {items.map((client) => (
-        <Row
-          key={client.id}
-          title={client.full_name || "Без имени"}
-          subtitle={contactLine(client)}
-          badge={`брифов: ${client.brief_count}`}
-          onClick={() => onOpenClient(client.id)}
-        />
-      ))}
+      <input
+        className="adm-search"
+        type="search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Поиск по имени или контакту"
+        aria-label="Поиск по клиентам"
+      />
+      {shown.length === 0 ? (
+        <p className="adm-empty">Никто не найден по запросу «{query.trim()}».</p>
+      ) : (
+        <div className="adm-list">
+          {shown.map((client) => (
+            <Row
+              key={client.id}
+              title={client.full_name || "Без имени"}
+              subtitle={contactLine(client)}
+              badge={`брифов: ${client.brief_count}`}
+              onClick={() => onOpenClient(client.id)}
+            />
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -89,10 +132,16 @@ export function BriefList({
   }, [status]);
 
   if (items === null) return null;
-  if (!items.length) return <p className="note">Пусто.</p>;
+  if (!items.length) {
+    return (
+      <p className="adm-empty">
+        {status === "pending" ? "Никто не ждёт заполнения." : "За неделю брифов не приходило."}
+      </p>
+    );
+  }
 
   return (
-    <>
+    <div className="adm-list">
       {items.map((item, index) => {
         const who = item.contact_name ? `${item.contact_name} — ${item.contact}` : item.contact;
         return (
@@ -100,12 +149,20 @@ export function BriefList({
             key={`${item.contact}-${index}`}
             title={who}
             subtitle={`${VARIANT_RU[item.variant] ?? item.variant} · ${item.channel}`}
+            // Срок ожидания приходил с сервера и нигде не показывался, хотя
+            // именно он определяет, кому писать первым.
+            extra={
+              item.waiting_days > 0
+                ? { text: daysLabel(item.waiting_days), kind: "wait" }
+                : undefined
+            }
             badge={item.brief_id ? "открыть" : "ждём"}
+            badgeKind={item.brief_id ? "accent" : undefined}
             onClick={item.brief_id ? () => onOpenBrief(item.brief_id as number) : undefined}
           />
         );
       })}
-    </>
+    </div>
   );
 }
 
@@ -119,19 +176,20 @@ export function CampaignList() {
   }, []);
 
   if (items === null) return null;
-  if (!items.length) return <p className="note">Кампаний пока нет.</p>;
+  if (!items.length) return <p className="adm-empty">Кампаний пока нет.</p>;
 
   return (
-    <>
+    <div className="adm-list">
       {items.map((campaign) => (
         <Row
           key={campaign.id}
           title={`Кампания №${campaign.id} · ${campaign.client_name || "—"}`}
           subtitle={`бриф №${campaign.brief_id} · ${campaign.objective}`}
           badge={STATUS_RU[campaign.status] ?? campaign.status}
+          badgeKind={campaign.status === "launched" ? "accent" : undefined}
         />
       ))}
-    </>
+    </div>
   );
 }
 
