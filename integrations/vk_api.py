@@ -62,6 +62,11 @@ AUTOBIDDING_MAX_GOALS = "max_goals"
 STATUS_ACTIVE = "active"
 STATUS_BLOCKED = "blocked"
 
+# Загрузка медиа: у картинок и видео РАЗНЫЕ эндпоинты. Ролик, отправленный в статику,
+# отвергается как `format_not_supported` (боевая проверка 2026-07-27).
+STATIC_UPLOAD_PATH = "/content/static.json"
+VIDEO_UPLOAD_PATH = "/content/video.json"
+
 # Лимит заголовка одинаков у всех площадок; лимит текста зависит от шаблона
 # (у каналов VK/MAX это `text_90`, а не привычный `text_2000`).
 TITLE_MAX_LEN = text_limit(SLOT_TITLE)
@@ -362,16 +367,19 @@ class VkApiAdapter(PlatformAdapter):
         return targetings
 
     async def upload_creative(self, campaign_id: str, creative_ref: str) -> str:
-        """Загрузить статичный креатив (multipart) и вернуть content id.
+        """Загрузить креатив (multipart) и вернуть content id.
+
+        Эндпоинт зависит от типа файла: картинки принимает `/content/static.json`,
+        видео — `/content/video.json`. Ролик, отправленный в статику, отвергается как
+        `format_not_supported` (боевая проверка 2026-07-27).
 
         Имя файла обязано нести расширение: VK определяет формат по нему, а не по
-        содержимому. С именем без расширения тот же PNG отвергается как
-        `format_not_supported` (боевая проверка 2026-07-27).
+        содержимому. С именем без расширения тот же PNG отвергается так же.
         """
         path = Path(creative_ref)
         content = await asyncio.to_thread(path.read_bytes)
-        files = {"file": (path.name, content)}
-        response = await self._request("POST", "/content/static.json", files=files)
+        endpoint = VIDEO_UPLOAD_PATH if is_video(creative_ref) else STATIC_UPLOAD_PATH
+        response = await self._request("POST", endpoint, files={"file": (path.name, content)})
         response.raise_for_status()
         return str(response.json()["id"])
 

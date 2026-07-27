@@ -129,3 +129,35 @@ def test_video_request_is_ignored_where_the_surface_has_no_video(tmp_path: Path)
     Image.new("RGB", (1080, 1920), (1, 2, 3)).save(source)
 
     assert not pattern_for_creative(DZEN_CHANNEL, str(source), prefer_video=True).is_video
+
+
+def test_video_and_images_go_to_different_upload_endpoints(tmp_path: Path) -> None:
+    """Ролик в эндпоинт статики VK не принимает — проверяем выбор адреса загрузки."""
+    import asyncio as _asyncio
+
+    import httpx
+    import respx
+    from integrations.vk_api import (
+        BASE_URL,
+        STATIC_UPLOAD_PATH,
+        VIDEO_UPLOAD_PATH,
+        VkApiAdapter,
+    )
+    from pydantic import SecretStr
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"fake mp4")
+    picture = tmp_path / "pic.png"
+    picture.write_bytes(b"fake png")
+
+    with respx.mock:
+        static = respx.post(f"{BASE_URL}{STATIC_UPLOAD_PATH}").mock(
+            return_value=httpx.Response(200, json={"id": 1})
+        )
+        video = respx.post(f"{BASE_URL}{VIDEO_UPLOAD_PATH}").mock(
+            return_value=httpx.Response(200, json={"id": 2})
+        )
+        adapter = VkApiAdapter(SecretStr("t"))
+        assert _asyncio.run(adapter.upload_creative("cab", str(picture))) == "1"
+        assert _asyncio.run(adapter.upload_creative("cab", str(clip))) == "2"
+        assert static.called and video.called
