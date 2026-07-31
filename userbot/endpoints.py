@@ -232,8 +232,13 @@ class EndpointResolver:
         """Цепочка перебора для дата-центра `dc_id`, в порядке убывания шансов.
 
         Порядок: кэш → точка из строки сессии → пины из env → встроенные адреса ×
-        порты × транспорты → то же через прокси. `dc_id` во всех элементах один и тот
-        же — менять его у живой сессии нельзя (обнулит ключ авторизации).
+        порты × транспорты. `dc_id` во всех элементах один и тот же — менять его
+        у живой сессии нельзя (обнулит ключ авторизации).
+
+        Заданный прокси идёт ПЕРВЫМ, а прямые подключения остаются запасом. Так
+        адрес выхода не скачет между прокси и сервером: для Telegram постоянный IP
+        выглядит естественнее, чем прыжки туда-обратно каждые несколько минут.
+        Прямые точки не выбрасываем — прокси может кончиться или отвалиться.
         """
         chain: list[Endpoint] = []
 
@@ -256,23 +261,23 @@ class EndpointResolver:
             for transport in self._transports:
                 for port in self._ports:
                     add(Endpoint(dc_id=dc_id, ip=ip, port=port, transport=transport))
+        return self._with_proxy(chain)
 
-        if self._proxy_configured:
-            # Прокси последним: сначала пробуем напрямую. Транспорт заменяем на
-            # mtproxy-совместимый только там, где это задано конфигом прокси, —
-            # решает вызывающая сторона через parse_proxy().
-            direct = list(chain)
-            for endpoint in direct:
-                proxied = Endpoint(
-                    dc_id=endpoint.dc_id,
-                    ip=endpoint.ip,
-                    port=endpoint.port,
-                    transport=endpoint.transport,
-                    via_proxy=True,
-                )
-                if proxied not in chain:
-                    chain.append(proxied)
-        return chain
+    def _with_proxy(self, direct: list[Endpoint]) -> list[Endpoint]:
+        """Поставить прокси-варианты перед прямыми; без прокси — вернуть как есть."""
+        if not self._proxy_configured:
+            return direct
+        proxied = [
+            Endpoint(
+                dc_id=endpoint.dc_id,
+                ip=endpoint.ip,
+                port=endpoint.port,
+                transport=endpoint.transport,
+                via_proxy=True,
+            )
+            for endpoint in direct
+        ]
+        return proxied + direct
 
     def auth_candidates(self) -> list[Endpoint]:
         """Стартовые точки для НОВОГО логина (сессия пустая, ключа ещё нет).
@@ -293,4 +298,6 @@ class EndpointResolver:
                     endpoint = Endpoint(dc_id=dc_id, ip=ip, port=port, transport=transport)
                     if endpoint not in chain:
                         chain.append(endpoint)
-        return chain
+        # Новый логин тоже идёт через прокси, если он задан: иначе сессия родилась бы
+        # с одного адреса, а работала с другого.
+        return self._with_proxy(chain)

@@ -160,14 +160,27 @@ def test_candidates_cover_all_ports_and_transports() -> None:
     }
 
 
-def test_proxy_candidates_come_last() -> None:
-    """Сначала пробуем напрямую: прокси дороже и медленнее."""
+def test_proxy_candidates_come_first() -> None:
+    """Заданный прокси используем сразу: постоянный адрес выхода лучше прыгающего."""
     resolver = EndpointResolver(ports=(443,), proxy_configured=True)
     chain = resolver.candidates(1)
-    assert not chain[0].via_proxy
-    assert chain[-1].via_proxy
-    first_proxy = next(i for i, e in enumerate(chain) if e.via_proxy)
-    assert all(not e.via_proxy for e in chain[:first_proxy])
+    assert chain[0].via_proxy, "прокси задан осознанно — ходим через него"
+    assert not chain[-1].via_proxy, "прямые точки остаются запасом"
+    first_direct = next(i for i, e in enumerate(chain) if not e.via_proxy)
+    assert all(e.via_proxy for e in chain[:first_direct])
+
+
+def test_proxy_does_not_replace_direct_endpoints() -> None:
+    """Прокси может кончиться или отвалиться — прямой путь должен остаться."""
+    resolver = EndpointResolver(ports=(443, 5222), proxy_configured=True)
+    chain = resolver.candidates(1)
+    assert sum(1 for e in chain if e.via_proxy) == sum(1 for e in chain if not e.via_proxy)
+
+
+def test_auth_candidates_go_through_proxy_too() -> None:
+    """Иначе сессия родилась бы с одного адреса, а работала бы с другого."""
+    resolver = EndpointResolver(ports=(443,), auth_dc_order=(1,), proxy_configured=True)
+    assert resolver.auth_candidates()[0].via_proxy
 
 
 def test_no_proxy_candidates_when_proxy_not_configured() -> None:
