@@ -72,6 +72,10 @@ class EndpointCache:
                 "ip": endpoint.ip,
                 "port": endpoint.port,
                 "transport": endpoint.transport.value,
+                # Без этого флага кэш «забывал» бы, что путь шёл через прокси, и после
+                # рестарта первая попытка уходила бы напрямую — по адресу, который
+                # напрямую может быть закрыт.
+                "via_proxy": endpoint.via_proxy,
             }
             for key, endpoint in sorted(self._data.items())
         }
@@ -98,4 +102,10 @@ def _parse(value: Any) -> Endpoint | None:
         transport = Transport(str(value.get("transport", Transport.FULL.value)))
     except ValueError:
         transport = Transport.FULL
-    return Endpoint(dc_id=dc_id, ip=ip, port=port, transport=transport)
+    return Endpoint(
+        dc_id=dc_id,
+        ip=ip,
+        port=port,
+        transport=transport,
+        via_proxy=bool(value.get("via_proxy", False)),
+    )

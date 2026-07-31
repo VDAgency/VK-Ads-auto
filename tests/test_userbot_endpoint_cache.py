@@ -75,6 +75,17 @@ def test_remember_overwrites_previous_endpoint(tmp_path: Path) -> None:
     assert EndpointCache(str(tmp_path)).get(111) == _ENDPOINT
 
 
+def test_proxy_flag_survives_restart(tmp_path: Path) -> None:
+    """Иначе после рестарта первая попытка ушла бы напрямую — по закрытому адресу."""
+    proxied = Endpoint(
+        dc_id=2, ip="149.154.167.51", port=443, transport=Transport.OBFUSCATED, via_proxy=True
+    )
+    EndpointCache(str(tmp_path)).remember(111, proxied)
+    restored = EndpointCache(str(tmp_path)).get(111)
+    assert restored == proxied
+    assert restored is not None and restored.via_proxy is True
+
+
 def test_no_temp_file_left_behind(tmp_path: Path) -> None:
     cache = EndpointCache(str(tmp_path))
     cache.remember(111, _ENDPOINT)
