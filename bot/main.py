@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from config.settings import get_settings
 
 from bot import api_client, kotbot_watch, userbot_watch
@@ -31,24 +31,41 @@ from bot.handlers import help as help_handler
 from bot.menu import setup_bot_commands
 
 
+def routers() -> list[Router]:
+    """Роутеры в порядке разбора апдейта. Порядок значим — см. комментарии.
+
+    Отдельно от `build_dispatcher`, потому что роутеры — синглтоны модулей:
+    привязать их к диспетчеру можно один раз за процесс, а проверять порядок
+    в тестах нужно без побочных эффектов.
+    """
+    return [
+        start.router,
+        # Справка — раньше сценариев с FSM: их catch-all хендлеры съели бы `/help`,
+        # набранный посреди ввода токена или креатива, то есть ровно тогда, когда
+        # справка и нужна. Перехватить чужое help-роутер не может: один
+        # message-хендлер с узким `Command("help")` и два callback-хендлера `help:`.
+        help_handler.router,
+        send_brief.router,
+        pending.router,
+        brief_card.router,
+        creative.router,
+        stats.router,
+        stop_campaign.router,
+        admin.router,
+        link_userbot.router,
+        link_kotbot.router,
+        ad_accounts.router,
+        surfaces.router,
+        # Визитка для чужих — последней: ловит только не-операторские апдейты.
+        stranger.router,
+    ]
+
+
 def build_dispatcher() -> Dispatcher:
     """Собрать диспетчер со всеми роутерами."""
     dispatcher = Dispatcher()
-    dispatcher.include_router(start.router)
-    dispatcher.include_router(send_brief.router)
-    dispatcher.include_router(pending.router)
-    dispatcher.include_router(brief_card.router)
-    dispatcher.include_router(creative.router)
-    dispatcher.include_router(stats.router)
-    dispatcher.include_router(stop_campaign.router)
-    dispatcher.include_router(admin.router)
-    dispatcher.include_router(link_userbot.router)
-    dispatcher.include_router(link_kotbot.router)
-    dispatcher.include_router(ad_accounts.router)
-    dispatcher.include_router(surfaces.router)
-    dispatcher.include_router(help_handler.router)
-    # Визитка для чужих — последней: ловит только не-операторские апдейты.
-    dispatcher.include_router(stranger.router)
+    for router in routers():
+        dispatcher.include_router(router)
     return dispatcher
 
 
