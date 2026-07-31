@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -224,3 +226,73 @@ def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> I
         for code, label, enabled in goals
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# --- справочник /help ---------------------------------------------------------
+
+# Кнопка справочника несёт АДРЕС назначения (`help:s:{раздел}:{страница}`), а не
+# команду «следующая». Поэтому один хендлер отрисовывает любую комбинацию, а
+# позиция переживает рестарт бота: состояние целиком лежит в callback_data.
+HELP_MENU_CD: Final = "help:menu"
+HELP_PAGE_PREFIX: Final = "help:s:"
+
+# Подпись кнопки инлайн-клавиатуры ограничена 64 байтами — режем с запасом.
+_HELP_LABEL_MAX = 30
+
+
+def help_page_cd(key: str, page: int) -> str:
+    """callback_data страницы справочника: `help:s:{ключ раздела}:{номер с нуля}`."""
+    return f"{HELP_PAGE_PREFIX}{key}:{page}"
+
+
+def help_menu_keyboard(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Меню разделов справочника. `items` = [(ключ раздела, подпись с иконкой)].
+
+    По одной кнопке в строке: названия разделов длинные, в два столбца обрежутся.
+    Каждая кнопка открывает первую страницу своего раздела.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=help_page_cd(key, 0))]
+            for key, label in items
+        ]
+    )
+
+
+def help_page_keyboard(
+    section_key: str,
+    page: int,
+    total: int,
+    *,
+    next_section: tuple[str, str] | None = None,
+) -> InlineKeyboardMarkup:
+    """Навигация внутри раздела. `page` — с нуля, `total` — число страниц раздела.
+
+    На первой странице «Назад» ведёт в меню разделов: кнопка остаётся на том же
+    месте, поэтому сетка не прыгает при листании, а «назад» читается как «на
+    уровень выше». На последней странице «Далее» открывает следующий раздел —
+    справочник читают подряд, и тупик в конце раздела заставлял бы искать выход.
+    Идти дальше некуда (последний раздел) — кнопку прячем, врать не надо.
+    """
+    back_cd = help_page_cd(section_key, page - 1) if page > 0 else HELP_MENU_CD
+    nav = [InlineKeyboardButton(text="◀ Назад", callback_data=back_cd)]
+    if page + 1 < total:
+        nav.append(
+            InlineKeyboardButton(text="Далее ▶", callback_data=help_page_cd(section_key, page + 1))
+        )
+    elif next_section is not None:
+        next_key, next_label = next_section
+        # Подпись называет пункт назначения: переход в другой раздел не должен
+        # быть неожиданным.
+        nav.append(
+            InlineKeyboardButton(
+                text=f"▶ {next_label}"[:_HELP_LABEL_MAX],
+                callback_data=help_page_cd(next_key, 0),
+            )
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            nav,
+            [InlineKeyboardButton(text="≡ В меню", callback_data=HELP_MENU_CD)],
+        ]
+    )
