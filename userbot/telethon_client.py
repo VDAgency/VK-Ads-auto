@@ -14,13 +14,30 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 from typing import Protocol, cast
 
 from telethon import errors
-from telethon.sessions import StringSession
 
+from userbot.config import UserbotSettings
+from userbot.endpoint_cache import EndpointCache
+from userbot.endpoints import Endpoint, EndpointResolver, Transport
 from userbot.errors import map_send_error
+from userbot.pinned_session import PinnedStringSession, session_endpoint
+from userbot.proxy import ProxyConfig
 from userbot.session import SessionStore
+
+logger = logging.getLogger(__name__)
+
+
+class UnreachableError(Exception):
+    """Ни одна точка подключения не отозвалась — сеть/дата-центр недоступны.
+
+    Отдельно от ошибок авторизации: это состояние восстанавливается само и НЕ требует
+    перепривязки юзербота. Советовать оператору `/link_userbot` здесь вредно — новая
+    сессия приземлится на тот же недоступный дата-центр.
+    """
 
 
 class SessionProtocol(Protocol):
@@ -62,18 +79,71 @@ def _display_name(entity: object) -> str | None:
 
 
 class ClientFactory(Protocol):
-    """Фабрика клиента: принимает строку сессии (или None) → клиент Telethon."""
+    """Фабрика клиента: строка сессии + точка подключения → клиент Telethon."""
 
-    def __call__(self, session_str: str | None) -> TelethonProtocol: ...
+    def __call__(self, session_str: str | None, endpoint: Endpoint) -> TelethonProtocol: ...
 
 
-def default_client_factory(api_id: int, api_hash: str) -> ClientFactory:
-    """Фабрика по умолчанию — реальный TelegramClient на StringSession."""
+# Транспорт из реестра → класс соединения Telethon. Импортируются лениво: в тестах
+# фабрика подменяется и тянуть сеть незачем.
+_TRANSPORT_IMPORTS: dict[Transport, str] = {
+    Transport.FULL: "ConnectionTcpFull",
+    Transport.ABRIDGED: "ConnectionTcpAbridged",
+    Transport.INTERMEDIATE: "ConnectionTcpIntermediate",
+    Transport.OBFUSCATED: "ConnectionTcpObfuscated",
+    Transport.MTPROXY: "ConnectionTcpMTProxyRandomizedIntermediate",
+}
 
-    def factory(session_str: str | None) -> TelethonProtocol:
+
+def _connection_class(transport: Transport) -> object:
+    from telethon import connection  # локальный импорт — не нужен в тестах
+
+    return getattr(connection, _TRANSPORT_IMPORTS[transport])
+
+
+def default_client_factory(
+    settings: UserbotSettings, resolver: EndpointResolver, proxy: ProxyConfig | None = None
+) -> ClientFactory:
+    """Фабрика реального `TelegramClient` с полным набором параметров устойчивости.
+
+    Каждое значение выбрано осознанно (spec 2026-07-31 §4.4):
+    - `connection_retries=1` — ретраить один и тот же мёртвый адрес бессмысленно,
+      ретраем занимается перебор точек, и он пробует ДРУГИЕ адреса. Дефолтные пять
+      попыток по 10 секунд — это и есть те 54 секунды, на которых висел /health;
+    - `flood_sleep_threshold=0` — иначе Telethon молча спит до минуты внутри запроса,
+      и вызывающая сторона отваливается по таймауту вместо честного «флуд-лимит»;
+    - `receive_updates=False` — апдейты сервису не нужны (обработчиков нет), но
+      встроенный keep-alive ping при этом сохраняется;
+    - device/app/lang заданы явно и стабильно: дефолты Telethon выводятся из версии
+      ядра хоста и версии библиотеки, то есть меняются при каждом обновлении, и
+      аккаунт выглядит «переехавшим на другое устройство».
+    """
+
+    def factory(session_str: str | None, endpoint: Endpoint) -> TelethonProtocol:
         from telethon import TelegramClient  # локальный импорт — не нужен в тестах
 
-        client = TelegramClient(StringSession(session_str), api_id, api_hash)
+        session = PinnedStringSession(session_str, resolver)
+        client = TelegramClient(
+            session,
+            settings.api_id,
+            settings.api_hash.get_secret_value(),
+            connection=_connection_class(endpoint.transport),
+            proxy=proxy.value if (proxy is not None and endpoint.via_proxy) else None,
+            use_ipv6=False,
+            timeout=settings.connect_timeout,
+            connection_retries=1,
+            retry_delay=0,
+            request_retries=3,
+            auto_reconnect=True,
+            flood_sleep_threshold=0,
+            receive_updates=False,
+            catch_up=False,
+            device_model=settings.device_model,
+            system_version=settings.system_version,
+            app_version=settings.app_version,
+            lang_code=settings.lang_code,
+            system_lang_code=settings.lang_code,
+        )
         return cast(TelethonProtocol, client)
 
     return factory
@@ -95,29 +165,82 @@ class UserbotClient:
     сохраняется под sender_id вызвавшего оператора.
     """
 
-    def __init__(self, factory: ClientFactory, store: SessionStore) -> None:
+    def __init__(
+        self,
+        factory: ClientFactory,
+        store: SessionStore,
+        resolver: EndpointResolver | None = None,
+        cache: EndpointCache | None = None,
+    ) -> None:
         self._factory = factory
         self._store = store
+        self._resolver = resolver or EndpointResolver()
+        self._cache = cache
         self._clients: dict[int, TelethonProtocol] = {}
         # Незавершённые auth-флоу держат клиент между /auth/start и /auth/code;
         # словарь по sender_id — два оператора могут логиниться одновременно.
         self._pending: dict[int, TelethonProtocol] = {}
 
+    async def _try_connect(
+        self, session_str: str | None, endpoint: Endpoint
+    ) -> TelethonProtocol | None:
+        """Одна попытка подключения. `None` — точка не отозвалась.
+
+        Клиент, у которого упал `connect()`, переиспользовать нельзя — внутри остаётся
+        сломанный отправитель, поэтому на каждую точку собирается свежий.
+        """
+        client = self._factory(session_str, endpoint)
+        try:
+            await client.connect()
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            logger.info("точка %s не отозвалась: %s", endpoint.label(), type(exc).__name__)
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            return None
+        return client
+
+    async def _connect_with_fallback(
+        self, session_str: str | None, candidates: list[Endpoint], *, sender_id: int | None = None
+    ) -> tuple[TelethonProtocol, Endpoint]:
+        """Перебрать точки до первой живой. Все мертвы → `UnreachableError`."""
+        for endpoint in candidates:
+            client = await self._try_connect(session_str, endpoint)
+            if client is None:
+                continue
+            logger.info("подключились через %s", endpoint.label())
+            if self._cache is not None and sender_id is not None:
+                self._cache.remember(sender_id, endpoint)
+            return client, endpoint
+        raise UnreachableError(f"ни одна из {len(candidates)} точек подключения не отозвалась")
+
     async def _get_client(self, sender_id: int) -> TelethonProtocol | None:
-        """Подключённый авторизованный клиент оператора из его сессии; иначе None."""
+        """Подключённый авторизованный клиент оператора из его сессии; иначе None.
+
+        `UnreachableError` пробрасывается: «сеть недоступна» и «сессия мертва» — разные
+        состояния, и склеивать их в `None` значит давать оператору неверный совет.
+        """
         cached = self._clients.get(sender_id)
         if cached is not None:
             return cached
         session_str = self._store.load(sender_id)
         if session_str is None:
             return None
-        client = self._factory(session_str)
-        await client.connect()
+        candidates = self._candidates_for(session_str, sender_id)
+        client, _ = await self._connect_with_fallback(session_str, candidates, sender_id=sender_id)
         if not await client.is_user_authorized():
-            await client.disconnect()
+            with contextlib.suppress(Exception):
+                await client.disconnect()
             return None
         self._clients[sender_id] = client
         return client
+
+    def _candidates_for(self, session_str: str, sender_id: int) -> list[Endpoint]:
+        """Цепочка точек для существующей сессии — строго в пределах её дата-центра."""
+        known = session_endpoint(session_str, self._resolver)
+        if known is None:
+            # Строка сессии без адреса — брать нечего, идём как за новым логином.
+            return self._resolver.auth_candidates()
+        return self._resolver.candidates(known.dc_id, session_endpoint=known, sender_id=sender_id)
 
     async def health(self) -> dict[str, object]:
         """`{sessions: [{sender_id, authorized, phone?}, ...]}` по всем операторам."""
@@ -126,20 +249,43 @@ class UserbotClient:
         return {"sessions": sessions}
 
     async def health_for(self, sender_id: int) -> dict[str, object]:
-        """`{sender_id, authorized, phone?}` — состояние сессии одного оператора."""
-        client = await self._get_client(sender_id)
+        """`{sender_id, authorized, phone?}` — состояние сессии одного оператора.
+
+        Недоступность Telegram отдаётся отдельным полем `error`, а не молчаливым
+        `authorized: false`: это разные ситуации и лечатся они по-разному.
+        """
+        try:
+            client = await self._get_client(sender_id)
+        except UnreachableError:
+            return {"sender_id": sender_id, "authorized": False, "error": "unreachable"}
         if client is None:
             return {"sender_id": sender_id, "authorized": False}
-        me = await client.get_me()
+        try:
+            me = await client.get_me()
+        except (ConnectionError, OSError, TimeoutError):
+            return {"sender_id": sender_id, "authorized": False, "error": "unreachable"}
         phone = getattr(me, "phone", None)
         return {"sender_id": sender_id, "authorized": True, "phone": phone}
 
     async def auth_start(self, sender_id: int, phone: str) -> str:
-        """Шаг 1: запросить код на телефон, вернуть `phone_code_hash`."""
-        client = self._factory(None)
-        await client.connect()
+        """Шаг 1: запросить код на телефон, вернуть `phone_code_hash`.
+
+        Сессия пустая, ключа авторизации ещё нет — поэтому здесь можно перебирать и
+        сами дата-центры, а не только адреса. Домашний дата-центр номера Telegram
+        назначит сам: ответит `PhoneMigrateError`, а Telethon переедет, взяв адрес
+        через `PinnedStringSession.set_dc` — то есть уже исправленный.
+        """
+        client, endpoint = await self._connect_with_fallback(None, self._resolver.auth_candidates())
         self._pending[sender_id] = client
-        sent = await client.send_code_request(phone)
+        try:
+            sent = await client.send_code_request(phone)
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            # Дата-центр отвалился уже после установки соединения (например, на
+            # миграции). Клиент не оставляем висеть.
+            self._pending.pop(sender_id, None)
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            raise UnreachableError(f"обрыв на {endpoint.label()}: {type(exc).__name__}") from exc
         return str(sent.phone_code_hash)  # type: ignore[attr-defined]
 
     async def auth_code(self, sender_id: int, phone: str, code: str, phone_code_hash: str) -> bool:
@@ -170,7 +316,12 @@ class UserbotClient:
         если не заполнено). Нет сессии вовсе → `sender_not_authorized` (оператор ещё
         не проходил /link_userbot); сессия есть, но умерла → `session_expired`.
         """
-        client = await self._get_client(sender_id)
+        try:
+            client = await self._get_client(sender_id)
+        except UnreachableError:
+            # Сессия может быть жива — до Telegram не дошли. Не выдаём это за
+            # «разлогинен»: иначе оператор зря пойдёт перепривязывать юзербота.
+            return ("userbot_unreachable", None)
         if client is None:
             if self._store.exists(sender_id):
                 return ("session_expired", None)

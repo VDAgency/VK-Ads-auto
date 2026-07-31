@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from cryptography.fernet import Fernet
+from userbot.endpoints import Endpoint, EndpointResolver
 from userbot.session import SessionStore
 from userbot.telethon_client import ClientFactory, TelethonProtocol, UserbotClient
 
@@ -31,6 +32,7 @@ class FakeTelethon:
         phone: str | None = "+79990001122",
         first_name: str | None = None,
         last_name: str | None = None,
+        connect_errors: list[Exception | None] | None = None,
     ) -> None:
         self.session = _FakeSession()
         self._authorized = authorized
@@ -39,11 +41,20 @@ class FakeTelethon:
         self._phone = phone
         self._first_name = first_name
         self._last_name = last_name
+        # Очередь исходов connect(): исключение = точка не отозвалась, None = успех.
+        # Пустая очередь означает «подключаемся всегда» (поведение по умолчанию).
+        self._connect_errors = list(connect_errors or [])
         self.connected = False
+        self.connect_calls = 0
         self.sent_messages: list[tuple[str, str]] = []
         self.code_requests: list[str] = []
 
     async def connect(self) -> None:
+        self.connect_calls += 1
+        if self._connect_errors:
+            error = self._connect_errors.pop(0)
+            if error is not None:
+                raise error
         self.connected = True
 
     async def disconnect(self) -> None:
@@ -112,6 +123,9 @@ def make_client(
     saved_for: tuple[int, ...] = (),
     fakes_by_sender: dict[int, FakeTelethon] | None = None,
     pending_queue: list[FakeTelethon] | None = None,
+    resolver: EndpointResolver | None = None,
+    record: list[Endpoint] | None = None,
+    fakes_by_endpoint: dict[Endpoint, FakeTelethon] | None = None,
 ) -> tuple[UserbotClient, FakeTelethon]:
     """Собрать `UserbotClient` с фейковым Telethon и реальным SessionStore в tmp.
 
@@ -119,9 +133,12 @@ def make_client(
       «уже авторизован» для этих операторов).
     - `fakes_by_sender` — отдельный фейк на каждого sender_id (тесты изоляции);
       сессия пишется как `session-{sender_id}`, фабрика находит фейк по ней.
-    - `pending_queue` — фейки для auth-флоу (factory(None)) по порядку вызовов;
+    - `pending_queue` — фейки для auth-флоу (пустая сессия) по порядку вызовов;
       нужны для конкурентных логинов двух операторов.
-    - По умолчанию фабрика всегда отдаёт единственный общий `fake`.
+    - `record` — сюда фабрика пишет КАЖДУЮ попытку подключения: так тест видит
+      точный порядок перебора точек, не открывая ни одного сокета.
+    - `fakes_by_endpoint` — свой фейк на конкретную точку (тесты перебора: одни
+      точки «мертвы», другая отвечает).
     """
     fake = fake or FakeTelethon()
     key = Fernet.generate_key().decode("ascii")
@@ -129,7 +146,11 @@ def make_client(
     for sender_id in saved_for:
         store.save(sender_id, f"session-{sender_id}")
 
-    def factory(session_str: str | None) -> TelethonProtocol:
+    def factory(session_str: str | None, endpoint: Endpoint) -> TelethonProtocol:
+        if record is not None:
+            record.append(endpoint)
+        if fakes_by_endpoint and endpoint in fakes_by_endpoint:
+            return fakes_by_endpoint[endpoint]
         if session_str is None and pending_queue:
             return pending_queue.pop(0)
         if fakes_by_sender and session_str and session_str.startswith("session-"):
@@ -137,4 +158,5 @@ def make_client(
         return fake
 
     typed_factory: ClientFactory = factory
-    return UserbotClient(factory=typed_factory, store=store), fake
+    client = UserbotClient(factory=typed_factory, store=store, resolver=resolver)
+    return client, fake

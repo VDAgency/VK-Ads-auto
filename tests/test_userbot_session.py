@@ -25,6 +25,18 @@ def test_load_missing_sender_returns_none(tmp_path: Path) -> None:
     assert store.exists(111) is False
 
 
+def test_empty_session_string_is_rejected(tmp_path: Path) -> None:
+    """Регресс: `StringSession.save()` отдаёт "" в момент переезда между
+    дата-центрами, и запись такой строки затирала бы рабочую сессию оператора."""
+    store = SessionStore(_key(), str(tmp_path))
+    store.save(111, "1AbCdEf-рабочая-сессия")
+
+    with pytest.raises(ValueError, match="пустая строка"):
+        store.save(111, "")
+
+    assert store.load(111) == "1AbCdEf-рабочая-сессия", "старая сессия должна уцелеть"
+
+
 def test_two_senders_are_isolated(tmp_path: Path) -> None:
     store = SessionStore(_key(), str(tmp_path))
     store.save(111, "session-of-first")
