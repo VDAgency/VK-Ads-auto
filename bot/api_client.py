@@ -15,6 +15,11 @@ import httpx
 from config.settings import get_settings
 
 _TIMEOUT = httpx.Timeout(10.0)
+# Операции юзербота, которые реально ходят в Telegram: перебор точек на сервере
+# ограничен своим бюджетом, и клиентский таймаут обязан быть больше — иначе оператор
+# увидит «сервис недоступен» вместо осмысленной ошибки.
+_USERBOT_AUTH_TIMEOUT = httpx.Timeout(120.0)
+_USERBOT_PROBE_TIMEOUT = httpx.Timeout(120.0)
 
 # Загрузка креатива тянет за собой создание кампании на площадке (кабинет,
 # ad_plan/ad_group/banner, модерация) — ждём заметно дольше обычного (spec §5).
@@ -489,15 +494,23 @@ async def create_invite(variant: str, contact: str, operator_telegram_id: int) -
 
 @dataclass(frozen=True, slots=True)
 class UserbotHealth:
-    """Состояние авторизации сессии оператора (зеркало `/health?sender_id=`).
+    """Состояние сессии оператора (зеркало ответа userbot-сервиса).
 
-    `error="unreachable"` означает «до Telegram не достучались»: сессия может быть
-    жива, и советовать перепривязку в этом случае вредно.
+    `state` различает «до Telegram не достучались» (`unreachable` — восстановится
+    само) и «ключ мёртв» (`expired` — нужна перепривязка). Свести их в один флаг
+    значит давать оператору неверный совет.
     """
 
     authorized: bool
     phone: str | None = None
     error: str | None = None
+    state: str = "unknown"
+    endpoint: str | None = None
+
+    @property
+    def unreachable(self) -> bool:
+        """Сессию не видно из-за сети, а не из-за разлогина."""
+        return self.state == "unreachable" or self.error == "unreachable"
 
 
 def _userbot_base_url() -> str:
@@ -510,14 +523,23 @@ def userbot_configured() -> bool:
 
 
 async def _userbot_request(
-    method: str, path: str, json: dict[str, Any] | None = None
+    method: str,
+    path: str,
+    json: dict[str, Any] | None = None,
+    limit: httpx.Timeout | None = None,
 ) -> dict[str, Any]:
-    """Запрос к userbot-сервису; сеть/5xx → `UserbotUnavailable`, 400 → `UserbotAuthError`."""
+    """Запрос к userbot-сервису; сеть/5xx → `UserbotUnavailable`, 400 → `UserbotAuthError`.
+
+    Таймаут по умолчанию рассчитан на чтение состояния из памяти. Операции, которые
+    реально ходят в сеть (авторизация, форсированная проверка), передают свой —
+    он должен быть больше серверного бюджета перебора, иначе клиент отвалится
+    раньше, чем сервис успеет ответить осмысленной ошибкой.
+    """
     base = _userbot_base_url()
     if not base:
         raise UserbotUnavailable("userbot_base_url is empty")
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=limit or _TIMEOUT) as client:
             response = await client.request(method, f"{base}{path}", json=json)
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise UserbotUnavailable(str(exc)) from exc
@@ -534,32 +556,52 @@ async def _userbot_request(
 
 async def userbot_status(sender_id: int) -> UserbotHealth:
     """Опрос `/health?sender_id=`: авторизована ли сессия оператора, номер."""
-    payload = await _userbot_request("GET", f"/health?sender_id={sender_id}")
+    payload = await _userbot_request("GET", f"/sessions/{sender_id}")
+    return _to_health(payload)
+
+
+def _to_health(payload: dict[str, Any]) -> UserbotHealth:
     return UserbotHealth(
         authorized=bool(payload.get("authorized", False)),
         phone=payload.get("phone"),
         error=payload.get("error"),
+        state=str(payload.get("state", "unknown")),
+        endpoint=payload.get("endpoint"),
     )
 
 
 async def userbot_health_all() -> dict[int, UserbotHealth]:
-    """Состояние всех сессий по операторам (для фонового поллера и диагностики)."""
-    payload = await _userbot_request("GET", "/health")
+    """Состояние всех сессий по операторам (для фонового поллера и диагностики).
+
+    Читается из памяти сервиса — запрос дешёвый, сеть при нём не трогается.
+    """
+    payload = await _userbot_request("GET", "/sessions")
     sessions = payload.get("sessions", [])
-    return {
-        int(item["sender_id"]): UserbotHealth(
-            authorized=bool(item.get("authorized", False)),
-            phone=item.get("phone"),
-            error=item.get("error"),
-        )
-        for item in sessions
-    }
+    return {int(item["sender_id"]): _to_health(item) for item in sessions}
+
+
+async def userbot_probe(sender_id: int) -> UserbotHealth:
+    """Форсированная проверка сессии по сети («проверить сейчас»)."""
+    payload = await _userbot_request(
+        "POST", f"/sessions/{sender_id}/probe", limit=_USERBOT_PROBE_TIMEOUT
+    )
+    return _to_health(payload)
+
+
+async def userbot_endpoints() -> list[dict[str, Any]]:
+    """Матрица достижимости точек подключения изнутри контейнера."""
+    payload = await _userbot_request("GET", "/diagnostics/endpoints", limit=_USERBOT_PROBE_TIMEOUT)
+    items = payload.get("endpoints", [])
+    return [dict(item) for item in items]
 
 
 async def userbot_start_auth(sender_id: int, phone: str) -> str:
     """`/auth/start` — вернуть `phone_code_hash` для последующего ввода кода."""
     payload = await _userbot_request(
-        "POST", "/auth/start", {"sender_id": sender_id, "phone": phone}
+        "POST",
+        "/auth/start",
+        {"sender_id": sender_id, "phone": phone},
+        limit=_USERBOT_AUTH_TIMEOUT,
     )
     return str(payload["phone_code_hash"])
 
@@ -575,13 +617,19 @@ async def userbot_submit_code(sender_id: int, phone: str, code: str, phone_code_
             "code": code,
             "phone_code_hash": phone_code_hash,
         },
+        limit=_USERBOT_AUTH_TIMEOUT,
     )
     return bool(payload.get("needs_password", False))
 
 
 async def userbot_submit_password(sender_id: int, password: str) -> None:
     """`/auth/password` — завершить авторизацию при включённом 2FA."""
-    await _userbot_request("POST", "/auth/password", {"sender_id": sender_id, "password": password})
+    await _userbot_request(
+        "POST",
+        "/auth/password",
+        {"sender_id": sender_id, "password": password},
+        limit=_USERBOT_AUTH_TIMEOUT,
+    )
 
 
 # --- Kotbot (браузерная автоматизация kotbot.ru, spec 2026-07-17 §5) ---------

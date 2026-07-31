@@ -14,9 +14,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 from telethon import errors
@@ -24,10 +27,11 @@ from telethon import errors
 from userbot.config import UserbotSettings
 from userbot.endpoint_cache import EndpointCache
 from userbot.endpoints import Endpoint, EndpointResolver, Transport
-from userbot.errors import map_send_error
+from userbot.errors import classify, state_for
 from userbot.pinned_session import PinnedStringSession, session_endpoint
 from userbot.proxy import ProxyConfig
 from userbot.session import SessionStore
+from userbot.state import SessionInfo, SessionState, StateRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,7 @@ class TelethonProtocol(Protocol):
 
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
+    def is_connected(self) -> bool: ...
     async def is_user_authorized(self) -> bool: ...
     async def send_code_request(self, phone: str) -> object: ...
     async def sign_in(
@@ -158,6 +163,14 @@ class AuthError(Exception):
         super().__init__(message or code)
 
 
+@dataclass(slots=True)
+class _PendingAuth:
+    """Незавершённая авторизация: клиент между шагами и срок его жизни."""
+
+    client: TelethonProtocol
+    deadline: float
+
+
 class UserbotClient:
     """Реестр Telethon-клиентов по операторам, операции сервиса (spec §6).
 
@@ -174,6 +187,9 @@ class UserbotClient:
         cache: EndpointCache | None = None,
         rounds: int = 3,
         budget: float = 45.0,
+        states: StateRegistry | None = None,
+        pending_ttl: float = 300.0,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._factory = factory
         self._store = store
@@ -181,10 +197,26 @@ class UserbotClient:
         self._cache = cache
         self._rounds = max(1, rounds)
         self._budget = budget
+        self.states = states if states is not None else StateRegistry()
+        self._pending_ttl = pending_ttl
+        self._clock = clock
         self._clients: dict[int, TelethonProtocol] = {}
+        # Точка, через которую реально подключились: показываем её в диагностике.
+        self._endpoints: dict[int, Endpoint] = {}
+        # По локу на оператора: два параллельных запроса иначе поднимут двух клиентов
+        # на одну сессию, а это ровно тот случай, когда Telegram отзывает ключ как
+        # использованный с двух адресов сразу.
+        self._locks: dict[int, asyncio.Lock] = {}
         # Незавершённые auth-флоу держат клиент между /auth/start и /auth/code;
         # словарь по sender_id — два оператора могут логиниться одновременно.
-        self._pending: dict[int, TelethonProtocol] = {}
+        self._pending: dict[int, _PendingAuth] = {}
+
+    def _lock_for(self, sender_id: int) -> asyncio.Lock:
+        lock = self._locks.get(sender_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[sender_id] = lock
+        return lock
 
     async def _try_connect(
         self, session_str: str | None, endpoint: Endpoint
@@ -241,20 +273,82 @@ class UserbotClient:
         `UnreachableError` пробрасывается: «сеть недоступна» и «сессия мертва» — разные
         состояния, и склеивать их в `None` значит давать оператору неверный совет.
         """
-        cached = self._clients.get(sender_id)
-        if cached is not None:
-            return cached
-        session_str = self._store.load(sender_id)
-        if session_str is None:
-            return None
-        candidates = self._candidates_for(session_str, sender_id)
-        client, _ = await self._connect_with_fallback(session_str, candidates, sender_id=sender_id)
-        if not await client.is_user_authorized():
+        async with self._lock_for(sender_id):
+            cached = self._clients.get(sender_id)
+            if cached is not None:
+                if cached.is_connected():
+                    return cached
+                # Соединение отвалилось — держать такой клиент в кэше значит бить
+                # об него все следующие запросы.
+                logger.info("клиент оператора %s отключён — пересобираем", sender_id)
+                await self._drop_client(sender_id)
+            session_str = self._store.load(sender_id)
+            if session_str is None:
+                self.states.get(sender_id).state = SessionState.ABSENT
+                return None
+            candidates = self._candidates_for(session_str, sender_id)
+            client, endpoint = await self._connect_with_fallback(
+                session_str, candidates, sender_id=sender_id
+            )
+            if not await client.is_user_authorized():
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                self.states.mark_failed(
+                    sender_id,
+                    state=SessionState.EXPIRED,
+                    error="session_expired",
+                    now=self._clock(),
+                )
+                return None
+            self._clients[sender_id] = client
+            self._endpoints[sender_id] = endpoint
+            return client
+
+    async def _drop_client(self, sender_id: int) -> None:
+        """Убрать клиента из кэша и закрыть соединение, не роняя вызывающего."""
+        client = self._clients.pop(sender_id, None)
+        self._endpoints.pop(sender_id, None)
+        if client is not None:
             with contextlib.suppress(Exception):
                 await client.disconnect()
-            return None
-        self._clients[sender_id] = client
-        return client
+
+    async def _note_failure(self, sender_id: int, exc: BaseException) -> str:
+        """Записать сбой в состояние сессии и вернуть код ошибки §9."""
+        error_class, code = classify(exc)
+        state = state_for(error_class)
+        if state is not None:
+            self.states.mark_failed(sender_id, state=state, error=code, now=self._clock())
+            # Мёртвый клиент в кэше — источник бесконечных одинаковых ошибок.
+            await self._drop_client(sender_id)
+        return code
+
+    async def close(self) -> None:
+        """Закрыть все соединения (вызывается при остановке сервиса)."""
+        for sender_id in list(self._clients):
+            await self._drop_client(sender_id)
+        for pending in list(self._pending.values()):
+            with contextlib.suppress(Exception):
+                await pending.client.disconnect()
+        self._pending.clear()
+
+    def diagnostic_candidates(self) -> list[Endpoint]:
+        """Точки для экрана диагностики: цепочки всех известных сессий + стартовые.
+
+        Показываем ровно то, что реально перебирает сервис, иначе диагностика
+        отвечала бы на другой вопрос, чем задаёт оператор.
+        """
+        chain: list[Endpoint] = []
+        for sender_id in self.known_senders():
+            session_str = self._store.load(sender_id)
+            if session_str is None:
+                continue
+            for endpoint in self._candidates_for(session_str, sender_id):
+                if endpoint not in chain:
+                    chain.append(endpoint)
+        for endpoint in self._resolver.auth_candidates():
+            if endpoint not in chain:
+                chain.append(endpoint)
+        return chain
 
     def _candidates_for(self, session_str: str, sender_id: int) -> list[Endpoint]:
         """Цепочка точек для существующей сессии — строго в пределах её дата-центра."""
@@ -264,30 +358,57 @@ class UserbotClient:
             return self._resolver.auth_candidates()
         return self._resolver.candidates(known.dc_id, session_endpoint=known, sender_id=sender_id)
 
-    async def health(self) -> dict[str, object]:
-        """`{sessions: [{sender_id, authorized, phone?}, ...]}` по всем операторам."""
-        sender_ids = sorted(set(self._store.list_senders()) | set(self._clients))
-        sessions = [await self.health_for(sender_id) for sender_id in sender_ids]
-        return {"sessions": sessions}
+    def known_senders(self) -> list[int]:
+        """Операторы, о которых мы вообще знаем: сохранённые сессии + активные клиенты."""
+        return sorted(set(self._store.list_senders()) | set(self._clients))
 
-    async def health_for(self, sender_id: int) -> dict[str, object]:
-        """`{sender_id, authorized, phone?}` — состояние сессии одного оператора.
+    def health(self) -> dict[str, object]:
+        """Состояние всех сессий ИЗ ПАМЯТИ — без единого сетевого вызова.
 
-        Недоступность Telegram отдаётся отдельным полем `error`, а не молчаливым
-        `authorized: false`: это разные ситуации и лечатся они по-разному.
+        Раньше этот метод подключался к Telegram по каждой сессии, из-за чего один
+        опрос занимал десятки секунд: healthcheck контейнера не укладывался в таймаут,
+        а поллер бота считал недоступным весь сервис. Состояние теперь обновляет
+        фоновая проверка (`userbot/keepalive.py`), а читатели только смотрят.
         """
+        for sender_id in self.known_senders():
+            self.states.get(sender_id)
+        return {"sessions": [info.as_dict() for info in self.states.snapshot()]}
+
+    def health_for(self, sender_id: int) -> dict[str, object]:
+        """Состояние одной сессии из памяти."""
+        if sender_id not in self.known_senders():
+            return SessionInfo(sender_id=sender_id, state=SessionState.ABSENT).as_dict()
+        return self.states.get(sender_id).as_dict()
+
+    async def probe(self, sender_id: int) -> dict[str, object]:
+        """Форсированная проверка сессии по сети: обновляет состояние и возвращает его.
+
+        Это единственный путь, который ходит в сеть по требованию, — им пользуются
+        фоновая проверка и кнопка «проверить сейчас».
+        """
+        if not self._store.exists(sender_id) and sender_id not in self._clients:
+            self.states.get(sender_id).state = SessionState.ABSENT
+            return self.health_for(sender_id)
         try:
             client = await self._get_client(sender_id)
-        except UnreachableError:
-            return {"sender_id": sender_id, "authorized": False, "error": "unreachable"}
+        except UnreachableError as exc:
+            await self._note_failure(sender_id, exc)
+            return self.health_for(sender_id)
         if client is None:
-            return {"sender_id": sender_id, "authorized": False}
+            return self.health_for(sender_id)
         try:
             me = await client.get_me()
-        except (ConnectionError, OSError, TimeoutError):
-            return {"sender_id": sender_id, "authorized": False, "error": "unreachable"}
-        phone = getattr(me, "phone", None)
-        return {"sender_id": sender_id, "authorized": True, "phone": phone}
+        except Exception as exc:  # noqa: BLE001 — классификация решает, что это было
+            await self._note_failure(sender_id, exc)
+            return self.health_for(sender_id)
+        endpoint = self._endpoints.get(sender_id)
+        self.states.mark_ok(
+            sender_id,
+            phone=getattr(me, "phone", None),
+            endpoint=endpoint.label() if endpoint is not None else None,
+            now=self._clock(),
+        )
+        return self.health_for(sender_id)
 
     async def auth_start(self, sender_id: int, phone: str) -> str:
         """Шаг 1: запросить код на телефон, вернуть `phone_code_hash`.
@@ -297,18 +418,38 @@ class UserbotClient:
         назначит сам: ответит `PhoneMigrateError`, а Telethon переедет, взяв адрес
         через `PinnedStringSession.set_dc` — то есть уже исправленный.
         """
+        await self._prune_pending()
         client, endpoint = await self._connect_with_fallback(None, self._resolver.auth_candidates())
-        self._pending[sender_id] = client
+        self._pending[sender_id] = _PendingAuth(
+            client=client, deadline=self._clock() + self._pending_ttl
+        )
         try:
             sent = await client.send_code_request(phone)
         except (ConnectionError, OSError, TimeoutError) as exc:
             # Дата-центр отвалился уже после установки соединения (например, на
             # миграции). Клиент не оставляем висеть.
-            self._pending.pop(sender_id, None)
-            with contextlib.suppress(Exception):
-                await client.disconnect()
+            await self._drop_pending(sender_id)
             raise UnreachableError(f"обрыв на {endpoint.label()}: {type(exc).__name__}") from exc
         return str(sent.phone_code_hash)  # type: ignore[attr-defined]
+
+    async def _prune_pending(self) -> None:
+        """Выбросить протухшие незавершённые авторизации.
+
+        Оператор мог начать привязку и не закончить: без TTL такой клиент держал бы
+        соединение до перезапуска сервиса.
+        """
+        now = self._clock()
+        stale = [key for key, pending in self._pending.items() if pending.deadline <= now]
+        for sender_id in stale:
+            logger.info("незавершённая авторизация оператора %s протухла", sender_id)
+            await self._drop_pending(sender_id)
+
+    async def _drop_pending(self, sender_id: int) -> None:
+        """Убрать незавершённую авторизацию и закрыть её клиент."""
+        pending = self._pending.pop(sender_id, None)
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.client.disconnect()
 
     async def auth_code(self, sender_id: int, phone: str, code: str, phone_code_hash: str) -> bool:
         """Шаг 2: ввод кода. Возвращает `needs_password` (True при включённой 2FA)."""
@@ -316,8 +457,10 @@ class UserbotClient:
         try:
             await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
         except errors.SessionPasswordNeededError:
+            # Флоу продолжается: клиент нужен для шага с паролем, не закрываем.
             return True
         except (errors.PhoneCodeInvalidError, errors.PhoneCodeExpiredError) as exc:
+            await self._drop_pending(sender_id)
             raise AuthError("phone_code_invalid") from exc
         self._finalize(sender_id, client)
         return False
@@ -328,6 +471,7 @@ class UserbotClient:
         try:
             await client.sign_in(password=password)
         except errors.PasswordHashInvalidError as exc:
+            await self._drop_pending(sender_id)
             raise AuthError("password_invalid") from exc
         self._finalize(sender_id, client)
 
@@ -340,10 +484,10 @@ class UserbotClient:
         """
         try:
             client = await self._get_client(sender_id)
-        except UnreachableError:
+        except UnreachableError as exc:
             # Сессия может быть жива — до Telegram не дошли. Не выдаём это за
             # «разлогинен»: иначе оператор зря пойдёт перепривязывать юзербота.
-            return ("userbot_unreachable", None)
+            return (await self._note_failure(sender_id, exc), None)
         if client is None:
             if self._store.exists(sender_id):
                 return ("session_expired", None)
@@ -354,14 +498,16 @@ class UserbotClient:
             entity = await client.get_entity(username)
             await client.send_message(username, text)
         except Exception as exc:  # noqa: BLE001 — любой сбой → код §9, наружу не бросаем
-            return (map_send_error(exc), None)
+            # Состояние сессии обновляем здесь же: иначе мёртвый клиент остался бы
+            # в кэше и следующие отправки бились бы об него.
+            return (await self._note_failure(sender_id, exc), None)
         return (None, _display_name(entity))
 
     def _require_pending(self, sender_id: int) -> TelethonProtocol:
-        client = self._pending.get(sender_id)
-        if client is None:
+        pending = self._pending.get(sender_id)
+        if pending is None:
             raise AuthError("no_pending_auth", "Сначала вызовите /auth/start")
-        return client
+        return pending.client
 
     def _finalize(self, sender_id: int, client: TelethonProtocol) -> None:
         """Сохранить сессию оператора и сделать его клиент активным."""

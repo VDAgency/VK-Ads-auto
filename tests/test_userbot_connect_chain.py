@@ -29,7 +29,7 @@ def test_first_live_endpoint_wins(tmp_path: object) -> None:
     client, _ = make_client(
         fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver(), record=record
     )
-    assert asyncio.run(client.health_for(SENDER))["authorized"] is True
+    assert asyncio.run(client.probe(SENDER))["authorized"] is True
     assert len(record) == 1, "живая первая точка — перебирать дальше нечего"
 
 
@@ -43,7 +43,7 @@ def test_chain_moves_to_next_endpoint_after_failure(tmp_path: object) -> None:
     client, _ = make_client(
         fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver(), record=record
     )
-    assert asyncio.run(client.health_for(SENDER))["authorized"] is True
+    assert asyncio.run(client.probe(SENDER))["authorized"] is True
     assert len(record) == 3
     assert len({(e.ip, e.port) for e in record}) == 3, "каждая попытка — новая точка"
 
@@ -52,9 +52,9 @@ def test_all_endpoints_dead_reports_unreachable(tmp_path: object) -> None:
     """Недоступность сети — отдельная ошибка, а не «сессия мертва»."""
     fake = FakeTelethon(authorized=True, connect_errors=[ConnectionError("dead")] * 100)
     client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver())
-    result = asyncio.run(client.health_for(SENDER))
+    result = asyncio.run(client.probe(SENDER))
     assert result["authorized"] is False
-    assert result["error"] == "unreachable"
+    assert result["state"] == "unreachable"
 
 
 def test_send_reports_unreachable_not_expired(tmp_path: object) -> None:
@@ -69,7 +69,7 @@ def test_failed_attempt_is_disconnected(tmp_path: object) -> None:
     """Клиент с упавшим connect() нельзя переиспользовать — его закрывают."""
     fake = FakeTelethon(authorized=True, connect_errors=[ConnectionError("dead"), None])
     client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver())
-    asyncio.run(client.health_for(SENDER))
+    asyncio.run(client.probe(SENDER))
     assert fake.connect_calls == 2
 
 
@@ -121,7 +121,7 @@ def test_chain_is_retried_in_several_rounds(tmp_path: object) -> None:
     client, _ = make_client(
         fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=resolver, record=record
     )
-    assert asyncio.run(client.health_for(SENDER))["authorized"] is True
+    assert asyncio.run(client.probe(SENDER))["authorized"] is True
     assert len(record) == chain_length + 1, "второй круг должен начаться сначала цепочки"
 
 
@@ -140,7 +140,7 @@ def test_single_round_can_be_configured(tmp_path: object) -> None:
         record=record,
         rounds=1,
     )
-    assert asyncio.run(client.health_for(SENDER))["error"] == "unreachable"
+    assert asyncio.run(client.probe(SENDER))["state"] == "unreachable"
     assert len(record) == chain_length, "одного круга — значит одного"
 
 
@@ -150,7 +150,7 @@ def test_budget_stops_the_chain(tmp_path: object) -> None:
     client, _ = make_client(
         fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver(), budget=0.0
     )
-    assert asyncio.run(client.health_for(SENDER))["error"] == "unreachable"
+    assert asyncio.run(client.probe(SENDER))["state"] == "unreachable"
 
 
 def test_existing_session_stays_within_its_datacenter(tmp_path: object) -> None:

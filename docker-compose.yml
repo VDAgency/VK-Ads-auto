@@ -65,13 +65,14 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health', timeout=2).status==200 else 1)"
+        # /live — чистый liveness без обращений к сети: «процесс отвечает». Раньше
+        # здесь стоял /health, который лез в Telegram по каждой сессии, и контейнер
+        # вечно висел unhealthy из-за таймаута.
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/live', timeout=2).status==200 else 1)"
       interval: 30s
       timeout: 3s
       retries: 3
-      # Первый опрос сессий идёт по сети и может занять секунды — не считаем
-      # контейнер сломанным, пока он поднимается.
-      start_period: 20s
+      start_period: 15s
 
   # Сервис браузерной автоматизации kotbot.ru (Playwright, spec 2026-07-17).
   # Порт наружу не публикуется — только внутри compose-сети (бот и адаптер ядра
