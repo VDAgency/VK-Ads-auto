@@ -78,3 +78,24 @@ def render_status(
     if any(report.unreachable for report in sessions):
         lines.append("Пока Telegram недоступен, брифы уходят на email и вручную.")
     return "\n".join(lines).rstrip()
+
+
+def render_endpoints(rows: list[dict[str, object]]) -> str:
+    """Матрица достижимости точек подключения — для разбора «а куда мы вообще ходим».
+
+    Показывает ровно то, что перебирает сервис: адрес, порт, транспорт и через прокси
+    ли. Именно это различие («TCP открыт, но MTProto режется») и оказалось ключевым.
+    """
+    if not rows:
+        return "🧪 <b>Точки подключения</b>\n\nСписок пуст — сессий пока нет."
+    lines = ["🧪 <b>Точки подключения</b>", ""]
+    for row in rows:
+        mark = "✅" if row.get("reachable") else "⛔"
+        latency = row.get("latency_ms")
+        tail = f" · {latency} мс" if isinstance(latency, int) else ""
+        lines.append(f"{mark} {row.get('label')}{tail}")
+    reachable = sum(1 for row in rows if row.get("reachable"))
+    lines.append("")
+    lines.append(f"Доступно {reachable} из {len(rows)}.")
+    lines.append("Проверяется TCP: адрес может отвечать, а обмен с Telegram — блокироваться.")
+    return "\n".join(lines)

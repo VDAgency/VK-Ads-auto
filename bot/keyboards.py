@@ -228,6 +228,16 @@ def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> I
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def userbot_status_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки экрана диагностики юзербота: проверка по сети и матрица точек."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Проверить сейчас", callback_data="ubstatus:probe")],
+            [InlineKeyboardButton(text="🧪 Точки подключения", callback_data="ubstatus:endpoints")],
+        ]
+    )
+
+
 def email_fallback_keyboard(email: str) -> InlineKeyboardMarkup:
     """Предложение отправить бриф письмом, когда Telegram не принял сообщение.
 

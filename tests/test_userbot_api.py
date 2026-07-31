@@ -21,15 +21,59 @@ def _app_with(client_obj: object) -> TestClient:
     return tc
 
 
+def test_live_endpoint_needs_nothing(tmp_path: Path) -> None:
+    """Liveness обязан отвечать даже с мёртвой сетью — на него смотрит docker."""
+    fake = FakeTelethon(authorized=True, connect_errors=[ConnectionError("dead")] * 50)
+    client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
+    with _app_with(client) as tc:
+        resp = tc.get("/live")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert fake.connect_calls == 0
+
+
 def test_health_endpoint_lists_sessions(tmp_path: Path) -> None:
     fake = FakeTelethon(authorized=True, phone="+79990001122")
     client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
     with _app_with(client) as tc:
+        tc.post(f"/sessions/{SENDER}/probe")
         resp = tc.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {
-        "sessions": [{"sender_id": SENDER, "authorized": True, "phone": "+79990001122"}]
-    }
+    sessions = resp.json()["sessions"]
+    assert sessions[0]["sender_id"] == SENDER
+    assert sessions[0]["state"] == "ready"
+    assert sessions[0]["phone"] == "+79990001122"
+
+
+def test_sessions_endpoint_does_not_touch_network(tmp_path: Path) -> None:
+    """Регресс на инцидент: чтение состояния не должно подключаться к Telegram."""
+    fake = FakeTelethon(authorized=True, connect_errors=[ConnectionError("dead")] * 50)
+    client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
+    with _app_with(client) as tc:
+        resp = tc.get("/sessions")
+    assert resp.status_code == 200
+    assert fake.connect_calls == 0
+    assert resp.json()["sessions"][0]["state"] == "unknown"
+
+
+def test_probe_endpoint_updates_state(tmp_path: Path) -> None:
+    fake = FakeTelethon(authorized=True, phone="+79990001122")
+    client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
+    with _app_with(client) as tc:
+        probed = tc.post(f"/sessions/{SENDER}/probe")
+        read_back = tc.get(f"/sessions/{SENDER}")
+    assert probed.json()["state"] == "ready"
+    assert read_back.json()["state"] == "ready"
+
+
+def test_diagnostics_endpoint_returns_matrix(tmp_path: Path) -> None:
+    client, _ = make_client(tmp_path=str(tmp_path), saved_for=(SENDER,))
+    with _app_with(client) as tc:
+        resp = tc.get("/diagnostics/endpoints")
+    assert resp.status_code == 200
+    rows = resp.json()["endpoints"]
+    assert rows, "матрица не должна быть пустой при известной сессии"
+    assert {"label", "reachable", "via_proxy"} <= set(rows[0])
 
 
 def test_health_endpoint_empty(tmp_path: Path) -> None:
@@ -43,10 +87,12 @@ def test_health_endpoint_filter_by_sender(tmp_path: Path) -> None:
     fake = FakeTelethon(authorized=True, phone="+79990001122")
     client, _ = make_client(fake, tmp_path=str(tmp_path), saved_for=(SENDER,))
     with _app_with(client) as tc:
+        tc.post(f"/sessions/{SENDER}/probe")
         resp = tc.get("/health", params={"sender_id": SENDER})
         missing = tc.get("/health", params={"sender_id": 999})
-    assert resp.json() == {"sender_id": SENDER, "authorized": True, "phone": "+79990001122"}
-    assert missing.json() == {"sender_id": 999, "authorized": False}
+    assert resp.json()["state"] == "ready"
+    assert resp.json()["phone"] == "+79990001122"
+    assert missing.json()["state"] == "absent"
 
 
 def test_send_endpoint_ok(tmp_path: Path) -> None:

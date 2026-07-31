@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from userbot.api import auth, health, send
+from userbot import keepalive
+from userbot.api import auth, diagnostics, health, send, sessions
 from userbot.config import get_settings
 from userbot.endpoint_cache import EndpointCache
 from userbot.endpoints import (
@@ -62,18 +64,32 @@ def build_client() -> UserbotClient:
         cache=cache,
         rounds=settings.connect_rounds,
         budget=settings.connect_budget,
+        pending_ttl=settings.pending_auth_ttl,
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Создать клиент на старте, положить в state для роутеров.
+    """Поднять клиент и фоновую проверку сессий; на выходе всё закрыть.
 
-    Если клиент уже задан (тест инъектировал свой) — не перезаписываем.
+    Если клиент уже задан (тест инъектировал свой) — не перезаписываем и фоновую
+    задачу не поднимаем: тестам сеть не нужна.
     """
-    if getattr(app.state, "client", None) is None:
+    own_client = getattr(app.state, "client", None) is None
+    if own_client:
         app.state.client = build_client()
-    yield
+    task: asyncio.Task[None] | None = None
+    if own_client:
+        task = keepalive.start(app.state.client, get_settings().keepalive_interval)
+    try:
+        yield
+    finally:
+        # Раньше ветки после yield не было вовсе: сокеты и фоновые задачи Telethon
+        # утекали при каждой перезагрузке сервиса.
+        if task is not None:
+            await keepalive.stop(task)
+        if own_client:
+            await app.state.client.close()
 
 
 def create_app() -> FastAPI:
@@ -82,6 +98,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(send.router)
     app.include_router(health.router)
+    app.include_router(sessions.router)
+    app.include_router(diagnostics.router)
     return app
 
 

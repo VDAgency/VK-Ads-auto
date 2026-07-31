@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from cryptography.fernet import Fernet
 from userbot.endpoints import Endpoint, EndpointResolver
 from userbot.session import SessionStore
@@ -33,7 +36,9 @@ class FakeTelethon:
         first_name: str | None = None,
         last_name: str | None = None,
         connect_errors: list[Exception | None] | None = None,
+        sign_in_error: Exception | None = None,
     ) -> None:
+        self.sign_in_error = sign_in_error
         self.session = _FakeSession()
         self._authorized = authorized
         self._needs_2fa = needs_2fa
@@ -60,6 +65,9 @@ class FakeTelethon:
     async def disconnect(self) -> None:
         self.connected = False
 
+    def is_connected(self) -> bool:
+        return self.connected
+
     async def is_user_authorized(self) -> bool:
         return self._authorized
 
@@ -77,6 +85,8 @@ class FakeTelethon:
     ) -> object:
         from telethon import errors
 
+        if self.sign_in_error is not None:
+            raise self.sign_in_error
         # Ввод кода: при включённой 2FA — требуем пароль.
         if password is None:
             if self._needs_2fa:
@@ -128,6 +138,8 @@ def make_client(
     fakes_by_endpoint: dict[Endpoint, FakeTelethon] | None = None,
     rounds: int = 3,
     budget: float = 45.0,
+    pending_ttl: float = 300.0,
+    clock: Callable[[], float] | None = None,
 ) -> tuple[UserbotClient, FakeTelethon]:
     """Собрать `UserbotClient` с фейковым Telethon и реальным SessionStore в tmp.
 
@@ -161,6 +173,12 @@ def make_client(
 
     typed_factory: ClientFactory = factory
     client = UserbotClient(
-        factory=typed_factory, store=store, resolver=resolver, rounds=rounds, budget=budget
+        factory=typed_factory,
+        store=store,
+        resolver=resolver,
+        rounds=rounds,
+        budget=budget,
+        pending_ttl=pending_ttl,
+        clock=clock if clock is not None else time.time,
     )
     return client, fake

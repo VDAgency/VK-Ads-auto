@@ -1,8 +1,12 @@
-"""Health юзербота: GET /health → состояние сессий операторов (spec §6).
+"""Liveness и состояние сессий (spec 2026-07-31 §4.7).
 
-Без параметров — все сессии: `{sessions: [{sender_id, authorized, phone?}]}`.
-С `?sender_id=` — одна: `{sender_id, authorized, phone?}` (бот проверяет сессию
-вызвавшего оператора перед /send_brief; поллер раз в 60с берёт полный список).
+`GET /live` — только «процесс жив»: ноль обращений к сети и диску. Именно его
+опрашивает docker-healthcheck. Раньше эту роль играл `/health`, который подключался
+к Telegram по каждой сессии: один опрос занимал десятки секунд, контейнер вечно висел
+`unhealthy`, а поллер бота считал упавшим весь сервис.
+
+`GET /health` теперь отдаёт состояние сессий ИЗ ПАМЯТИ — его наполняет фоновая
+проверка (`userbot/keepalive.py`). Форсированная проверка по сети — `/sessions/{id}/probe`.
 """
 
 from __future__ import annotations
@@ -19,11 +23,18 @@ router = APIRouter(tags=["health"])
 Client = Annotated[UserbotClient, Depends(get_client)]
 
 
+@router.get("/live")
+async def live() -> dict[str, str]:
+    """Чистый liveness: процесс отвечает. Без I/O и без зависимостей."""
+    return {"status": "ok"}
+
+
 @router.get("/health")
 async def health(
     client: Client,
     sender_id: Annotated[int | None, Query()] = None,
 ) -> dict[str, object]:
+    """Состояние сессий из памяти; сеть не трогаем, ответ мгновенный."""
     if sender_id is not None:
-        return await client.health_for(sender_id)
-    return await client.health()
+        return client.health_for(sender_id)
+    return client.health()
