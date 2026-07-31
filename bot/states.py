@@ -10,6 +10,9 @@ class SendBrief(StatesGroup):
 
     choosing_variant = State()  # выбор: физлицо / ИП
     entering_contact = State()  # ввод контакта клиента
+    # Telegram не принял — предлагаем письмо. Отправляем только по явному нажатию.
+    offering_email = State()  # показана кнопка «Отправить на <email>»
+    entering_fallback_email = State()  # email клиента неизвестен, просим ввести
 
 
 class LinkUserbot(StatesGroup):

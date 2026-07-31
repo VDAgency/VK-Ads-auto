@@ -99,6 +99,8 @@ class InviteCreated:
     channel: str  # telegram | email | manual
     fallback_text: str | None
     error: str | None
+    # Известный email клиента при сорвавшейся доставке в Telegram; None — нет такого.
+    fallback_email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,6 +475,7 @@ async def create_invite(variant: str, contact: str, operator_telegram_id: int) -
         channel=str(payload["channel"]),
         fallback_text=payload.get("fallback_text"),
         error=payload.get("error"),
+        fallback_email=payload.get("fallback_email"),
     )
 
 
@@ -486,10 +489,15 @@ async def create_invite(variant: str, contact: str, operator_telegram_id: int) -
 
 @dataclass(frozen=True, slots=True)
 class UserbotHealth:
-    """Состояние авторизации сессии оператора (зеркало `/health?sender_id=`)."""
+    """Состояние авторизации сессии оператора (зеркало `/health?sender_id=`).
+
+    `error="unreachable"` означает «до Telegram не достучались»: сессия может быть
+    жива, и советовать перепривязку в этом случае вредно.
+    """
 
     authorized: bool
     phone: str | None = None
+    error: str | None = None
 
 
 def _userbot_base_url() -> str:
@@ -530,14 +538,22 @@ async def userbot_status(sender_id: int) -> UserbotHealth:
     return UserbotHealth(
         authorized=bool(payload.get("authorized", False)),
         phone=payload.get("phone"),
+        error=payload.get("error"),
     )
 
 
-async def userbot_health_all() -> dict[int, bool]:
-    """Состояние всех сессий `{sender_id: authorized}` (для фонового поллера)."""
+async def userbot_health_all() -> dict[int, UserbotHealth]:
+    """Состояние всех сессий по операторам (для фонового поллера и диагностики)."""
     payload = await _userbot_request("GET", "/health")
     sessions = payload.get("sessions", [])
-    return {int(item["sender_id"]): bool(item.get("authorized", False)) for item in sessions}
+    return {
+        int(item["sender_id"]): UserbotHealth(
+            authorized=bool(item.get("authorized", False)),
+            phone=item.get("phone"),
+            error=item.get("error"),
+        )
+        for item in sessions
+    }
 
 
 async def userbot_start_auth(sender_id: int, phone: str) -> str:

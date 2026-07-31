@@ -21,6 +21,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("surfaces", "Куда привлекаем подписчиков"),
     ("admin", "Ссылка на веб-админку"),
     ("link_userbot", "Подключить юзер-бота"),
+    ("userbot_status", "Состояние юзер-бота"),
     ("link_kotbot", "Подключить kotbot"),
     ("help", "Справочник по боту"),
 )
