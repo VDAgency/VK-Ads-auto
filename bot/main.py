@@ -26,6 +26,7 @@ from bot.handlers import (
     stop_campaign,
     stranger,
     surfaces,
+    userbot_status,
 )
 from bot.handlers import help as help_handler
 from bot.menu import setup_bot_commands
@@ -56,6 +57,7 @@ def routers() -> list[Router]:
         link_kotbot.router,
         ad_accounts.router,
         surfaces.router,
+        userbot_status.router,
         # Визитка для чужих — последней: ловит только не-операторские апдейты.
         stranger.router,
     ]
@@ -82,7 +84,7 @@ async def run() -> None:
     # kotbot — уведомление операторам на переходе healthy→unhealthy.
     pollers: list[asyncio.Task[None]] = []
     if api_client.userbot_configured():
-        pollers.append(asyncio.create_task(userbot_watch.poll_forever()))
+        pollers.append(asyncio.create_task(userbot_watch.poll_forever(bot)))
     if api_client.kotbot_configured():
         pollers.append(asyncio.create_task(kotbot_watch.poll_forever(bot)))
     try:

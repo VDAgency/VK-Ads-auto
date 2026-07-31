@@ -10,14 +10,16 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from config.settings import get_settings
+from db.repositories import find_client_by_contacts
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from services.brief_parser import BriefVariant
-from services.contact import ContactParseError, detect_contact
+from services.contact import Contact, ContactParseError, detect_contact
 from services.delivery.factory import build_delivery_router
 from services.invite_tracking import InviteView, list_pending, list_recent
-from services.invites import create_invite
+from services.invites import InviteResult, create_invite
+from services.invites_fallback import offer_email
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/invites", tags=["invites"])
@@ -87,6 +89,9 @@ class CreateInviteOut(BaseModel):
     channel: str  # telegram | email | manual
     fallback_text: str | None = None
     error: str | None = None
+    # Известный email клиента — только когда сорвалась доставка в Telegram. Бот
+    # предлагает отправить бриф письмом, но решает оператор (spec 2026-07-31 §4.9).
+    fallback_email: str | None = None
 
 
 @router.post("", status_code=201)
@@ -112,6 +117,7 @@ async def create_invite_endpoint(
         # Отправитель в Telegram — оператор, создающий инвайт (его сессия юзербота).
         build_delivery_router(sender_id=data.operator_telegram_id),
     )
+    fallback_email = await _known_email(session, contact, result)
     await session.commit()
     return CreateInviteOut(
         invite_id=result.invite_id,
@@ -119,4 +125,23 @@ async def create_invite_endpoint(
         channel=result.channel,
         fallback_text=result.fallback_text,
         error=result.error,
+        fallback_email=fallback_email,
     )
+
+
+async def _known_email(session: AsyncSession, contact: Contact, result: InviteResult) -> str | None:
+    """Email клиента, если доставка в Telegram сорвалась и клиент нам уже знаком.
+
+    Читаем только в этом случае: при успешной доставке поле лишнее, а лишний запрос
+    к БД на каждый инвайт не нужен.
+    """
+    if offer_email(result.status, result.channel, result.error, None) is None:
+        return None
+    client = await find_client_by_contacts(
+        session,
+        DEFAULT_ACCOUNT_ID,
+        email=None,
+        phone=None,
+        telegram=contact.value,
+    )
+    return client.email if client else None

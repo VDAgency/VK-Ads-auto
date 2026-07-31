@@ -24,6 +24,7 @@ def test_menu_has_expected_commands() -> None:
         "surfaces",
         "admin",
         "link_userbot",
+        "userbot_status",
         "link_kotbot",
         "help",
     }

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from bot import userbot_watch
 from bot.api_client import ContactNotRecognized, CoreUnavailable, InviteCreated
 from bot.handlers import send_brief
 from bot.states import SendBrief
@@ -46,10 +47,20 @@ class _FakeMessage:
 
 
 def _invite(
-    status: str, channel: str, *, fallback: str | None = None, error: str | None = None
+    status: str,
+    channel: str,
+    *,
+    fallback: str | None = None,
+    error: str | None = None,
+    fallback_email: str | None = None,
 ) -> InviteCreated:
     return InviteCreated(
-        invite_id=1, status=status, channel=channel, fallback_text=fallback, error=error
+        invite_id=1,
+        status=status,
+        channel=channel,
+        fallback_text=fallback,
+        error=error,
+        fallback_email=fallback_email,
     )
 
 
@@ -153,7 +164,11 @@ def test_core_unavailable_clears_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _run_start(monkeypatch: pytest.MonkeyPatch, authorized: bool | None) -> _FakeMessage:
-    monkeypatch.setattr("bot.userbot_watch.is_authorized", lambda sender_id: authorized)
+    """Баннер теперь формирует `banner_for`: текст зависит от причины поломки."""
+    banner = None
+    if authorized is False:
+        banner = userbot_watch.NOT_LINKED_BANNER
+    monkeypatch.setattr("bot.userbot_watch.banner_for", lambda sender_id: banner)
     message = _FakeMessage("/send_brief")
     state = _FakeState()
     asyncio.run(send_brief.start_send_brief(message, state))
@@ -170,7 +185,124 @@ def test_no_banner_when_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not any("не подключён" in a for a in message.answers)
 
 
+def test_banner_explains_network_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """При сетевой блокировке совет «перепривяжите» был бы вредным."""
+    monkeypatch.setattr(
+        "bot.userbot_watch.banner_for", lambda sender_id: userbot_watch.UNREACHABLE_MESSAGE
+    )
+    message = _FakeMessage("/send_brief")
+    asyncio.run(send_brief.start_send_brief(message, _FakeState()))
+    assert any("Перепривязка не поможет" in a for a in message.answers)
+
+
 def test_no_banner_when_state_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     # None = поллер ещё не опросил сервис — зря не пугаем.
     message = _run_start(monkeypatch, authorized=None)
     assert not any("не подключён" in a for a in message.answers)
+
+
+# --- Запасная доставка на email -------------------------------------------------
+
+
+class _FakeCallback:
+    def __init__(self, data: str, message: _FakeMessage) -> None:
+        self.data = data
+        self.from_user = SimpleNamespace(id=_OPERATOR_ID)
+        self.message = message
+        self.answered = False
+
+    async def answer(self, text: str | None = None, **kwargs: Any) -> None:
+        self.answered = True
+
+
+def test_channel_failure_offers_known_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Telegram не принял — предлагаем письмо, но не отправляем сами."""
+    message, state, _ = _run_got_contact(
+        monkeypatch,
+        _invite(
+            "failed",
+            "telegram",
+            fallback="текст",
+            error="userbot_unreachable",
+            fallback_email="ivan@mail.ru",
+        ),
+    )
+    assert state.state == SendBrief.offering_email
+    assert state.data["fallback_email"] == "ivan@mail.ru"
+    assert "email" in message.answers[0]
+
+
+def test_wrong_username_does_not_offer_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Опечатка в контакте — письмо ушло бы не тому; состояние сбрасываем."""
+    _, state, _ = _run_got_contact(
+        monkeypatch,
+        _invite(
+            "failed",
+            "telegram",
+            fallback="текст",
+            error="username_not_occupied",
+            fallback_email="ivan@mail.ru",
+        ),
+    )
+    assert state.state is None
+
+
+def test_unknown_email_asks_operator(monkeypatch: pytest.MonkeyPatch) -> None:
+    message, state, _ = _run_got_contact(
+        monkeypatch,
+        _invite("failed", "telegram", fallback="текст", error="userbot_unreachable"),
+    )
+    assert state.state == SendBrief.entering_fallback_email
+    assert "email" in message.answers[0]
+
+
+def test_button_sends_exactly_one_email_invite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Второй инвайт рождается только из явного нажатия — и ровно один."""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_create(variant: str, raw: str, operator_telegram_id: int) -> InviteCreated:
+        calls.append((variant, raw))
+        return _invite("sent", "email")
+
+    monkeypatch.setattr("bot.api_client.create_invite", fake_create)
+    message = _FakeMessage()
+    state = _FakeState()
+    state.state = SendBrief.offering_email
+    state.data = {"variant": "individual", "fallback_email": "ivan@mail.ru"}
+    callback = _FakeCallback("invite_email", message)
+
+    asyncio.run(send_brief.send_to_known_email(callback, state))
+
+    assert calls == [("individual", "ivan@mail.ru")]
+    assert state.state is None
+    assert "через email" in message.answers[0]
+
+
+def test_decline_keeps_manual_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = _FakeMessage()
+    state = _FakeState()
+    state.state = SendBrief.offering_email
+    callback = _FakeCallback("invite_cancel", message)
+
+    asyncio.run(send_brief.decline_email(callback, state))
+
+    assert state.state is None
+    assert callback.answered
+
+
+def test_manual_email_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Не похоже на email — остаёмся в состоянии, оператор поправит."""
+
+    async def fake_create(variant: str, raw: str, operator_telegram_id: int) -> InviteCreated:
+        raise ContactNotRecognized("bad")
+
+    monkeypatch.setattr("bot.api_client.create_invite", fake_create)
+    message = _FakeMessage("не-почта")
+    state = _FakeState()
+    state.state = SendBrief.entering_fallback_email
+    state.data = {"variant": "individual"}
+
+    asyncio.run(send_brief.got_fallback_email(message, state))
+
+    assert state.state == SendBrief.entering_fallback_email
+    assert "email" in message.answers[0].lower()

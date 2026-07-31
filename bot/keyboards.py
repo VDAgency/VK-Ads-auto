@@ -228,6 +228,21 @@ def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> I
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def email_fallback_keyboard(email: str) -> InlineKeyboardMarkup:
+    """Предложение отправить бриф письмом, когда Telegram не принял сообщение.
+
+    Сам email в `callback_data` не кладём — он не влезает в лимит 64 байта и живёт
+    в данных FSM. Кнопка только подтверждает намерение: отправку начинает оператор.
+    """
+    label = f"📧 Отправить на {email}"[:60]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data="invite_email")],
+            [InlineKeyboardButton(text="✖ Не надо", callback_data="invite_cancel")],
+        ]
+    )
+
+
 # --- справочник /help ---------------------------------------------------------
 
 # Кнопка справочника несёт АДРЕС назначения (`help:s:{раздел}:{страница}`), а не
