@@ -17,6 +17,9 @@ dependencies = [
     "httpx>=0.28",
     "aiosmtplib>=3.0",
     "telethon>=1.36",
+    # Нужен Telethon для SOCKS5/MTProxy: без него параметр proxy молча игнорируется
+    # (только warning), и «прокси не работает» выглядит как загадка.
+    "python-socks[asyncio]>=2.4",
     "cryptography>=43.0",
     "playwright>=1.49",
     "pillow>=12.3.0",

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from userbot.api import get_client
-from userbot.telethon_client import AuthError, UserbotClient
+from userbot.telethon_client import AuthError, UnreachableError, UserbotClient
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,7 +52,11 @@ class OkResponse(BaseModel):
 
 @router.post("/start", response_model=StartResponse)
 async def auth_start(body: StartRequest, client: Client) -> StartResponse:
-    phone_code_hash = await client.auth_start(body.sender_id, body.phone)
+    try:
+        phone_code_hash = await client.auth_start(body.sender_id, body.phone)
+    except UnreachableError as exc:
+        # 503, а не 500: Telegram недоступен с сервера, код сервиса тут ни при чём.
+        raise HTTPException(status_code=503, detail="userbot_unreachable") from exc
     return StartResponse(phone_code_hash=phone_code_hash)
 
 
