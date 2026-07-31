@@ -93,9 +93,13 @@ def render_endpoints(rows: list[dict[str, object]]) -> str:
         mark = "✅" if row.get("reachable") else "⛔"
         latency = row.get("latency_ms")
         tail = f" · {latency} мс" if isinstance(latency, int) else ""
-        lines.append(f"{mark} {row.get('label')}{tail}")
+        label = f"dc{row.get('dc_id')} {row.get('ip')}:{row.get('port')}"
+        lines.append(f"{mark} {label}{tail}")
     reachable = sum(1 for row in rows if row.get("reachable"))
     lines.append("")
-    lines.append(f"Доступно {reachable} из {len(rows)}.")
-    lines.append("Проверяется TCP: адрес может отвечать, а обмен с Telegram — блокироваться.")
+    lines.append(f"Напрямую доступно {reachable} из {len(rows)}.")
+    lines.append(
+        "Это прямая проверка соединения. Адрес может отвечать, а обмен с Telegram — "
+        "блокироваться; и наоборот, через прокси работают адреса, недоступные напрямую."
+    )
     return "\n".join(lines)
