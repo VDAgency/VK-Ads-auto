@@ -332,22 +332,31 @@ class UserbotClient:
         self._pending.clear()
 
     def diagnostic_candidates(self) -> list[Endpoint]:
-        """Точки для экрана диагностики: цепочки всех известных сессий + стартовые.
+        """Адреса для экрана диагностики: цепочки известных сессий + стартовые точки.
 
-        Показываем ровно то, что реально перебирает сервис, иначе диагностика
-        отвечала бы на другой вопрос, чем задаёт оператор.
+        Дедуплицируем по адресу и порту, отбрасывая транспорт и признак прокси.
+        Проверка — прямая TCP-проба, поэтому вариант «через прокси» дал бы ровно тот
+        же результат и лишь путал бы: адрес выглядел бы недоступным, хотя через
+        прокси он рабочий.
         """
+        seen: set[tuple[int, str, int]] = set()
         chain: list[Endpoint] = []
+
+        def add(endpoint: Endpoint) -> None:
+            key = (endpoint.dc_id, endpoint.ip, endpoint.port)
+            if key in seen:
+                return
+            seen.add(key)
+            chain.append(Endpoint(dc_id=endpoint.dc_id, ip=endpoint.ip, port=endpoint.port))
+
         for sender_id in self.known_senders():
             session_str = self._store.load(sender_id)
             if session_str is None:
                 continue
             for endpoint in self._candidates_for(session_str, sender_id):
-                if endpoint not in chain:
-                    chain.append(endpoint)
+                add(endpoint)
         for endpoint in self._resolver.auth_candidates():
-            if endpoint not in chain:
-                chain.append(endpoint)
+            add(endpoint)
         return chain
 
     def _candidates_for(self, session_str: str, sender_id: int) -> list[Endpoint]:

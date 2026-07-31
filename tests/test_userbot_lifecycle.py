@@ -198,6 +198,23 @@ def test_close_disconnects_everything(tmp_path: Path) -> None:
     assert pending.connected is False
 
 
+def test_diagnostic_candidates_are_deduplicated(tmp_path: Path) -> None:
+    """Проверка прямая, поэтому вариант «через прокси» дал бы тот же результат.
+
+    Показывать оба значило бы рисовать «недоступен» напротив адреса, который через
+    прокси прекрасно работает.
+    """
+    client, _ = make_client(
+        FakeTelethon(),
+        tmp_path=str(tmp_path),
+        saved_for=(SENDER,),
+        resolver=EndpointResolver(ports=(443, 5222), auth_dc_order=(1,), proxy_configured=True),
+    )
+    points = client.diagnostic_candidates()
+    assert all(not point.via_proxy for point in points)
+    assert len({(p.dc_id, p.ip, p.port) for p in points}) == len(points)
+
+
 def test_absent_session_is_reported_not_probed(tmp_path: Path) -> None:
     fake = FakeTelethon()
     client, _ = make_client(fake, tmp_path=str(tmp_path), resolver=_resolver())
