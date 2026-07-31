@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from userbot.endpoints import Endpoint, EndpointResolver, parse_endpoints
+from userbot.endpoints import Endpoint, EndpointResolver, Transport, parse_endpoints
 from userbot.telethon_client import AuthError, UnreachableError
 
 from tests._userbot_fakes import SENDER, FakeTelethon, make_client
@@ -103,6 +103,54 @@ def test_auth_start_does_not_leak_client_on_break(tmp_path: object) -> None:
     with pytest.raises(AuthError) as exc_info:
         asyncio.run(client.auth_code(SENDER, "+79990001122", "12345", "hash"))
     assert exc_info.value.code == "no_pending_auth"
+
+
+def test_chain_is_retried_in_several_rounds(tmp_path: object) -> None:
+    """Фильтрация вероятностная: точка, молчавшая в первом круге, отвечает во втором.
+
+    Регресс на прод: DC2:5222 отзывался 2 раза из 5, и один проход по цепочке давал
+    ложное «недоступно» при живой сессии.
+    """
+    resolver = EndpointResolver(ports=(5222,), auth_dc_order=(2,), transport=Transport.OBFUSCATED)
+    chain_length = len(resolver.auth_candidates())
+    # Молчит весь первый круг, отвечает на первой точке второго.
+    fake = FakeTelethon(
+        authorized=True, connect_errors=[ConnectionError("фильтр")] * chain_length + [None]
+    )
+    record: list[Endpoint] = []
+    client, _ = make_client(
+        fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=resolver, record=record
+    )
+    assert asyncio.run(client.health_for(SENDER))["authorized"] is True
+    assert len(record) == chain_length + 1, "второй круг должен начаться сначала цепочки"
+
+
+def test_single_round_can_be_configured(tmp_path: object) -> None:
+    resolver = EndpointResolver(ports=(5222,), auth_dc_order=(2,), transport=Transport.OBFUSCATED)
+    chain_length = len(resolver.auth_candidates())
+    fake = FakeTelethon(
+        authorized=True, connect_errors=[ConnectionError("фильтр")] * chain_length + [None]
+    )
+    record: list[Endpoint] = []
+    client, _ = make_client(
+        fake,
+        tmp_path=str(tmp_path),
+        saved_for=(SENDER,),
+        resolver=resolver,
+        record=record,
+        rounds=1,
+    )
+    assert asyncio.run(client.health_for(SENDER))["error"] == "unreachable"
+    assert len(record) == chain_length, "одного круга — значит одного"
+
+
+def test_budget_stops_the_chain(tmp_path: object) -> None:
+    """Бюджет сервера меньше таймаута клиента: вызывающий получит ответ, не таймаут."""
+    fake = FakeTelethon(authorized=True, connect_errors=[ConnectionError("dead")] * 1000)
+    client, _ = make_client(
+        fake, tmp_path=str(tmp_path), saved_for=(SENDER,), resolver=_resolver(), budget=0.0
+    )
+    assert asyncio.run(client.health_for(SENDER))["error"] == "unreachable"
 
 
 def test_existing_session_stays_within_its_datacenter(tmp_path: object) -> None:

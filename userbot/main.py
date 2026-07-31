@@ -55,7 +55,14 @@ def build_client() -> UserbotClient:
         secret_key=settings.secret_key.get_secret_value(),
         sessions_dir=settings.sessions_dir,
     )
-    return UserbotClient(factory=factory, store=store, resolver=resolver, cache=cache)
+    return UserbotClient(
+        factory=factory,
+        store=store,
+        resolver=resolver,
+        cache=cache,
+        rounds=settings.connect_rounds,
+        budget=settings.connect_budget,
+    )
 
 
 @asynccontextmanager

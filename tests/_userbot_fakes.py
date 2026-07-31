@@ -126,6 +126,8 @@ def make_client(
     resolver: EndpointResolver | None = None,
     record: list[Endpoint] | None = None,
     fakes_by_endpoint: dict[Endpoint, FakeTelethon] | None = None,
+    rounds: int = 3,
+    budget: float = 45.0,
 ) -> tuple[UserbotClient, FakeTelethon]:
     """Собрать `UserbotClient` с фейковым Telethon и реальным SessionStore в tmp.
 
@@ -158,5 +160,7 @@ def make_client(
         return fake
 
     typed_factory: ClientFactory = factory
-    client = UserbotClient(factory=typed_factory, store=store, resolver=resolver)
+    client = UserbotClient(
+        factory=typed_factory, store=store, resolver=resolver, rounds=rounds, budget=budget
+    )
     return client, fake
