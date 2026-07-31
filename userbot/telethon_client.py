@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from typing import Protocol, cast
 
 from telethon import errors
@@ -171,11 +172,15 @@ class UserbotClient:
         store: SessionStore,
         resolver: EndpointResolver | None = None,
         cache: EndpointCache | None = None,
+        rounds: int = 3,
+        budget: float = 45.0,
     ) -> None:
         self._factory = factory
         self._store = store
         self._resolver = resolver or EndpointResolver()
         self._cache = cache
+        self._rounds = max(1, rounds)
+        self._budget = budget
         self._clients: dict[int, TelethonProtocol] = {}
         # Незавершённые auth-флоу держат клиент между /auth/start и /auth/code;
         # словарь по sender_id — два оператора могут логиниться одновременно.
@@ -202,16 +207,33 @@ class UserbotClient:
     async def _connect_with_fallback(
         self, session_str: str | None, candidates: list[Endpoint], *, sender_id: int | None = None
     ) -> tuple[TelethonProtocol, Endpoint]:
-        """Перебрать точки до первой живой. Все мертвы → `UnreachableError`."""
-        for endpoint in candidates:
-            client = await self._try_connect(session_str, endpoint)
-            if client is None:
-                continue
-            logger.info("подключились через %s", endpoint.label())
-            if self._cache is not None and sender_id is not None:
-                self._cache.remember(sender_id, endpoint)
-            return client, endpoint
-        raise UnreachableError(f"ни одна из {len(candidates)} точек подключения не отозвалась")
+        """Перебрать точки до первой живой. Все мертвы → `UnreachableError`.
+
+        Цепочка проходится НЕСКОЛЬКО раз. Фильтрация у провайдера вероятностная:
+        на проде один и тот же адрес отвечает примерно в половине попыток, поэтому
+        один проход даёт ложное «недоступно». Общий бюджет ограничивает время, чтобы
+        вызывающая сторона получила ответ раньше своего таймаута.
+        """
+        deadline = time.monotonic() + self._budget
+        attempts = 0
+        for round_number in range(self._rounds):
+            for endpoint in candidates:
+                if time.monotonic() >= deadline:
+                    raise UnreachableError(f"бюджет подключения исчерпан за {attempts} попыток")
+                attempts += 1
+                client = await self._try_connect(session_str, endpoint)
+                if client is None:
+                    continue
+                logger.info(
+                    "подключились через %s (попытка %s, круг %s)",
+                    endpoint.label(),
+                    attempts,
+                    round_number + 1,
+                )
+                if self._cache is not None and sender_id is not None:
+                    self._cache.remember(sender_id, endpoint)
+                return client, endpoint
+        raise UnreachableError(f"ни одна точка не отозвалась за {attempts} попыток")
 
     async def _get_client(self, sender_id: int) -> TelethonProtocol | None:
         """Подключённый авторизованный клиент оператора из его сессии; иначе None.
