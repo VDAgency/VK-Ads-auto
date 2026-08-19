@@ -15,8 +15,14 @@ from services.edit_parser import parse_edits
 
 from bot import api_client
 from bot.access import OperatorOnly
-from bot.api_client import BriefCard, BriefNotFound, CoreUnavailable, CreativeRejected
-from bot.keyboards import brief_card_keyboard
+from bot.api_client import (
+    BriefCard,
+    BriefNotFound,
+    CabinetChoiceRequired,
+    CoreUnavailable,
+    CreativeRejected,
+)
+from bot.keyboards import ad_account_pick_keyboard, brief_card_keyboard
 from bot.states import EditBrief
 
 router = Router(name="brief_card")
@@ -38,6 +44,15 @@ _EDIT_PROMPT = (
 )
 _EDIT_UNPARSED = (
     "Не понял правки. Формат: «номер.значение», каждая с новой строки.\nНапример:\n1. Иван Петров"
+)
+_ASK_CABINET = "В каком рекламном кабинете запускаем кампанию?"
+_NO_CABINETS = (
+    "⚠️ Ни одного рекламного кабинета не добавлено — запускать некуда.\n"
+    "Добавьте кабинет командой /cabinets и повторите."
+)
+_NO_LIVE_CABINETS = (
+    "⚠️ Ни один кабинет сейчас не годится: VK не принимает их токены.\n"
+    "Откройте /cabinets, проверьте кабинеты и обновите токен."
 )
 
 
@@ -68,25 +83,80 @@ async def _send_card(message: Message, card: BriefCard) -> None:
     )
 
 
+async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int | None) -> None:
+    """Запустить кампанию без креатива выбранным кабинетом и показать итог оператору."""
+    try:
+        result = await api_client.launch_brief(brief_id, ad_account_id=ad_account_id)
+    except BriefNotFound:
+        await message.answer(_NOT_FOUND)
+    except CabinetChoiceRequired as exc:
+        # Ядро не смогло само выбрать кабинет (кабинетов нет либо их несколько) —
+        # такое возможно, если состав кабинетов изменился прямо во время запуска.
+        text = _NO_CABINETS if exc.reason == "no_ad_account" else _ASK_CABINET
+        await message.answer(text)
+    except CreativeRejected as exc:
+        await message.answer(f"Запустить не вышло: {exc}")
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+    else:
+        await message.answer(result.message)
+
+
 @router.callback_query(F.data.startswith("launch:"))
 async def launch_without_creative(callback: CallbackQuery) -> None:
     """Запустить кампанию для площадки, которой креатив не нужен.
 
     Объявлением служит сам пост, клип или трек — просить у оператора картинку,
-    которая никуда не пойдёт, было бы выдумкой.
+    которая никуда не пойдёт, было бы выдумкой. Кабинет выбираем перед запуском
+    точно так же, как при загрузке креатива (`bot/handlers/creative.py:start_creative`):
+    единственный пригодный — берём сразу, несколько — спрашиваем оператора.
     """
     brief_id = int((callback.data or "").split(":", 1)[1])
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    message = callback.message
+
+    try:
+        accounts = await api_client.list_ad_accounts()
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    usable = [item for item in accounts if item.is_usable]
+    if not accounts:
+        await message.answer(_NO_CABINETS)
+        await callback.answer()
+        return
+    if not usable:
+        await message.answer(_NO_LIVE_CABINETS)
+        await callback.answer()
+        return
+
+    if len(usable) == 1:
+        # Один кабинет — выбирать не из чего, запускаем сразу.
+        await _launch_and_report(message, brief_id, usable[0].id)
+    else:
+        await message.answer(
+            _ASK_CABINET,
+            reply_markup=ad_account_pick_keyboard(
+                [(item.id, f"{item.title} (id {item.external_id})") for item in usable],
+                # Свой action, отличный от `launch:{id}` в creative.py — иначе
+                # выбор кабинета уедет в сценарий загрузки креатива (ловушка из ТЗ).
+                f"nocre:{brief_id}",
+            ),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adacc:nocre:"))
+async def picked_cabinet_for_launch(callback: CallbackQuery) -> None:
+    """Оператор выбрал кабинет из нескольких — запускаем в нём."""
+    parts = (callback.data or "").split(":")
+    brief_id, ad_account_id = int(parts[2]), int(parts[3])
     if isinstance(callback.message, Message):
-        try:
-            result = await api_client.launch_brief(brief_id)
-        except BriefNotFound:
-            await callback.message.answer(_NOT_FOUND)
-        except CreativeRejected as exc:
-            await callback.message.answer(f"Запустить не вышло: {exc}")
-        except CoreUnavailable:
-            await callback.message.answer(_UNAVAILABLE)
-        else:
-            await callback.message.answer(result.message)
+        await _launch_and_report(callback.message, brief_id, ad_account_id)
     await callback.answer()
 
 

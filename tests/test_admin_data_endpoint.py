@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import core.api.v1.admin_data as admin_data_module
 import pytest
 from config.settings import Settings, get_settings
 from core.app import create_app
@@ -13,6 +14,7 @@ from db.base import Base
 from db.models import Account, Brief, Campaign, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
+from services.ad_accounts import AmbiguousAdAccountError, NoAdAccountError
 from services.admin_auth import generate_admin_session
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -216,3 +218,43 @@ def test_send_invite_requires_admin() -> None:
         return resp.status_code
 
     assert asyncio.run(_with_admin(scenario, authed=False)) == 401
+
+
+def test_admin_creative_no_ad_account_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Админка кабинет не выбирает: без единственного кабинета — 409, а не 500."""
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise NoAdAccountError("no active ad accounts")
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo"},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 409
+    assert body["detail"] == "no_ad_account"
+
+
+def test_admin_creative_ambiguous_ad_account_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кабинетов несколько, выбора в админке нет — честный 409 вместо трассировки."""
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise AmbiguousAdAccountError("2 active ad accounts, none chosen")
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo"},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 409
+    assert body["detail"] == "ambiguous_ad_account"

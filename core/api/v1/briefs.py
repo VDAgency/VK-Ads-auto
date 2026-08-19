@@ -12,7 +12,12 @@ from config.settings import get_settings
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from services.ad_accounts import AccountNotFoundError, TokenUnavailableError
+from services.ad_accounts import (
+    AccountNotFoundError,
+    AmbiguousAdAccountError,
+    NoAdAccountError,
+    TokenUnavailableError,
+)
 from services.auth_magiclink import generate_token
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import BriefCardView, apply_brief_edits, get_brief_card
@@ -105,6 +110,17 @@ class BriefEditOut(BriefCardOut):
     unknown: list[int] = []
 
 
+class LaunchIn(BaseModel):
+    """Тело запуска без креатива: кабинет, если оператор его уже выбрал в боте.
+
+    Поле необязательное; без него (тело `{}` или отсутствует вовсе — так бот
+    ходил сюда раньше) ядро само берёт кабинет по умолчанию — единственный
+    активный, а при нуле/нескольких кабинетах отвечает 409.
+    """
+
+    ad_account_id: int | None = None
+
+
 class CreativeIn(BaseModel):
     """Загрузка креатива под бриф: медиа (base64) + тип + метаданные + текст.
 
@@ -118,8 +134,8 @@ class CreativeIn(BaseModel):
     height: int = 0
     title: str = ""
     body: str = ""
-    # Выбор оператора. Необязательные: без них поведение прежнее (токен из
-    # окружения, цель из раскладки брифа), поэтому старые вызовы не ломаются.
+    # Выбор оператора. Необязательные: без кабинета ядро берёт единственный
+    # активный (иначе честный 409), цель — из раскладки брифа.
     ad_account_id: int | None = None
     goal: str | None = None
 
@@ -228,19 +244,35 @@ async def edit_brief(
 async def launch_brief(
     brief_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    data: LaunchIn | None = None,
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива — для площадок, которым он не нужен.
 
     Продвижение готового поста, клипа или трека: объявлением служит сам объект.
     Требовать при этом картинку было бы выдумкой, поэтому у таких брифов запуск
     отдельным действием.
+
+    `ad_account_id` — кабинет, выбранный оператором в боте (см. `LaunchIn`). Не
+    передан — ядро берёт кабинет по умолчанию и, если это невозможно (кабинетов
+    нет или их несколько), отвечает 409 вместо угадывания.
     """
+    ad_account_id = data.ad_account_id if data is not None else None
     try:
-        outcome = await launch_without_creative(session, DEFAULT_ACCOUNT_ID, brief_id)
+        outcome = await launch_without_creative(
+            session, DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id
+        )
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    except NoAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="no_ad_account") from exc
+    except AmbiguousAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="ambiguous_ad_account") from exc
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="ad_account_not_found") from exc
+    except (TokenUnavailableError, NotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail="ad_account_token_unavailable") from exc
     await session.commit()
     return CreativeLaunchOut(
         campaign_status=outcome.campaign_status,
@@ -278,6 +310,10 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except NoAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="no_ad_account") from exc
+    except AmbiguousAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="ambiguous_ad_account") from exc
     except AccountNotFoundError as exc:
         raise HTTPException(status_code=404, detail="ad_account_not_found") from exc
     except (TokenUnavailableError, NotConfiguredError) as exc:

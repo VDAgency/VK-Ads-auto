@@ -224,16 +224,6 @@ def test_brief_forms_mark_email_and_phone_required() -> None:
         assert "required" in body
 
 
-def test_brief_forms_have_vk_ad_cabinet_id_field() -> None:
-    client = TestClient(create_app())
-    for form in _BRIEF_PAGES.values():
-        body = client.get(form).text
-        # Обязательное поле «ID кабинета VK Реклама» + ссылка на инструкцию.
-        assert "ID кабинета VK Реклама" in body
-        assert 'name="vk_ad_cabinet_id"' in body
-        assert 'href="/instrukciya-vk-cabinet.html"' in body
-
-
 def test_brief_forms_cover_every_canonical_field() -> None:
     """Форма обязана собирать ВСЕ поля канонической карты варианта.
 

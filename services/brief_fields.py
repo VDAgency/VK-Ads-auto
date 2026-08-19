@@ -24,8 +24,7 @@ class BriefField:
 
 
 # Порядок = порядок полей формы web/app/brief-individual/page.tsx, то есть порядок
-# секций макета физлица (docs/BRIEF_FIELDS.md §1.1) с добавленным полем «ID кабинета
-# VK Реклама» — оно наше, макета не касается, и стоит рядом со ссылкой на объект.
+# секций макета физлица (docs/BRIEF_FIELDS.md §1.1).
 INDIVIDUAL_FIELDS: list[BriefField] = [
     # Секция 1 — контактная информация.
     BriefField("full_name", "Как обращаться"),
@@ -35,7 +34,6 @@ INDIVIDUAL_FIELDS: list[BriefField] = [
     BriefField("tax_id", "ИНН"),
     # Секция 2 — страница ВКонтакте.
     BriefField("object_url", "Ссылка на страницу VK"),
-    BriefField("vk_ad_cabinet_id", "ID кабинета VK Реклама"),
     BriefField("target_type", "Куда привлекаем"),
     # Секция 3 — аудитория.
     BriefField("audience_description", "Кого привлекаем"),
@@ -55,8 +53,7 @@ INDIVIDUAL_FIELDS: list[BriefField] = [
 ]
 
 # Порядок = порядок полей формы web/app/brief-community/page.tsx, то есть порядок
-# секций макета ИП (docs/BRIEF_FIELDS.md §1.2) с двумя отличиями:
-#   • добавлено «ID кабинета VK Реклама» (наше поле, см. выше);
+# секций макета ИП (docs/BRIEF_FIELDS.md §1.2) с одним отличием:
 #   • НЕТ поля «Реквизиты для счёта» — банковские данные не относятся ни к параметрам
 #     VK, ни к идентификации (BRIEF_SPEC §0), поэтому в бриф не собираются; их место —
 #     личный кабинет клиента (docs/ROADMAP.md, доработка кабинета).
@@ -74,7 +71,6 @@ COMMUNITY_FIELDS: list[BriefField] = [
     # Секция 2 — продукт и объект рекламы.
     BriefField("target_type", "Куда привлекаем"),
     BriefField("object_url", "Ссылка на объект продвижения"),
-    BriefField("vk_ad_cabinet_id", "ID кабинета VK Реклама"),
     BriefField("site_url", "Сайт"),
     BriefField("product_description", "Что продвигаем"),
     BriefField("avg_check", "Средний чек"),

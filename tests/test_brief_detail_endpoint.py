@@ -19,7 +19,6 @@ T = TypeVar("T")
 _PAYLOAD = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/id1",
-    "vk_ad_cabinet_id": "13410929",
     "email": "v@example.com",
     "phone": "+79990000000",
     "geo": "Самара",

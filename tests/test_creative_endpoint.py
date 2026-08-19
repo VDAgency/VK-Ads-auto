@@ -9,12 +9,17 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
+import services.ad_accounts as ad_accounts
 from config.settings import Settings
 from core.app import create_app
+from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, Brief, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
+from services.ad_accounts import add_account
+from services.vk_identity import VkIdentity
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +28,6 @@ T = TypeVar("T")
 _VALID = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/id1",
-    "vk_ad_cabinet_id": "13410929",
     "email": "v@example.com",
     "phone": "+79990000000",
     "audience_description": "молодёжь Самары",
@@ -34,13 +38,45 @@ _VALID = {
 }
 _IMAGE_B64 = base64.b64encode(b"\xff\xd8\xff\x00" * 100).decode("ascii")
 
+# Кабинет оператора для запуска (spec 2026-07-27 §9): токен и кабинет теперь только
+# из базы, поэтому тест заводит один активный кабинет с ключом шифрования ниже.
+TOKEN = "fake-access-token-for-tests-0000000000000000"
+_KEY = Fernet.generate_key().decode()
+IDENTITY = VkIdentity(
+    external_id="10000001",
+    username="a1b2c3d4e5@agency_client",
+    title="Кабинет «Пример»",
+    status="active",
+)
+
+
+def _settings(**overrides: object) -> Settings:
+    """Настройки с ключом шифрования кабинетов (без него не расшифровать токен из БД)."""
+    values: dict[str, object] = {"_env_file": None, "vk_ads_secret_key": SecretStr(_KEY)}
+    values.update(overrides)
+    return Settings(**values)  # type: ignore[arg-type]
+
 
 @pytest.fixture(autouse=True)
 def _stub_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Детерминизм: креативы во временный каталог, запуск — заглушка (без VK-токена)."""
-    settings = Settings(_env_file=None, creatives_dir=str(tmp_path))
+    """Детерминизм: креативы во временный каталог, запуск — заглушка (без vk_live_campaigns)."""
+    settings = _settings(creatives_dir=str(tmp_path))
     monkeypatch.setattr("services.creative_store.get_settings", lambda: settings)
     monkeypatch.setattr("services.launch_service.get_settings", lambda: settings)
+
+
+@pytest.fixture(autouse=True)
+def _mock_vk_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """VK всегда отвечает одной и той же личностью — кабинет в БД один и активен."""
+
+    async def identity(token: str, **_: object) -> VkIdentity:
+        return IDENTITY
+
+    async def balance(token: str, **_: object) -> str | None:
+        return None
+
+    monkeypatch.setattr(ad_accounts, "fetch_identity", identity)
+    monkeypatch.setattr(ad_accounts, "fetch_balance", balance)
 
 
 async def _with_client(scenario: Callable[[AsyncClient], Awaitable[T]], *, seed: bool = True) -> T:
@@ -60,6 +96,11 @@ async def _with_client(scenario: Callable[[AsyncClient], Awaitable[T]], *, seed:
                 Brief(id=1, account_id=1, client_id=1, variant="individual", payload=dict(_VALID))
             )
         await session.commit()
+        if seed:
+            # Единственный активный кабинет: запуск без явного `ad_account_id`
+            # резолвится в него (`resolve_default_account`).
+            await add_account(session, 1, TOKEN, settings=_settings())
+            await session.commit()
 
     async def _override() -> Any:
         async with maker() as session:

@@ -6,7 +6,15 @@ import asyncio
 from typing import Any
 
 import pytest
-from bot.api_client import BriefCard, BriefFieldItem, BriefNotFound, CoreUnavailable, InviteItem
+from bot.api_client import (
+    AdAccountItem,
+    BriefCard,
+    BriefFieldItem,
+    BriefNotFound,
+    CoreUnavailable,
+    CreativeResult,
+    InviteItem,
+)
 from bot.handlers import brief_card
 from bot.handlers.pending import _recent_buttons
 from bot.keyboards import brief_card_keyboard, recent_briefs_keyboard
@@ -232,3 +240,115 @@ def test_apply_edits_core_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert state.state is None
     assert any("недоступен" in text.lower() for text, _ in message.answers)
+
+
+# --- Запуск без креатива: выбор кабинета ----------------------------------------
+
+
+def _account(account_id: int, *, usable: bool = True, title: str = "Кабинет") -> AdAccountItem:
+    return AdAccountItem(
+        id=account_id,
+        title=title,
+        external_id=str(1000 + account_id),
+        username=None,
+        token_tail="abcd",
+        advertiser_kind="owner",
+        advertiser_name=None,
+        advertiser_inn=None,
+        status="active",
+        health="ok",
+        health_checked_at=None,
+        health_error=None,
+        balance_rub=None,
+        is_usable=usable,
+    )
+
+
+def test_launch_without_creative_single_cabinet_launches_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Один пригодный кабинет — выбирать не из чего, запускаем сразу им."""
+    captured: dict[str, Any] = {}
+
+    async def fake_accounts() -> list[AdAccountItem]:
+        return [_account(3)]
+
+    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        captured["brief_id"] = brief_id
+        captured["ad_account_id"] = ad_account_id
+        return CreativeResult(campaign_status="prepared", campaign_id=1, message="🚀 подготовлена")
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("launch:7")
+    asyncio.run(brief_card.launch_without_creative(callback))
+
+    assert captured["brief_id"] == 7
+    assert captured["ad_account_id"] == 3
+    assert any("подготовлена" in text for text, _ in callback.message.answers)
+    assert callback.answered
+
+
+def test_launch_without_creative_several_cabinets_shows_keyboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Несколько пригодных кабинетов — показываем выбор, запуск не трогаем."""
+
+    async def fake_accounts() -> list[AdAccountItem]:
+        return [_account(3, title="Первый"), _account(4, title="Второй")]
+
+    async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise AssertionError("launch_brief не должен вызываться до выбора кабинета")
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("launch:7")
+    asyncio.run(brief_card.launch_without_creative(callback))
+
+    text, markup = callback.message.answers[-1]
+    assert "кабинет" in text.lower()
+    assert markup is not None
+    datas = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "adacc:nocre:7:3" in datas
+    assert "adacc:nocre:7:4" in datas
+    assert callback.answered
+
+
+def test_launch_without_creative_zero_cabinets_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кабинетов нет вовсе — честный отказ вместо попытки запуска."""
+
+    async def fake_accounts() -> list[AdAccountItem]:
+        return []
+
+    async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise AssertionError("launch_brief не должен вызываться без единого кабинета")
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("launch:7")
+    asyncio.run(brief_card.launch_without_creative(callback))
+
+    assert any("не добавлено" in text for text, _ in callback.message.answers)
+    assert callback.answered
+
+
+def test_picked_cabinet_for_launch_uses_selected_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """После выбора кабинета из клавиатуры запуск идёт именно им."""
+    captured: dict[str, Any] = {}
+
+    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        captured["brief_id"] = brief_id
+        captured["ad_account_id"] = ad_account_id
+        return CreativeResult(campaign_status="prepared", campaign_id=2, message="🚀 подготовлена")
+
+    monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("adacc:nocre:7:4")
+    asyncio.run(brief_card.picked_cabinet_for_launch(callback))
+
+    assert captured == {"brief_id": 7, "ad_account_id": 4}
+    assert any("подготовлена" in text for text, _ in callback.message.answers)
+    assert callback.answered
