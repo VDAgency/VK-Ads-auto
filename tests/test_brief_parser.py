@@ -179,7 +179,6 @@ def _individual_raw() -> dict[str, str]:
         "telegram": "@ivanov",
         "email": "ivanov@example.com",
         "object_url": "https://vk.com/ivanov",
-        "vk_ad_cabinet_id": "13410929",
         "target_type": "🧑 Личная страница",
         "audience_description": "девушки 20-35, мода и красота",
         "gender": "Женский",
@@ -248,7 +247,6 @@ def _community_raw() -> dict[str, str]:
         "org_type": "ИП",
         "tax_id": "770700000000",
         "object_url": "https://vk.com/romashka",
-        "vk_ad_cabinet_id": "13410929",
         "site_url": "https://romashka.example",
         "product_description": "доставка букетов за 2 часа",
         "avg_check": "от 3000 до 8000 руб",
@@ -319,18 +317,22 @@ def test_email_and_phone_required() -> None:
     assert "phone" in exc.value.missing
 
 
-def test_vk_ad_cabinet_id_required() -> None:
-    # ID кабинета VK Реклама — обязателен в обоих вариантах (единый источник для kotbot).
+def test_brief_without_cabinet_id_is_accepted() -> None:
+    # Поле убрано из формы: кампании теперь запускаются в кабинете оператора из
+    # базы, а не в кабинете, который вводил клиент. Бриф без ключа разбирается.
     raw = _individual_raw()
-    raw["vk_ad_cabinet_id"] = ""
-    with pytest.raises(BriefValidationError) as exc:
-        parse_brief(raw, BriefVariant.INDIVIDUAL)
-    assert "vk_ad_cabinet_id" in exc.value.missing
+    assert "vk_ad_cabinet_id" not in raw
+    brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert brief.full_name == "Иванов Иван"
 
 
-def test_vk_ad_cabinet_id_parsed() -> None:
-    brief = parse_brief(_individual_raw(), BriefVariant.INDIVIDUAL)
-    assert brief.vk_ad_cabinet_id == "13410929"
+def test_legacy_brief_with_cabinet_id_still_parses() -> None:
+    # Обратная совместимость: в проде уже лежит 31 старый бриф с этим ключом.
+    # Парсер обязан их принимать — лишний ключ просто игнорируется.
+    raw = _individual_raw() | {"vk_ad_cabinet_id": "13410929"}
+    brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert brief.full_name == "Иванов Иван"
+    assert not hasattr(brief, "vk_ad_cabinet_id")
 
 
 def test_community_requires_niche_and_org_type() -> None:

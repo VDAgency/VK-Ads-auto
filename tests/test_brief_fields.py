@@ -32,7 +32,6 @@ def test_field_keys_match_web_form_names_individual() -> None:
         "email",
         "tax_id",
         "object_url",
-        "vk_ad_cabinet_id",
         "target_type",
         "audience_description",
         "gender",
@@ -62,7 +61,6 @@ def test_field_keys_match_web_form_names_community() -> None:
         "org_name",
         "target_type",
         "object_url",
-        "vk_ad_cabinet_id",
         "site_url",
         "product_description",
         "avg_check",
@@ -120,9 +118,9 @@ def test_numbered_covers_all_canonical_fields() -> None:
 
 def test_apply_edits_maps_number_to_key() -> None:
     payload = {"full_name": "Старое имя"}
-    new_payload, unknown = apply_edits(payload, "individual", {1: "Новое имя", 13: "Москва"})
+    new_payload, unknown = apply_edits(payload, "individual", {1: "Новое имя", 12: "Москва"})
     assert new_payload["full_name"] == "Новое имя"  # поле №1
-    assert new_payload["geo"] == "Москва"  # поле №13 в порядке секций макета
+    assert new_payload["geo"] == "Москва"  # поле №12 в порядке секций макета
     assert unknown == []
 
 

@@ -14,7 +14,9 @@ from typing import TypeVar
 import httpx
 import pytest
 import respx
+import services.ad_accounts as ad_accounts
 from config.settings import Settings
+from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, Brief, Cabinet, Client
 from db.repositories import (
@@ -26,7 +28,9 @@ from integrations.channels import Channel, ChannelConfig, ChannelRouter
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
+from pydantic import SecretStr
 from services import notifier
+from services.ad_accounts import add_account
 from services.launch_service import (
     _build_adapters,
     _build_router,
@@ -35,6 +39,7 @@ from services.launch_service import (
     stop_campaign,
 )
 from services.mapping import CampaignSpec
+from services.vk_identity import VkIdentity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -43,10 +48,21 @@ T = TypeVar("T")
 
 _KOTBOT_URL = "http://kotbot:8002"
 
+# Кабинет оператора, которым идёт запуск (spec 2026-07-27 §9): токен и внешний id
+# кампании берутся из базы, а не из окружения/брифа — тесты заводят ровно один
+# активный кабинет, чтобы `_resolve_ad_account` резолвил его по умолчанию.
+TOKEN = "fake-access-token-for-tests-0000000000000000"
+_KEY = Fernet.generate_key().decode()
+IDENTITY = VkIdentity(
+    external_id="10000001",
+    username="a1b2c3d4e5@agency_client",
+    title="Кабинет «Пример»",
+    status="active",
+)
+
 _VALID = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/id1",
-    "vk_ad_cabinet_id": "13410929",
     "email": "v@example.com",
     "phone": "+79990000000",
     "audience_description": "молодёжь Самары",
@@ -55,6 +71,20 @@ _VALID = {
     "term": "1 месяц",
     "target_type": "личная страница",
 }
+
+
+@pytest.fixture(autouse=True)
+def _mock_vk_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """VK всегда отвечает одной и той же личностью — кабинет в БД один и активен."""
+
+    async def identity(token: str, **_: object) -> VkIdentity:
+        return IDENTITY
+
+    async def balance(token: str, **_: object) -> str | None:
+        return None
+
+    monkeypatch.setattr(ad_accounts, "fetch_identity", identity)
+    monkeypatch.setattr(ad_accounts, "fetch_balance", balance)
 
 
 class _FakeLiveAdapter(PlatformAdapter):
@@ -97,15 +127,20 @@ def _router(adapter: PlatformAdapter) -> ChannelRouter:
     return ChannelRouter({Channel.VK_API: adapter}, ChannelConfig(default=Channel.VK_API))
 
 
-def _live_settings(**overrides: object) -> Settings:
-    """Настройки «боевой канал ожидается»: токен есть и создание кампаний разрешено."""
-    values: dict[str, object] = {
-        "_env_file": None,
-        "vk_ads_access_token": "tok",
-        "vk_live_campaigns": True,
-    }
+def _settings(**overrides: object) -> Settings:
+    """Настройки «канал по умолчанию — заглушка», с ключом шифрования кабинетов.
+
+    Ключ обязателен ровно потому, что кабинет теперь заводится в БД (`_with_db`):
+    без него `resolve_default_account`/`resolve_token` не расшифруют токен.
+    """
+    values: dict[str, object] = {"_env_file": None, "vk_ads_secret_key": SecretStr(_KEY)}
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
+
+
+def _live_settings(**overrides: object) -> Settings:
+    """Настройки «боевой канал ожидается»: создание кампаний разрешено."""
+    return _settings(vk_live_campaigns=True, **overrides)
 
 
 async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -124,6 +159,10 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
             Brief(id=1, account_id=1, client_id=1, variant="individual", payload=dict(_VALID))
         )
         await session.commit()
+        # Единственный активный кабинет оператора: запуск без явного `ad_account_id`
+        # резолвится в него (`resolve_default_account`).
+        await add_account(session, 1, TOKEN, settings=_settings())
+        await session.commit()
         result = await scenario(session)
     await engine.dispose()
     return result
@@ -133,24 +172,24 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
 
 
 def test_vk_channel_is_stub_without_token() -> None:
-    adapters = _build_adapters(Settings(_env_file=None))
+    adapters = _build_adapters(Settings(_env_file=None), SecretStr(""))
     assert isinstance(adapters[Channel.VK_API], StubAdapter)
 
 
 def test_vk_channel_is_stub_while_live_campaigns_disabled() -> None:
     # Токен есть, но боевое создание кампаний не разрешено → заглушка.
-    adapters = _build_adapters(Settings(_env_file=None, vk_ads_access_token="tok"))
+    adapters = _build_adapters(Settings(_env_file=None), SecretStr("tok"))
     assert isinstance(adapters[Channel.VK_API], StubAdapter)
 
 
 def test_vk_channel_is_live_with_token_and_flag() -> None:
-    adapters = _build_adapters(_live_settings())
+    adapters = _build_adapters(_live_settings(), SecretStr("tok"))
     assert isinstance(adapters[Channel.VK_API], VkApiAdapter)
 
 
 def test_kotbot_channel_only_when_base_url_set() -> None:
-    assert Channel.KOTBOT not in _build_adapters(Settings(_env_file=None))
-    adapters = _build_adapters(Settings(_env_file=None, kotbot_base_url=_KOTBOT_URL))
+    assert Channel.KOTBOT not in _build_adapters(Settings(_env_file=None), SecretStr(""))
+    adapters = _build_adapters(Settings(_env_file=None, kotbot_base_url=_KOTBOT_URL), SecretStr(""))
     assert isinstance(adapters[Channel.KOTBOT], KotbotAdapter)
 
 
@@ -171,7 +210,7 @@ def test_unknown_forced_channel_is_ignored() -> None:
 
 
 def test_stub_is_guaranteed_healthy_fallback() -> None:
-    router = _build_router(Settings(_env_file=None))
+    router = _build_router(Settings(_env_file=None), SecretStr(""))
     channel, adapter = asyncio.run(router.select())
     assert channel is Channel.VK_API
     assert isinstance(adapter, StubAdapter)
@@ -190,7 +229,7 @@ def test_launch_from_creative_prepares_campaign_and_persists() -> None:
             "/data/creatives/1/x.jpg",
             "Заголовок",
             "Текст",
-            settings=Settings(_env_file=None),  # без токена → заглушка
+            settings=_settings(),  # vk_live_campaigns выключен → заглушка
         )
         await session.commit()
         campaign = await get_latest_campaign_for_brief(session, 1, 1)
@@ -207,7 +246,7 @@ def test_launch_from_creative_prepares_campaign_and_persists() -> None:
 def test_launch_persists_spec_and_stub_external_id() -> None:
     async def scenario(session: AsyncSession) -> tuple[str, dict[str, object]]:
         await launch_from_creative(
-            session, 1, 1, "photo", "/x.jpg", None, None, settings=Settings(_env_file=None)
+            session, 1, 1, "photo", "/x.jpg", None, None, settings=_settings()
         )
         await session.commit()
         campaign = await get_latest_campaign_for_brief(session, 1, 1)
@@ -225,7 +264,7 @@ def test_launch_persists_spec_and_stub_external_id() -> None:
 def test_cabinet_row_is_created_and_linked_to_campaign() -> None:
     async def scenario(session: AsyncSession) -> tuple[int, str, int | None]:
         await launch_from_creative(
-            session, 1, 1, "photo", "/x.jpg", None, None, settings=Settings(_env_file=None)
+            session, 1, 1, "photo", "/x.jpg", None, None, settings=_settings()
         )
         await session.commit()
         cabinets = list((await session.execute(select(Cabinet))).scalars().all())
@@ -244,7 +283,7 @@ def test_second_launch_reuses_existing_cabinet() -> None:
         cabinet_ids: set[int | None] = set()
         for _ in range(2):
             await launch_from_creative(
-                session, 1, 1, "photo", "/x.jpg", None, None, settings=Settings(_env_file=None)
+                session, 1, 1, "photo", "/x.jpg", None, None, settings=_settings()
             )
             await session.commit()
             campaign = await get_latest_campaign_for_brief(session, 1, 1)
@@ -258,8 +297,12 @@ def test_second_launch_reuses_existing_cabinet() -> None:
     assert len(cabinet_ids) == 1
 
 
-def test_cabinet_from_brief_is_not_created_on_platform() -> None:
-    # В брифе указан существующий кабинет VK — боевой канал его не пересоздаёт.
+def test_cabinet_external_ref_comes_from_ad_account_not_brief() -> None:
+    """Внешний ref кабинета берётся у рекламного кабинета оператора, не у брифа.
+
+    Поле `vk_ad_cabinet_id` в брифе удалено (кампании идут в кабинет оператора из
+    базы): боевой канал в любом случае кабинет на площадке не пересоздаёт.
+    """
     adapter = _FakeLiveAdapter()
 
     async def scenario(session: AsyncSession) -> str:
@@ -279,7 +322,7 @@ def test_cabinet_from_brief_is_not_created_on_platform() -> None:
         return cabinet.external_ref or ""
 
     external_ref = asyncio.run(_with_db(scenario))
-    assert external_ref == "13410929"
+    assert external_ref == IDENTITY.external_id
     assert not any(call[0] == "create_cabinet" for call in adapter.calls)
 
 
@@ -399,7 +442,7 @@ def test_fallback_to_stub_warns_operator() -> None:
 
 def _kotbot_settings() -> Settings:
     """Настройки «канал kotbot включён»: боевой канал ожидается, автозапуск разрешён."""
-    return Settings(_env_file=None, kotbot_base_url=_KOTBOT_URL, vk_campaign_autostart=True)
+    return _settings(kotbot_base_url=_KOTBOT_URL, vk_campaign_autostart=True)
 
 
 async def _launch_with_kotbot(session: AsyncSession, action: httpx.Response) -> tuple[str, str]:
@@ -504,7 +547,7 @@ def test_stub_failure_is_not_swallowed() -> None:
             "/x.jpg",
             None,
             None,
-            settings=Settings(_env_file=None),
+            settings=_settings(),
             router=ChannelRouter(
                 {Channel.VK_API: _BrokenStub()}, ChannelConfig(default=Channel.VK_API)
             ),
@@ -549,12 +592,12 @@ def test_stop_campaign_sets_status_and_calls_adapter() -> None:
 def test_stop_campaign_returns_none_for_other_tenant() -> None:
     async def scenario(session: AsyncSession) -> object:
         await launch_from_creative(
-            session, 1, 1, "photo", "/x.jpg", None, None, settings=Settings(_env_file=None)
+            session, 1, 1, "photo", "/x.jpg", None, None, settings=_settings()
         )
         await session.commit()
         campaign = await get_latest_campaign_for_brief(session, 1, 1)
         assert campaign is not None
-        return await stop_campaign(session, 999, campaign.id, settings=Settings(_env_file=None))
+        return await stop_campaign(session, 999, campaign.id, settings=_settings())
 
     assert asyncio.run(_with_db(scenario)) is None
 
@@ -562,12 +605,12 @@ def test_stop_campaign_returns_none_for_other_tenant() -> None:
 def test_stop_campaign_of_stub_is_noop() -> None:
     async def scenario(session: AsyncSession) -> str:
         await launch_from_creative(
-            session, 1, 1, "photo", "/x.jpg", None, None, settings=Settings(_env_file=None)
+            session, 1, 1, "photo", "/x.jpg", None, None, settings=_settings()
         )
         await session.commit()
         campaign = await get_latest_campaign_for_brief(session, 1, 1)
         assert campaign is not None
-        stopped = await stop_campaign(session, 1, campaign.id, settings=Settings(_env_file=None))
+        stopped = await stop_campaign(session, 1, campaign.id, settings=_settings())
         await session.commit()
         assert stopped is not None
         return stopped.status

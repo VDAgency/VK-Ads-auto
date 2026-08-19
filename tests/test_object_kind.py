@@ -49,7 +49,6 @@ _RAW_PERSONAL = {
     "materials": "ничего нет, нужна помощь",
     "object_url": "https://vk.ru/fin_dolm",
     "target_type": "личная страница",
-    "vk_ad_cabinet_id": "1090721382",
     "audience_description": "Руководители бизнеса",
 }
 

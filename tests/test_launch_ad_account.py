@@ -20,16 +20,23 @@ import services.launch_service as launch_service
 from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
-from db.models import Account, Brief, Campaign, Client
+from db.models import Account, Brief, Cabinet, Campaign, Client
 from db.repositories import get_ad_account
 from pydantic import SecretStr
 from services.ad_accounts import (
     AccountNotFoundError,
+    AmbiguousAdAccountError,
+    NoAdAccountError,
     TokenUnavailableError,
     add_account,
     delete_account,
 )
-from services.launch_service import UnsupportedGoalError, launch_from_creative, stop_campaign
+from services.launch_service import (
+    CampaignStopError,
+    UnsupportedGoalError,
+    launch_from_creative,
+    stop_campaign,
+)
 from services.vk_identity import VkIdentity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -37,9 +44,11 @@ from sqlalchemy.pool import StaticPool
 T = TypeVar("T")
 
 TOKEN = "fake-access-token-for-tests-0000000000000000"
+TOKEN_2 = "fake-access-token-for-tests-0000000000000002"
 _KEY = Fernet.generate_key().decode()
 
 IDENTITY = VkIdentity("10000001", "a1b2c3d4e5@agency_client", "Студия «Пример»", "active")
+IDENTITY_2 = VkIdentity("10000002", "f6g7h8i9j0@agency_client", "Кабинет «Второй»", "active")
 
 BRIEF_PAYLOAD = {
     "full_name": "Вячеслав",
@@ -158,6 +167,18 @@ async def _add_cabinet(session: AsyncSession) -> int:
     return view.id
 
 
+async def _add_second_cabinet(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> int:
+    """Второй активный кабинет — с другим токеном и другой личностью VK."""
+
+    async def identity_2(token: str, **_: object) -> VkIdentity:
+        return IDENTITY_2
+
+    monkeypatch.setattr(ad_accounts, "fetch_identity", identity_2)
+    view = await add_account(session, 1, TOKEN_2, settings=_settings())
+    await session.commit()
+    return view.id
+
+
 async def _launch(
     session: AsyncSession,
     *,
@@ -195,13 +216,51 @@ def test_launch_uses_selected_cabinet_token(monkeypatch: pytest.MonkeyPatch) -> 
     asyncio.run(_with_db(scenario))
 
 
-def test_launch_without_selection_falls_back_to_env_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Пока кабинетов нет, запуск работает как раньше — без простоя (spec §8.4)."""
+def test_launch_without_selection_uses_the_only_active_cabinet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кабинет не выбран, но он единственный активный — запуск идёт его токеном.
+
+    `VK_ADS_ACCESS_TOKEN` для запуска больше не годится ни при каких условиях:
+    токен всегда приходит из строки `ad_account` в базе.
+    """
     monkeypatch.setattr(launch_service, "VkApiAdapter", FakeVkAdapter)
 
     async def scenario(session: AsyncSession) -> None:
-        await _launch(session, ad_account_id=None, settings=_settings(vk_live_campaigns=True))
-        assert RecordingAdapter.last_token == "env-token"
+        cabinet_id = await _add_cabinet(session)
+        outcome = await _launch(
+            session, ad_account_id=None, settings=_settings(vk_live_campaigns=True)
+        )
+        assert RecordingAdapter.last_token == TOKEN
+        assert RecordingAdapter.last_token != "env-token"
+        campaign = await session.get(Campaign, outcome.campaign_id)
+        assert campaign is not None
+        assert campaign.ad_account_id == cabinet_id
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_launch_without_selection_and_zero_cabinets_is_rejected() -> None:
+    """Кабинетов ещё нет вовсе — запускать нечем, а не тихо окружением (реальный баг)."""
+
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(NoAdAccountError):
+            await _launch(session, ad_account_id=None, settings=_settings())
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_launch_without_selection_and_two_cabinets_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кабинетов несколько, оператор не выбрал — угадывать за него нельзя."""
+    monkeypatch.setattr(launch_service, "VkApiAdapter", FakeVkAdapter)
+
+    async def scenario(session: AsyncSession) -> None:
+        await _add_cabinet(session)
+        await _add_second_cabinet(session, monkeypatch)
+        with pytest.raises(AmbiguousAdAccountError):
+            await _launch(session, ad_account_id=None, settings=_settings(vk_live_campaigns=True))
 
     asyncio.run(_with_db(scenario))
 
@@ -224,7 +283,11 @@ def test_campaign_remembers_its_cabinet(monkeypatch: pytest.MonkeyPatch) -> None
 def test_cabinet_ref_comes_from_ad_account_not_from_brief(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`vk_ad_cabinet_id` из брифа — про kotbot; на запуск он влиять не должен."""
+    """Внешний ref кабинета берётся у `AdAccount`, а не у поля брифа.
+
+    `vk_ad_cabinet_id` в брифе — историческое поле для kotbot; запасного пути
+    через него для запуска больше нет (`_resolve_cabinet` его не читает).
+    """
     monkeypatch.setattr(launch_service, "VkApiAdapter", FakeVkAdapter)
 
     async def scenario(session: AsyncSession) -> None:
@@ -403,24 +466,61 @@ def test_stop_uses_token_of_the_campaigns_cabinet(monkeypatch: pytest.MonkeyPatc
     asyncio.run(_with_db(scenario))
 
 
-def test_stop_of_legacy_campaign_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Кампании, созданные до мультикабинетности, останавливаются по токену из `.env`."""
+async def _legacy_live_campaign(session: AsyncSession) -> Campaign:
+    """Кампания «до мультикабинетности»: кабинет VK в БД есть, привязки к
+    `ad_account_id` — ещё нет (колонка появилась позже её создания)."""
+    cabinet = Cabinet(
+        account_id=1,
+        client_id=100,
+        channel="vk_api",
+        ad_object_url="https://vk.com/id1",
+        external_ref="10000001",
+    )
+    session.add(cabinet)
+    await session.flush()
+    campaign = Campaign(
+        account_id=1,
+        brief_id=500,
+        client_id=100,
+        cabinet_id=cabinet.id,
+        ad_account_id=None,
+        status="launched",
+        objective="socialengagement",
+        external_id="old-1",
+    )
+    session.add(campaign)
+    await session.commit()
+    return campaign
+
+
+def test_stop_of_legacy_campaign_uses_the_only_active_cabinet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кампания без `ad_account_id` останавливается токеном кабинета по умолчанию
+    (единственного активного) — токен из `.env` для этого больше не годится.
+    """
     monkeypatch.setattr(launch_service, "VkApiAdapter", FakeVkAdapter)
 
     async def scenario(session: AsyncSession) -> None:
-        campaign = Campaign(
-            account_id=1,
-            brief_id=500,
-            client_id=100,
-            ad_account_id=None,
-            status="launched",
-            objective="socialengagement",
-            external_id="old-1",
+        await _add_cabinet(session)
+        campaign = await _legacy_live_campaign(session)
+        RecordingAdapter.stopped_with = ""
+        stopped = await stop_campaign(
+            session, 1, campaign.id, settings=_settings(vk_live_campaigns=True)
         )
-        session.add(campaign)
-        await session.commit()
-        stopped = await stop_campaign(session, 1, campaign.id, settings=_settings())
         assert stopped is not None
         assert stopped.status == "stopped"
+        assert RecordingAdapter.stopped_with == TOKEN
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_stop_of_legacy_campaign_without_a_default_cabinet_fails_honestly() -> None:
+    """Ноль кабинетов — останавливать нечем; честная ошибка, а не тихий «успех»."""
+
+    async def scenario(session: AsyncSession) -> None:
+        campaign = await _legacy_live_campaign(session)
+        with pytest.raises(CampaignStopError):
+            await stop_campaign(session, 1, campaign.id, settings=_settings())
 
     asyncio.run(_with_db(scenario))

@@ -181,22 +181,6 @@ const ROWS: BriefRow[] = [
   },
   {
     kind: "input",
-    name: "vk_ad_cabinet_id",
-    maxLength: 12,
-    pattern: "[0-9]{4,12}",
-    label: "ID кабинета VK Реклама",
-    hint: "Номер вашего рекламного кабинета. Без него запустить кампанию не получится",
-    inputMode: "numeric",
-    placeholder: "например, 13410929",
-    required: true,
-    error: "Укажите ID кабинета VK Реклама",
-    link: {
-      href: "/instrukciya-vk-cabinet.html",
-      text: "Как создать кабинет и найти ID — инструкция",
-    },
-  },
-  {
-    kind: "input",
     name: "site_url",
     maxLength: 300,
     label: "Ссылка на сайт (если есть)",

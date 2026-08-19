@@ -75,6 +75,14 @@ class TokenUnavailableError(AdAccountError):
     """У кабинета нет пригодного токена (архивный или ключ шифрования сменился)."""
 
 
+class NoAdAccountError(AdAccountError):
+    """Нет ни одного активного рекламного кабинета."""
+
+
+class AmbiguousAdAccountError(AdAccountError):
+    """Кабинетов несколько, а оператор не выбрал ни одного."""
+
+
 @dataclass(frozen=True, slots=True)
 class AdAccountView:
     """Кабинет, каким его можно показывать наружу. Токена здесь нет и быть не может."""
@@ -300,6 +308,27 @@ async def resolve_token(
         raise TokenUnavailableError(f"cannot decrypt token of ad account {ad_account_id}") from exc
 
 
+async def resolve_default_account(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    settings: Settings | None = None,
+) -> tuple[AdAccountView, SecretStr]:
+    """Кабинет по умолчанию и его токен: единственный активный, иначе явная ошибка.
+
+    Health-check намеренно не обновляем (`refresh_stale=False`): запуск кампании не
+    должен ждать похода в VK, а протухший статус здесь ничего не решает.
+    """
+    cfg = settings or get_settings()
+    views = await list_accounts(session, account_id, refresh_stale=False, settings=cfg)
+    if not views:
+        raise NoAdAccountError("no active ad accounts")
+    if len(views) > 1:
+        raise AmbiguousAdAccountError(f"{len(views)} active ad accounts, none chosen")
+    view = views[0]
+    return view, await resolve_token(session, account_id, view.id, settings=cfg)
+
+
 async def mark_unauthorized(
     session: AsyncSession, account_id: int, ad_account_id: int, reason: str
 ) -> None:
@@ -365,7 +394,9 @@ __all__ = [
     "AccountNotFoundError",
     "AdAccountError",
     "AdAccountView",
+    "AmbiguousAdAccountError",
     "DuplicateAccountError",
+    "NoAdAccountError",
     "TokenUnavailableError",
     "add_account",
     "check_health",
@@ -373,6 +404,7 @@ __all__ = [
     "get_account",
     "list_accounts",
     "mark_unauthorized",
+    "resolve_default_account",
     "resolve_token",
     "seed_from_env",
 ]

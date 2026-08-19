@@ -37,12 +37,20 @@ router.message.filter(OperatorOnly())
 router.callback_query.filter(OperatorOnly())
 
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
+# Инструкция для клиента, у которого ещё нет своего кабинета VK Рекламы: ID кабинета
+# больше не спрашивают в брифе, но страница осталась — оператор пересылает ссылку
+# вручную. Абсолютная ссылка обычным текстом, без markdown-обёртки: чтобы её можно
+# было переслать клиенту прямо из чата.
+_SETUP_INSTRUCTION_LINE = (
+    "Как создать кабинет VK и найти его ID: https://vk-ads-auto.ru/instrukciya-vk-cabinet.html"
+)
 _EMPTY = (
     "💼 <b>Рекламные кабинеты</b>\n\n"
     "Пока ни одного кабинета не добавлено.\n\n"
     "Кабинет нужен, чтобы запускать в нём кампании. Добавьте его — понадобится "
     "только <b>access_token</b> из VK Рекламы: название и номер кабинета "
-    "подтянутся сами."
+    "подтянутся сами.\n\n"
+    f"{_SETUP_INSTRUCTION_LINE}"
 )
 _ASK_KIND = (
     "Чью рекламу будете размещать в этом кабинете?\n\n"
@@ -104,7 +112,7 @@ def _render(items: list[AdAccountItem]) -> str:
     if not items:
         return _EMPTY
     body = "\n\n".join(_account_line(item, i) for i, item in enumerate(items, start=1))
-    return f"💼 <b>Рекламные кабинеты</b>\n\n{body}"
+    return f"💼 <b>Рекламные кабинеты</b>\n\n{body}\n\n{_SETUP_INSTRUCTION_LINE}"
 
 
 def _pick_items(items: list[AdAccountItem]) -> list[tuple[int, str]]:

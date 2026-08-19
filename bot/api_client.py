@@ -49,6 +49,19 @@ class CreativeRejected(RuntimeError):
         self.reason = reason
 
 
+class CabinetChoiceRequired(RuntimeError):
+    """Ядро не смогло само выбрать кабинет для запуска без креатива (409).
+
+    `reason` — код ядра: `no_ad_account` (кабинетов нет вовсе) или
+    `ambiguous_ad_account` (их несколько — угадывать нельзя). Хендлер сам решает,
+    каким текстом ответить оператору по этому коду.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class CampaignNotFound(RuntimeError):
     """Ядро не нашло кампанию (404) — показать оператору «кампания не найдена»."""
 
@@ -380,17 +393,20 @@ async def upload_creative(
     )
 
 
-async def launch_brief(brief_id: int) -> CreativeResult:
+async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
     """`POST /briefs/{id}/launch`: запустить кампанию без креатива.
 
-    Для площадок, где объявлением служит сам объект (пост, клип, трек). Ошибки
-    разбираются так же, как у загрузки креатива: 404 → `BriefNotFound`,
-    422 → `CreativeRejected`, сеть/5xx → `CoreUnavailable`.
+    Для площадок, где объявлением служит сам объект (пост, клип, трек).
+    `ad_account_id` — кабинет, который оператор уже выбрал (см.
+    `bot/handlers/brief_card.py`); без него ядро пробует кабинет по умолчанию.
+
+    404 → `BriefNotFound`; 422 → `CreativeRejected`; 409 → `CabinetChoiceRequired`
+    (ядро не смогло само выбрать кабинет); сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
     try:
         async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
-            response = await client.post(url, json={})
+            response = await client.post(url, json={"ad_account_id": ad_account_id})
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
     if response.status_code == 404:
@@ -400,6 +416,11 @@ async def launch_brief(brief_id: int) -> CreativeResult:
         with contextlib.suppress(ValueError):
             detail = response.json().get("detail")
         raise CreativeRejected(_creative_reject_reason(detail))
+    if response.status_code == 409:
+        detail = ""
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", ""))
+        raise CabinetChoiceRequired(detail)
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()

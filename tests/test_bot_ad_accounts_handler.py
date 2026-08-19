@@ -151,6 +151,21 @@ def test_dead_cabinet_shows_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "выпустите новый" in message.answers[0]
 
 
+def test_empty_list_shows_setup_instruction_link(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оператор пересылает клиенту ссылку на инструкцию по созданию кабинета вручную."""
+    _stub_list(monkeypatch, [])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    assert "vk-ads-auto.ru/instrukciya-vk-cabinet.html" in message.answers[0]
+
+
+def test_list_with_items_shows_setup_instruction_link(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_list(monkeypatch, [_item()])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    assert "vk-ads-auto.ru/instrukciya-vk-cabinet.html" in message.answers[0]
+
+
 def test_core_down_shows_friendly_message(monkeypatch: pytest.MonkeyPatch) -> None:
     async def broken() -> list[AdAccountItem]:
         raise CoreUnavailable("down")

@@ -23,7 +23,12 @@ from db.repositories import (
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from services.ad_accounts import AccountNotFoundError, TokenUnavailableError
+from services.ad_accounts import (
+    AccountNotFoundError,
+    AmbiguousAdAccountError,
+    NoAdAccountError,
+    TokenUnavailableError,
+)
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import apply_brief_edits, get_brief_card
 from services.contact import ContactParseError, detect_contact
@@ -268,6 +273,10 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except NoAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="no_ad_account") from exc
+    except AmbiguousAdAccountError as exc:
+        raise HTTPException(status_code=409, detail="ambiguous_ad_account") from exc
     except AccountNotFoundError as exc:
         raise HTTPException(status_code=404, detail="ad_account_not_found") from exc
     except (TokenUnavailableError, NotConfiguredError) as exc:

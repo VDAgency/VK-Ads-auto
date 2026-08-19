@@ -9,10 +9,15 @@
 
 Адаптер берём тем же способом, что и остановка кампании
 (`launch_service.adapter_for_channel` по каналу кабинета), — ядро по-прежнему не
-знает про конкретные площадки (CLAUDE.md §1.3).
+знает про конкретные площадки (CLAUDE.md §1.3). Токен — кабинета САМОЙ кампании
+(`launch_service.campaign_vk_token`), а не из окружения: при нескольких
+кабинетах общий токен подставил бы чужой доступ.
 
 Ошибка по одной кампании не роняет синк остальных: она попадает в сводку как
-`error` и уходит в лог. Коммит — на вызывающем.
+`error` и уходит в лог. Кампания без определённого кабинета (легаси без своего
+`ad_account_id` при отсутствии или неоднозначности кабинета по умолчанию)
+попадает в сводку как `skipped` — синкать её нечем токеном, но это не повод
+ронять остальные. Коммит — на вызывающем.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from services.launch_service import (
     MODERATION_MARKERS,
     adapter_for_channel,
     campaign_channel,
+    resolve_channel_vk_token,
 )
 from services.stats import fetch_campaign_stats
 
@@ -82,6 +88,42 @@ async def _sync_one(
         await set_campaign_status(session, account_id, campaign.id, status)
 
 
+async def _adapter_for_campaign(
+    session: AsyncSession,
+    account_id: int,
+    campaign: Campaign,
+    channel_name: str,
+    settings: Settings,
+    overrides: Mapping[str, PlatformAdapter],
+    cache: dict[tuple[str, int | None], PlatformAdapter],
+) -> PlatformAdapter | None:
+    """Адаптер для одной кампании: подмена теста → кэш → сборка токеном её кабинета.
+
+    Кэш ключуется парой (канал, `ad_account_id`), а не одним каналом: у одного
+    канала (`vk_api`) разные кабинеты живут на разных токенах, общий кэш по
+    имени канала подсунул бы чужой доступ соседней кампании.
+
+    `None` — кабинет VK-кампании нельзя определить однозначно (см.
+    `resolve_channel_vk_token`): синкать её нечем токеном.
+    """
+    override = overrides.get(channel_name)
+    if override is not None:
+        return override
+
+    cache_key = (channel_name, campaign.ad_account_id)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    vk_token = await resolve_channel_vk_token(session, account_id, campaign, channel_name, settings)
+    if vk_token is None:
+        return None
+
+    adapter = adapter_for_channel(settings, channel_name, vk_token)
+    cache[cache_key] = adapter
+    return adapter
+
+
 async def sync_campaign_stats(
     session: AsyncSession,
     account_id: int,
@@ -91,22 +133,25 @@ async def sync_campaign_stats(
 ) -> dict[int, str]:
     """Синхронизировать метрики и статусы активных кампаний тенанта.
 
-    Возвращает сводку `{campaign_id: "ok" | "error"}`. `adapters` — подмена
-    «канал → адаптер» (тесты и ручные прогоны); по умолчанию адаптеры собираются
-    по настройкам, как при остановке кампании.
+    Возвращает сводку `{campaign_id: "ok" | "error" | "skipped"}`. `adapters` —
+    подмена «канал → адаптер» по имени канала (тесты и ручные прогоны); по
+    умолчанию адаптер собирается токеном кабинета САМОЙ кампании — так же, как
+    при остановке (`launch_service.stop_campaign`), а не общим токеном канала.
     """
     cfg = settings or get_settings()
     overrides = dict(adapters or {})
-    cache: dict[str, PlatformAdapter] = {}
+    cache: dict[tuple[str, int | None], PlatformAdapter] = {}
     summary: dict[int, str] = {}
 
     for campaign in await list_active_campaigns(session, account_id):
         try:
             channel_name = await campaign_channel(session, account_id, campaign)
-            adapter = overrides.get(channel_name) or cache.get(channel_name)
+            adapter = await _adapter_for_campaign(
+                session, account_id, campaign, channel_name, cfg, overrides, cache
+            )
             if adapter is None:
-                adapter = adapter_for_channel(cfg, channel_name)
-                cache[channel_name] = adapter
+                summary[campaign.id] = "skipped"
+                continue
             await _sync_one(session, account_id, campaign, adapter)
             summary[campaign.id] = "ok"
         except Exception:  # noqa: BLE001 — одна кампания не должна ронять синк остальных

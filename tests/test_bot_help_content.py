@@ -160,3 +160,14 @@ def test_support_contact_is_set_and_reachable() -> None:
 def test_demo_data_is_flagged_honestly() -> None:
     """Демо-статистика помечена: обещать боевые цифры нельзя (CLAUDE.md §7)."""
     assert "демо-данные" in _all_text().lower()
+
+
+def test_cabinets_section_has_setup_instruction_link() -> None:
+    """ID кабинета из брифа убрали, но страница-инструкция осталась: оператор
+
+    пересылает её клиенту вручную — ссылка должна быть под рукой в разделе.
+    """
+    section = help_content.find_section("cabinets")
+    assert section is not None
+    body = " ".join(page.body for page in section.pages)
+    assert "vk-ads-auto.ru/instrukciya-vk-cabinet.html" in body
