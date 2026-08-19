@@ -38,7 +38,7 @@ class Operator(TenantMixin, Base):
 class IntegrationConfig(TenantMixin, Base):
     """Per-account конфиг интеграций: канал по умолчанию и состояние health-check.
 
-    Сами секреты (ключи VK/бот/Google/Senler) живут в окружении/секретах, а не в
+    Сами секреты (ключи VK/бот/Senler) живут в окружении/секретах, а не в
     этой таблице — здесь только привязанные к тенанту параметры выбора канала.
     """
 
