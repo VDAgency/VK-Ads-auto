@@ -104,6 +104,7 @@ BIDDING_FIXED = "fixed"
 GOAL_SUBSCRIPTION = "subscription"
 GOAL_ENGAGEMENT = "engagement"
 GOAL_LEADS = "leads"
+GOAL_MESSAGES = "messages"
 
 _DURATION_RE = re.compile(r"_(\d+)s$")
 
@@ -540,6 +541,46 @@ LEAD_FORMS = Surface(
     ),
 )
 
+# --- Сообщения сообществу (пакет 3127) ----------------------------------------------
+# Требование договора (ТЗ §3): «Сообщения — объект „Сообщество", цель „Написать
+# сообщение"». Пакет найден только по заметке в docs/VK_API_REFERENCE.md: живая
+# разведка 2026-08 показала, что 3127 — это `_contact`, сосед пакета сообщества 3122
+# (`_join`) из той же линейки `or_tt_crossdevice_community_vk_ocpm_socialengagement_*`.
+# Дальше документация не идёт: `objective`, кнопка и шаблоны объявления ниже —
+# ДОГАДКА по аналогии с `VK_COMMUNITY` (те же id шаблонов), а не результат боевого
+# запроса. Раз пакет соседний, шанс совпадения высокий, но `bad_value: At least one
+# pattern must be in package's settings` от VK — ожидаемый и безопасный исход, если
+# id всё же не те: он ничего не создаст, просто честно откажет.
+# ⚠️ verified=False: боевого создания кампании не было. Живая проверка — по чек-листу
+# в docs/VK_API_REFERENCE.md, раздел «Как проверить площадку «Сообщения» вживую» —
+# именно там шаблоны и предстоит подтвердить или поправить.
+VK_MESSAGES = Surface(
+    kind="messages",
+    title="Сообщения сообществу ВКонтакте",
+    # Тот же объект, что у VK_COMMUNITY: ссылка на сообщество, а не на диалог.
+    hint="ссылка на сообщество: vk.com/club… или короткий адрес",
+    package_id=3127,
+    objective="socialengagement",
+    default_cta="message",
+    goal=GOAL_MESSAGES,
+    patterns=_patterns(
+        CTA_COMMUNITY,
+        TEXT_LONG,
+        {
+            529: "image_600x600",
+            400: "image_1080x607",
+            525: "image_607x1080",
+            339: "image_4_5",
+            530: "video_square_300s",
+            401: "video_landscape_300s",
+            527: "video_portrait_9_16_180s",
+            145: "video_portrait_9_16_30s",
+            338: "video_portrait_4_5_180s",
+            150: "video_portrait_4_5_30s",
+        },
+    ),
+)
+
 SURFACES: tuple[Surface, ...] = (
     VK_COMMUNITY,
     VK_PERSONAL,
@@ -555,6 +596,7 @@ SURFACES: tuple[Surface, ...] = (
     VK_MUSIC,
     VK_CLIP,
     LEAD_FORMS,
+    VK_MESSAGES,
 )
 
 _BY_KIND: dict[str, Surface] = {surface.kind: surface for surface in SURFACES}

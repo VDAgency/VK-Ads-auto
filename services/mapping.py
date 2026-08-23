@@ -2,9 +2,11 @@
 
 Без ИИ: правила маппинга `ParsedBrief` → нейтральная `CampaignSpec`. Спека —
 промежуточное представление, которое `VkApiAdapter` переводит в тело VK Ads API
-(objective `socialengagement`, `targetings`, бюджет). Преобразование гео-текста в
-числовые region id и подбор `package_id` — на стороне адаптера (живой API,
-см. docs/VK_API_REFERENCE.md). Сейчас поддержана единственная цель — подписчики.
+(`targetings`, бюджет). Преобразование гео-текста в числовые region id и подбор
+`package_id`/реального VK objective — на стороне адаптера по площадке
+(`integrations.vk_api.campaign_objective`, живой API, см. docs/VK_API_REFERENCE.md):
+поле `objective` здесь — неопределённое значение по умолчанию, адаптер его правит.
+Поддержаны две цели — подписчики и заявки через лид-форму (`services.brief_parser.Goal`).
 """
 
 from __future__ import annotations
@@ -35,6 +37,31 @@ OBJECT_KIND_LEAD_FORM = TargetType.LEAD_FORM.value
 
 _VK_AGE_MIN = 14
 _VK_AGE_MAX = 75
+
+# Цели, для которых раскладка уже реализована, и заголовок кампании под каждую —
+# чтобы кампания на заявки не называлась «Подписчики · …» (вводит в заблуждение).
+_SUPPORTED_GOALS = (Goal.SUBSCRIBERS, Goal.LEAD_FORM)
+_GOAL_NAME_PREFIX: dict[Goal, str] = {
+    Goal.SUBSCRIBERS: "Подписчики",
+    Goal.LEAD_FORM: "Заявки",
+}
+
+
+class UnsupportedBriefGoalError(Exception):
+    """Цель брифа (`ParsedBrief.goal`) не поддержана раскладкой в `CampaignSpec`.
+
+    Сейчас это только `Goal.MESSAGES`: площадка «Сообщения» заведена в перечисление
+    (`services.brief_parser.Goal`), но не прошла боевую проверку и клиенту не
+    предлагается — однако бриф с ней всё равно можно прислать напрямую в API, минуя
+    веб-форму. `services.launch_service.launch_from_creative` ловит эту ошибку и
+    транслирует в свой `UnsupportedGoalError`, чтобы роутеры и бот отвечали честным
+    422, а не 500 с трассировкой (не путать с `UnsupportedGoalError`: тот — про
+    параметр `goal`, который оператор передаёт явно при запуске).
+    """
+
+    def __init__(self, goal: Goal) -> None:
+        self.goal = goal
+        super().__init__(f"Unsupported goal: {goal}")
 
 
 @dataclass(frozen=True)
@@ -75,12 +102,12 @@ def _sex(gender: Gender) -> list[str]:
 
 
 def build_campaign_spec(brief: ParsedBrief) -> CampaignSpec:
-    """Разложить разобранный бриф в спецификацию кампании на подписчиков."""
-    if brief.goal is not Goal.SUBSCRIBERS:  # pragma: no cover - единственная цель MVP
-        raise ValueError(f"Unsupported goal: {brief.goal}")
+    """Разложить разобранный бриф в спецификацию кампании (подписчики или лид-форма)."""
+    if brief.goal not in _SUPPORTED_GOALS:
+        raise UnsupportedBriefGoalError(brief.goal)
 
     audience = brief.audience
-    name = f"Подписчики · {brief.full_name}".strip()
+    name = f"{_GOAL_NAME_PREFIX[brief.goal]} · {brief.full_name}".strip()
     return CampaignSpec(
         objective=SOCIAL_ENGAGEMENT,
         name=name,

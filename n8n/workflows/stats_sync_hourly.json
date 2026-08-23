@@ -1,0 +1,72 @@
+{
+  "name": "Stats Sync (hourly)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Синхронизация статистики кампаний\n\nРаз в час дёргает `POST /api/v1/stats/sync` у ядра — по внутреннему имени сервиса `api` в сети docker-compose, снаружи этот путь закрыт на ingress (infra/Caddyfile). Ядро обходит активные кампании, опрашивает площадку и пишет срез метрик/статусов в БД (docs/N8N.md, docs/DEPLOY.md).\n\nКредов не требует: эндпоинт не авторизован намеренно (изоляция на уровне сети), see core/api/v1/stats.py.\n\nЧастота — раз в час: чаще упирается в лимиты площадки и даёт метрикам мало времени накопиться, реже — статистика в кабинете оператора заметно устаревает в течение дня.",
+        "height": 260,
+        "width": 380
+      },
+      "id": "8f7f4b2a-2c1e-4b7a-9b2e-1a2b3c4d5e60",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-160, 60]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "1c3d5e7f-9a1b-4c3d-8e5f-2b4d6f8a0c1e",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/v1/stats/sync",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "2d4e6f80-ab12-4c3d-9e5f-3c5d7f9a1b2f",
+      "name": "Sync campaign stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [460, 300]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Sync campaign stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "stats-sync-hourly",
+  "tags": []
+}

@@ -389,19 +389,38 @@ async def aggregate_cabinet_stats(
     *,
     since: datetime | None = None,
 ) -> dict[str, float]:
-    """Суммарные метрики кабинета (кампании) с момента `since` (или за всё время).
+    """Метрики кабинета: последний срез по каждой кампании, сложенные между собой.
+
+    `integrations/vk_api.py::get_stats` запрашивает у VK сводку БЕЗ дат — площадка
+    отдаёт НАКОПИТЕЛЬНЫЙ итог с начала кампании, а не дельту за период. Суммировать
+    все сохранённые срезы значит задваивать историю при каждом повторном синке
+    (дефект задачи 2 — обновление при входе оператора удваивало бы метрики). Поэтому
+    берём САМЫЙ СВЕЖИЙ срез по каждому `campaign_id` в выборке (через `ROW_NUMBER`,
+    без риска задвоить при точном совпадении `captured_at`) и складываем уже эти
+    срезы между собой — сегодня кабинет это одна кампания, но агрегатор готов к
+    кабинету из нескольких кампаний без переписывания.
 
     Возвращает нули, если срезов нет — вызывающий решает, показывать ли мок.
     """
     conditions = [Stat.account_id == account_id, Stat.campaign_id == campaign_id]
     if since is not None:
         conditions.append(Stat.captured_at >= since)
+    rank = (
+        func.row_number()
+        .over(partition_by=Stat.campaign_id, order_by=Stat.captured_at.desc())
+        .label("rank")
+    )
+    latest = (
+        select(Stat.shows, Stat.clicks, Stat.spent, Stat.results, rank)
+        .where(*conditions)
+        .subquery()
+    )
     stmt = select(
-        func.coalesce(func.sum(Stat.shows), 0.0),
-        func.coalesce(func.sum(Stat.clicks), 0.0),
-        func.coalesce(func.sum(Stat.spent), 0.0),
-        func.coalesce(func.sum(Stat.results), 0.0),
-    ).where(*conditions)
+        func.coalesce(func.sum(latest.c.shows), 0.0),
+        func.coalesce(func.sum(latest.c.clicks), 0.0),
+        func.coalesce(func.sum(latest.c.spent), 0.0),
+        func.coalesce(func.sum(latest.c.results), 0.0),
+    ).where(latest.c.rank == 1)
     row = (await session.execute(stmt)).one()
     return {
         "shows": float(row[0]),

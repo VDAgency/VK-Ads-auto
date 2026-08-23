@@ -1,8 +1,6 @@
 import asyncio
 
 from integrations.adapter import PlatformAdapter
-from services.brief_parser import Goal
-from services.goals import objective_for
 from services.launch import LaunchResult, daily_budget_rub, launch_confirmation, run_campaign
 from services.mapping import CampaignSpec
 
@@ -33,10 +31,6 @@ class _RecordingAdapter(PlatformAdapter):
 
 
 SPEC = CampaignSpec(objective="socialengagement", name="n", object_url="u", geo_raw="Москва")
-
-
-def test_objective_for_subscribers() -> None:
-    assert objective_for(Goal.SUBSCRIBERS) == "socialengagement"
 
 
 def test_run_campaign_creates_and_launches() -> None:

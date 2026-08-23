@@ -5,7 +5,11 @@
 `ParsedBrief`. Ответ приходит из нашей веб-формы через `POST /api/v1/briefs`,
 раскладка в параметры VK — `services/mapping.py` (Фаза 4).
 
-Скоуп сужен: единственная поддерживаемая цель — «подписчики» (`Goal.SUBSCRIBERS`).
+Цель кампании (`Goal`) не спрашивается отдельным полем — она выводится из
+выбранной клиентом площадки (`target_type`) функцией `services.goals.goal_for_target_type`:
+площадка «лид-форма» ведёт к `Goal.LEAD_FORM`, площадка «сообщения» — к `Goal.MESSAGES`
+(площадка непроверена, `integrations.vk_surfaces.VK_MESSAGES.verified=False`, поэтому
+клиенту не предлагается), все остальные — к `Goal.SUBSCRIBERS`.
 """
 
 from __future__ import annotations
@@ -24,9 +28,21 @@ class BriefVariant(Enum):
 
 
 class Goal(Enum):
-    """Цель кампании. По сужению скоупа поддерживаются только подписчики."""
+    """Цель кампании. Выводится из площадки брифа (`services.goals.goal_for_target_type`).
+
+    Реализованы и запускаются две: подписчики (на любую из площадок подписки) и
+    заявки через лид-форму. `MESSAGES` заведена в перечисление, но площадка под ней
+    (`integrations.vk_surfaces.VK_MESSAGES`) не прошла боевую проверку
+    (`verified=False`) — клиенту она не предлагается, а `services.mapping.build_campaign_spec`
+    отклонит её отдельным `services.mapping.UnsupportedBriefGoalError`, если всё же
+    дойдёт (роутер и бот в ответ отвечают честным 422, а не 500). Senler в перечисление
+    вообще не заведена — оператор выбирает её только на уровне бота/веба, до брифа
+    она не доходит.
+    """
 
     SUBSCRIBERS = "subscribers"
+    LEAD_FORM = "lead_form"
+    MESSAGES = "messages"
 
 
 class Gender(Enum):
@@ -54,13 +70,16 @@ class TargetType(Enum):
     OK_COMMUNITY = "ok_community"
     OK_PROFILE = "ok_profile"
     DZEN_CHANNEL = "dzen_channel"
-    # Смежные цели: продвижение готового объекта и сбор заявок.
+    # Смежные цели: продвижение готового объекта, сбор заявок и сообщения сообществу.
     VK_POST_COMMUNITY = "vk_post_community"
     VK_POST_PERSONAL = "vk_post_personal"
     VK_POST_PROMOTED = "vk_post_promoted"
     VK_MUSIC = "vk_music"
     VK_CLIP = "vk_clip"
     LEAD_FORM = "lead_form"
+    # Непроверенная площадка (integrations.vk_surfaces.VK_MESSAGES.verified=False) —
+    # клиенту не предлагается, до брифа доходит только если оператор впишет её вручную.
+    MESSAGES = "messages"
 
 
 class OrgType(Enum):
@@ -237,6 +256,12 @@ def parse_target_type(value: str) -> TargetType:
     # сообщество, и «лид-форма» не имеет отношения к площадкам подписки.
     if "лид" in text or "форма" in text or "заявк" in text:
         return TargetType.LEAD_FORM
+    # «Сообщени…» (написать сообщение) — самостоятельная смежная цель, а не опечатка
+    # в слове «сообщество» (буквосочетания не пересекаются, порядок проверки неважен).
+    # Площадка непроверена (verified=False) — клиент её не выбирает, до брифа она
+    # доходит, только если оператор впишет формулировку вручную.
+    if "сообщени" in text:
+        return TargetType.MESSAGES
     if "клип" in text:
         return TargetType.VK_CLIP
     if "музык" in text or "трек" in text:
@@ -330,6 +355,10 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
     `raw` — отображение «внутренний id поля -> строковое значение» (как ячейка формы).
     `variant` определяет набор обязательных полей и наличие бизнес-секции.
     """
+    # Локальный импорт: `services.goals` сам импортирует `Goal`/`TargetType` отсюда
+    # же, импорт наверху файла закольцевал бы модули друг на друга.
+    from services.goals import goal_for_target_type
+
     missing = _collect_missing(raw, variant)
     if missing:
         raise BriefValidationError(missing)
@@ -379,7 +408,7 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
 
     return ParsedBrief(
         variant=variant,
-        goal=Goal.SUBSCRIBERS,
+        goal=goal_for_target_type(target_type),
         full_name=get("full_name"),
         object_url=get("object_url"),
         target_type=target_type,

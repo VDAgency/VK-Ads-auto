@@ -343,7 +343,24 @@ def test_unimplemented_goal_is_rejected() -> None:
 
     async def scenario(session: AsyncSession) -> None:
         with pytest.raises(UnsupportedGoalError):
-            await _launch(session, ad_account_id=None, settings=_settings(), goal="lead_form")
+            await _launch(session, ad_account_id=None, settings=_settings(), goal="senler")
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_lead_form_goal_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Лид-форма доведена до боевого запуска — цель больше не отклоняется."""
+    monkeypatch.setattr(launch_service, "VkApiAdapter", FakeVkAdapter)
+
+    async def scenario(session: AsyncSession) -> None:
+        cabinet_id = await _add_cabinet(session)
+        outcome = await _launch(
+            session,
+            ad_account_id=cabinet_id,
+            settings=_settings(vk_live_campaigns=True),
+            goal="lead_form",
+        )
+        assert outcome.campaign_id > 0
 
     asyncio.run(_with_db(scenario))
 

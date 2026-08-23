@@ -54,7 +54,7 @@ from services.ad_accounts import (
 )
 from services.brief_parser import BriefVariant, parse_brief
 from services.launch import LaunchResult, daily_budget_rub, run_campaign
-from services.mapping import CampaignSpec, build_campaign_spec
+from services.mapping import CampaignSpec, UnsupportedBriefGoalError, build_campaign_spec
 from services.notifier import notify_operator
 from services.secret_box import NotConfiguredError
 
@@ -68,11 +68,15 @@ STUB_CHANNEL = "stub"
 MODERATION_MARKERS = ("moder", "pending")
 
 
-# Цели рекламы, до которых доведена логика запуска. Остальные три из договора
-# (сообщения, лид-форма, Senler) появятся здесь по мере реализации — в боте и
-# вебе они уже показываются как «скоро» и физически не выбираются.
+# Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» здесь — только
+# на уровне кода: сама площадка (integrations.vk_surfaces.VK_MESSAGES) не прошла
+# боевую проверку, поэтому в боте и вебе цель всё равно показывается как «скоро»
+# и физически не выбирается (services.goals.subscription_targets().available).
+# Senler в этот список ещё не заведена вовсе.
 SUBSCRIBERS_GOAL = "subscribers"
-SUPPORTED_GOALS = (SUBSCRIBERS_GOAL,)
+LEAD_FORM_GOAL = "lead_form"
+MESSAGES_GOAL = "messages"
+SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL)
 
 
 class BriefNotFoundError(Exception):
@@ -341,11 +345,16 @@ async def launch_from_creative(
     умолчанию (единственный активный, `resolve_default_account`); токен из
     окружения для запуска больше не используется.
 
-    `goal` — цель рекламы. Сегодня реализована одна («подписчики»); неизвестное
-    значение отклоняется, чтобы кампания не ушла с чужой целью.
+    `goal` — цель рекламы, которую явно выбрал оператор (кнопка в боте); неизвестное
+    значение отклоняется, чтобы кампания не ушла с чужой целью. Отдельно от этого
+    параметра цель может прийти из самого брифа (`ParsedBrief.goal`, площадка
+    `target_type`) — «Сообщения» реализованы в перечислении, но раскладка
+    (`services.mapping.build_campaign_spec`) их ещё не поддерживает; такой бриф
+    отклоняется тем же `UnsupportedGoalError`, что и неизвестный параметр `goal`.
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
-    (из `parse_brief`), `UnsupportedGoalError` и ошибки выбора кабинета
+    (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
+    ИЛИ неподдержанная цель самого брифа) и ошибки выбора кабинета
     (`AccountNotFoundError`, `TokenUnavailableError`, `NoAdAccountError`,
     `AmbiguousAdAccountError`).
     """
@@ -360,7 +369,13 @@ async def launch_from_creative(
     ad_account, vk_token = await _resolve_ad_account(session, account_id, ad_account_id, cfg)
 
     parsed = parse_brief(brief.payload, BriefVariant(brief.variant))
-    spec = build_campaign_spec(parsed)
+    try:
+        spec = build_campaign_spec(parsed)
+    except UnsupportedBriefGoalError as exc:
+        # Транслируем в тот же тип, что и неподдержанный параметр `goal` (`_validate_goal`
+        # выше): роутерам и боту достаточно ловить один `UnsupportedGoalError`, чтобы
+        # честно ответить 422 вместо утечки 500 в VK.
+        raise UnsupportedGoalError(exc.goal.value) from exc
 
     # Продвижение готового поста обходится без креатива: объявлением служит сам пост,
     # и требовать от оператора картинку было бы выдумкой на пустом месте.

@@ -46,6 +46,7 @@ def test_brief_parses_every_surface_wording() -> None:
         "канал MAX": TargetType.MAX_CHANNEL,
         "сообщество в Одноклассниках": TargetType.OK_COMMUNITY,
         "профиль в Одноклассниках": TargetType.OK_PROFILE,
+        "написать сообщение": TargetType.MESSAGES,
     }
     for text, expected in cases.items():
         assert parse_target_type(text) is expected, text
@@ -67,7 +68,7 @@ def test_subscription_targets_expose_all_surfaces_to_interfaces() -> None:
     assert len(targets) == len(SURFACES)
     # Непроверенные показываем, но выбрать не даём — список остаётся честным.
     unverified = [t.kind for t in targets if not t.available]
-    assert unverified == ["vk_clip"], unverified
+    assert unverified == ["vk_clip", "messages"], unverified
     assert target_title("newsletter") == "Рассылка ВКонтакте"
     assert target_title("нет такой") == "нет такой"
 
@@ -268,8 +269,9 @@ def test_lead_form_sends_every_required_text(tmp_path) -> None:  # type: ignore[
     assert len(textblocks["title_30_additional"]["text"]) <= 30
 
 
-def test_only_the_clip_is_unverified() -> None:
-    # Всё остальное прошло боевое создание; клип ждёт настоящей ссылки.
+def test_only_the_clip_and_messages_are_unverified() -> None:
+    # Всё остальное прошло боевое создание; клип ждёт настоящей ссылки, а
+    # «сообщения» — живой проверки пакета 3127 (docs/VK_API_REFERENCE.md).
     from integrations.vk_surfaces import SURFACES
 
-    assert [s.kind for s in SURFACES if not s.verified] == ["vk_clip"]
+    assert [s.kind for s in SURFACES if not s.verified] == ["vk_clip", "messages"]

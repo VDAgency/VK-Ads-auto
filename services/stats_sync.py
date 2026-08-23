@@ -18,12 +18,16 @@
 `ad_account_id` при отсутствии или неоднозначности кабинета по умолчанию)
 попадает в сводку как `skipped` — синкать её нечем токеном, но это не повод
 ронять остальные. Коммит — на вызывающем.
+
+`sync_cabinet_stats` (задача 2, дефект 1) — та же логика, но по ОДНОМУ кабинету
+(`campaign.external_id`): используется входом оператора в кабинет в боте, чтобы
+не гонять синк по всем активным кампаниям тенанта ради одного просмотра.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from config.settings import Settings, get_settings
 from db.models import Campaign
@@ -124,6 +128,38 @@ async def _adapter_for_campaign(
     return adapter
 
 
+async def _sync_campaigns(
+    session: AsyncSession,
+    account_id: int,
+    campaigns: Sequence[Campaign],
+    cfg: Settings,
+    overrides: Mapping[str, PlatformAdapter],
+) -> dict[int, str]:
+    """Общий цикл «метрики → срез, статус → БД» по уже отобранному списку кампаний.
+
+    Переиспользуется `sync_campaign_stats` (весь тенант) и `sync_cabinet_stats`
+    (один кабинет) — отличается только то, какие кампании в него попадают.
+    """
+    cache: dict[tuple[str, int | None], PlatformAdapter] = {}
+    summary: dict[int, str] = {}
+
+    for campaign in campaigns:
+        try:
+            channel_name = await campaign_channel(session, account_id, campaign)
+            adapter = await _adapter_for_campaign(
+                session, account_id, campaign, channel_name, cfg, overrides, cache
+            )
+            if adapter is None:
+                summary[campaign.id] = "skipped"
+                continue
+            await _sync_one(session, account_id, campaign, adapter)
+            summary[campaign.id] = "ok"
+        except Exception:  # noqa: BLE001 — одна кампания не должна ронять синк остальных
+            logger.exception("stats sync failed for campaign %s", campaign.id)
+            summary[campaign.id] = "error"
+    return summary
+
+
 async def sync_campaign_stats(
     session: AsyncSession,
     account_id: int,
@@ -140,21 +176,31 @@ async def sync_campaign_stats(
     """
     cfg = settings or get_settings()
     overrides = dict(adapters or {})
-    cache: dict[tuple[str, int | None], PlatformAdapter] = {}
-    summary: dict[int, str] = {}
+    campaigns = await list_active_campaigns(session, account_id)
+    return await _sync_campaigns(session, account_id, campaigns, cfg, overrides)
 
-    for campaign in await list_active_campaigns(session, account_id):
-        try:
-            channel_name = await campaign_channel(session, account_id, campaign)
-            adapter = await _adapter_for_campaign(
-                session, account_id, campaign, channel_name, cfg, overrides, cache
-            )
-            if adapter is None:
-                summary[campaign.id] = "skipped"
-                continue
-            await _sync_one(session, account_id, campaign, adapter)
-            summary[campaign.id] = "ok"
-        except Exception:  # noqa: BLE001 — одна кампания не должна ронять синк остальных
-            logger.exception("stats sync failed for campaign %s", campaign.id)
-            summary[campaign.id] = "error"
-    return summary
+
+async def sync_cabinet_stats(
+    session: AsyncSession,
+    account_id: int,
+    cabinet_id: str,
+    *,
+    settings: Settings | None = None,
+    adapters: Mapping[str, PlatformAdapter] | None = None,
+) -> dict[int, str]:
+    """Синхронизировать метрики и статус кампаний ОДНОГО кабинета (задача 2, дефект 1).
+
+    «Кабинет» здесь — то же, чем оперирует `services.cabinet_stats`: внешний id
+    кампании (`Campaign.external_id`, см. `db.repositories.list_stat_campaign_ids`).
+    Используется входом оператора в кабинет в боте — обновить метрики ИМЕННО этого
+    кабинета перед показом, не трогая остальные активные кампании тенанта.
+
+    Возвращает пустую сводку, если среди активных кампаний нет ни одной с таким
+    `external_id` — честно нечего синкать, это не ошибка.
+    """
+    cfg = settings or get_settings()
+    overrides = dict(adapters or {})
+    campaigns = [
+        c for c in await list_active_campaigns(session, account_id) if c.external_id == cabinet_id
+    ]
+    return await _sync_campaigns(session, account_id, campaigns, cfg, overrides)

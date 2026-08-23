@@ -1,8 +1,8 @@
 """Статистика рекламных кабинетов (команда №4) с мок-гейтом (§6–§7 spec 2026-07-15).
 
-Живых данных VK пока нет (адаптер — скелет, боевые вызовы заблокированы статусом ИП).
-Модель `Stat` есть, но пустая. Поэтому: реальные агрегаты, если они есть; иначе, пока
-мок-гейт открыт, — детерминированные демо-кабинеты и метрики (флаг `is_mock=True`).
+Реальные агрегаты, если они есть; иначе, только пока мок-гейт ЯВНО открыт флагом
+`MOCK_STATS_ENABLED` (задача 2, дефект 2), — детерминированные демо-кабинеты и
+метрики (флаг `is_mock=True`). Без флага — честное «данных пока нет», не выдумка.
 Моки не пишутся в БД (§7): синтез на лету, seed по account_id для стабильности.
 """
 
@@ -58,6 +58,10 @@ class StatsView:
     def cpc(self) -> float:
         return round(self.spent / self.clicks, 2) if self.clicks else 0.0
 
+    @property
+    def cpl(self) -> float:
+        return round(self.spent / self.results, 2) if self.results else 0.0
+
 
 # --- Детерминированные моки (стабильны в пределах account_id) ---------------
 
@@ -99,6 +103,7 @@ async def _gate_open(
         clients_count=clients,
         mock_until=settings.mock_until,
         mock_max_clients=settings.mock_max_clients,
+        mock_stats_enabled=settings.mock_stats_enabled,
         now=now,
     )
 
