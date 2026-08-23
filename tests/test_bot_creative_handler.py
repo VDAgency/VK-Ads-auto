@@ -216,3 +216,13 @@ def test_cancel_creative_clears(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert state.state is None
     assert any("Отменено" in text for text, _ in callback.message.answers)
+
+
+def test_lead_form_goal_is_marked_available() -> None:
+    """Логика запуска лид-формы боевая — кнопка больше не должна быть «серой»."""
+    goals_by_code = {code: enabled for code, _, enabled in creative.GOALS}
+    assert goals_by_code["lead_form"] is True
+    assert goals_by_code["subscribers"] is True
+    # Остальные цели пока не реализованы и обязаны оставаться недоступными.
+    assert goals_by_code["messages"] is False
+    assert goals_by_code["senler"] is False

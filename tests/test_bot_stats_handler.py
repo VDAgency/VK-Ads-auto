@@ -1,4 +1,9 @@
-"""Тесты хендлера `/stats` (PR-C): список, вход в кабинет, переключение периода."""
+"""Тесты хендлера `/stats` (PR-C + задача 2): список, вход в кабинет, период.
+
+Задача 2: вход в кабинет синкает метрики перед показом (дефект 1, честная пометка
+при сбое синка — экран всё равно показывается по данным из базы), CPL печатается
+рядом с CPC/CTR (дефект 3).
+"""
 
 from __future__ import annotations
 
@@ -40,12 +45,25 @@ def _stats(cid: str, is_mock: bool, period: str = "all") -> CabinetStats:
         period=period,
         shows=1000,
         clicks=50,
-        spent=100,
-        results=6,
+        spent=250,
+        results=10,
         ctr=5.0,
-        cpc=2.0,
+        cpc=5.0,
+        cpl=25.0,
         is_mock=is_mock,
     )
+
+
+def _stub_sync(monkeypatch: pytest.MonkeyPatch, *, ok: bool = True) -> list[str]:
+    """Подменить синк кабинета перед показом; вернуть список id, которыми его вызвали."""
+    calls: list[str] = []
+
+    async def fake(cabinet_id: str) -> bool:
+        calls.append(cabinet_id)
+        return ok
+
+    monkeypatch.setattr("bot.api_client.sync_cabinet_stats", fake)
+    return calls
 
 
 def test_list_shows_mock_banner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,6 +105,7 @@ def test_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_open_cabinet_renders_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
+    _stub_sync(monkeypatch)
 
     async def fake(cabinet_id: str, period: str) -> CabinetStats:
         captured["id"] = cabinet_id
@@ -107,6 +126,7 @@ def test_open_cabinet_renders_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_switch_period_uses_requested(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
+    _stub_sync(monkeypatch)
 
     async def fake(cabinet_id: str, period: str) -> CabinetStats:
         captured["period"] = period
@@ -129,3 +149,88 @@ def test_core_unavailable_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(stats.show_stats(message))
 
     assert "временно недоступен" in message.answers[0][0]
+
+
+# --- дефект 3: CPL рядом с CPC/CTR --------------------------------------------------
+
+
+def test_open_cabinet_shows_cpl(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_sync(monkeypatch)
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("cabinet:camp-1")
+    asyncio.run(stats.open_cabinet(callback))
+
+    text, _ = callback.message.answers[0]
+    assert "CPL: 25.0" in text
+
+
+# --- дефект 1: вход в кабинет обновляет метрики перед показом -----------------------
+
+
+def test_open_cabinet_syncs_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_sync(monkeypatch)
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        # На момент чтения синк того же кабинета уже должен был случиться.
+        assert calls == [cabinet_id]
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("cabinet:camp-1")
+    asyncio.run(stats.open_cabinet(callback))
+
+    assert calls == ["camp-1"]
+
+
+def test_switch_period_also_syncs_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_sync(monkeypatch)
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("stats:camp-1:week")
+    asyncio.run(stats.switch_period(callback))
+
+    assert calls == ["camp-1"]
+
+
+def test_sync_failure_still_renders_saved_data_with_honest_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Синк не удался — экран всё равно показывается по данным из БД, с пометкой."""
+    _stub_sync(monkeypatch, ok=False)
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("cabinet:camp-1")
+    asyncio.run(stats.open_cabinet(callback))
+
+    text, _ = callback.message.answers[0]
+    assert "Показы: 1000" in text  # данные из БД всё равно показаны
+    assert "не удалось обновить" in text.lower()
+
+
+def test_sync_success_has_no_honest_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_sync(monkeypatch, ok=True)
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("cabinet:camp-1")
+    asyncio.run(stats.open_cabinet(callback))
+
+    text, _ = callback.message.answers[0]
+    assert "не удалось обновить" not in text.lower()

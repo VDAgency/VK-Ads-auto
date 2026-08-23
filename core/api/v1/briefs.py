@@ -265,6 +265,8 @@ async def launch_brief(
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
+    except UnsupportedGoalError as exc:
+        raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

@@ -150,6 +150,11 @@ def test_target_type_personal_and_community() -> None:
     assert parse_target_type("👥 Сообщество / группа") is TargetType.COMMUNITY
 
 
+def test_target_type_lead_form() -> None:
+    assert parse_target_type("📋 Лид-форма ВКонтакте") is TargetType.LEAD_FORM
+    assert parse_target_type("заявки — лид-форма") is TargetType.LEAD_FORM
+
+
 def test_org_type_variants() -> None:
     assert parse_org_type("ИП") is OrgType.SOLE_TRADER
     assert parse_org_type("Самозанятый") is OrgType.SELF_EMPLOYED
@@ -231,6 +236,21 @@ def test_individual_keeps_tax_id() -> None:
     raw = _individual_raw() | {"tax_id": "770700000000"}
     brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
     assert brief.tax_id == "770700000000"
+
+
+def test_individual_personal_page_brief_still_gets_subscribers_goal() -> None:
+    """Регресс: цель по умолчанию не связана с лид-формой — только площадка её меняет."""
+    brief = parse_brief(_individual_raw(), BriefVariant.INDIVIDUAL)
+    assert brief.target_type is TargetType.PERSONAL_PAGE
+    assert brief.goal is Goal.SUBSCRIBERS
+
+
+def test_individual_lead_form_brief_gets_lead_form_goal() -> None:
+    """Площадка «лид-форма» обязана вывести цель `Goal.LEAD_FORM`, а не «подписчиков»."""
+    raw = _individual_raw() | {"target_type": "📋 Лид-форма ВКонтакте"}
+    brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert brief.target_type is TargetType.LEAD_FORM
+    assert brief.goal is Goal.LEAD_FORM
 
 
 # --- parse_brief: вариант ИП/сообщество -------------------------------------

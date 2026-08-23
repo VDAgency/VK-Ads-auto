@@ -194,6 +194,7 @@ class CabinetStats:
     results: float
     ctr: float
     cpc: float
+    cpl: float
     is_mock: bool
 
 
@@ -331,7 +332,7 @@ def _creative_reject_reason(detail: Any) -> str:
                 + ". Внесите правки и повторите."
             )
     if detail == "goal_not_supported":
-        return "Эта цель рекламы ещё не реализована. Пока доступны «Подписчики»."
+        return "Эта цель рекламы ещё не реализована. Доступны «Подписчики» и «Заявки — лид-форма»."
     return "Креатив не принят. Проверьте файл и текст."
 
 
@@ -467,6 +468,27 @@ async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
     """Метрики кабинета за период (`all`/`month`/`week`)."""
     payload = await _get(f"/cabinets/{cabinet_id}/stats", {"period": period})
     return CabinetStats(**payload)
+
+
+async def sync_cabinet_stats(cabinet_id: str) -> bool:
+    """`POST /cabinets/{id}/stats/sync`: обновить метрики кабинета перед показом.
+
+    Не поднимает `CoreUnavailable`: синк — необязательный шаг перед чтением
+    (задача 2, дефект 1). Сбой синка (сеть, ошибка площадки) не должен ронять
+    весь экран статистики — хендлер сам решает, как честно об этом сказать
+    оператору, а данные всё равно читаются из БД отдельным вызовом.
+    `True` — синк прошёл без ошибок ядра по всем кампаниям кабинета.
+    """
+    url = f"{_base_url()}/api/v1/cabinets/{cabinet_id}/stats/sync"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url)
+    except (httpx.HTTPError, httpx.TransportError):
+        return False
+    if response.status_code >= 400:
+        return False
+    payload: dict[str, Any] = response.json()
+    return bool(payload.get("ok", False))
 
 
 # Создание инвайта включает доставку (userbot до 15с / SMTP до 20с) — таймаут

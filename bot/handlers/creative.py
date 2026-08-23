@@ -51,12 +51,15 @@ _NO_LIVE_CABINETS = (
 )
 
 # Цели рекламы: (код, подпись, реализована ли). Нереализованные показываем
-# «серыми» — оператор видит план, но выбрать не может, а ядро всё равно
-# отклонит такую цель (services/launch_service.SUPPORTED_GOALS).
+# «серыми» — оператор видит план, но выбрать не может: кнопка ведёт на «goal:soon»,
+# а не на реальный код цели. «Сообщения» отклоняются не валидатором ядра (тот их
+# уже принимает, services/launch_service.SUPPORTED_GOALS), а тем, что площадка под
+# них не прошла боевую проверку (integrations.vk_surfaces.VK_MESSAGES.verified=False) —
+# заблокировано здесь.
 GOALS: list[tuple[str, str, bool]] = [
     ("subscribers", "👥 Подписчики", True),
     ("messages", "✉️ Сообщения в сообщество", False),
-    ("lead_form", "📝 Заявки — лид-форма", False),
+    ("lead_form", "📝 Заявки — лид-форма", True),
     ("senler", "🤖 Заявка через Senler", False),
 ]
 
@@ -144,7 +147,8 @@ async def picked_cabinet(callback: CallbackQuery, state: FSMContext) -> None:
 async def goal_not_ready(callback: CallbackQuery) -> None:
     """Цель ещё не реализована — говорим честно, вместо подмены на «подписчиков»."""
     await callback.answer(
-        "Эта цель ещё не реализована. Сейчас доступны «Подписчики».", show_alert=True
+        "Эта цель ещё не реализована. Сейчас доступны «Подписчики» и «Заявки — лид-форма».",
+        show_alert=True,
     )
 
 

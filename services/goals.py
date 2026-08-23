@@ -1,8 +1,10 @@
 """Профили целей кампании и площадок подписки.
 
-На MVP активна одна цель — подписчики (`socialengagement`). Остальные цели
-(сообщения, лид-форма, заявка через Senler) заложены в перечисление, но в
-текущем объёме не запускаются (см. docs/ROADMAP.md, границы скоупа).
+Запускаются две цели — подписчики (`socialengagement`) и заявки через лид-форму.
+«Сообщения» заведены до площадки (`integrations.vk_surfaces.VK_MESSAGES`), но она
+не прошла боевую проверку (`verified=False`) — механизм ниже сам не даёт выбрать
+непроверенную площадку. Заявка через Senler в справочник площадок вообще не заведена
+(см. docs/ROADMAP.md, границы скоупа).
 
 Зато сама цель «подписчики» ведёт не в одно место: подписаться можно на сообщество,
 личную страницу, рассылку, канал VK, канал MAX и на два объекта в Одноклассниках.
@@ -17,24 +19,29 @@ from dataclasses import dataclass
 from integrations.vk_surfaces import (
     GOAL_ENGAGEMENT,
     GOAL_LEADS,
+    GOAL_MESSAGES,
     GOAL_SUBSCRIPTION,
     SURFACES,
 )
 
 from services.brief_parser import Goal, TargetType
 
-# Соответствие цели → VK objective. Сейчас поддержана только цель «подписчики».
-GOAL_OBJECTIVE: dict[Goal, str] = {
-    Goal.SUBSCRIBERS: "socialengagement",
-}
 
+def goal_for_target_type(target_type: TargetType) -> Goal:
+    """Цель кампании по площадке брифа — единственное место, где решается это правило.
 
-def objective_for(goal: Goal) -> str:
-    """VK objective для цели. Бросает `ValueError`, если цель не поддержана."""
-    try:
-        return GOAL_OBJECTIVE[goal]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported goal: {goal}") from exc
+    Площадка «лид-форма» ведёт к сбору заявок, «сообщения» — к `Goal.MESSAGES`
+    (площадка непроверена — см. `subscription_targets().available` — поэтому клиенту
+    не предлагается, но правило само по себе верно на будущее); все остальные площадки
+    (включая смежные цели вовлечения — пост, музыка, клип) работают через цель
+    «подписчики». `services.brief_parser.parse_brief` вызывает эту функцию вместо
+    того, чтобы решать самому: правило не должно размазываться по модулям.
+    """
+    if target_type is TargetType.LEAD_FORM:
+        return Goal.LEAD_FORM
+    if target_type is TargetType.MESSAGES:
+        return Goal.MESSAGES
+    return Goal.SUBSCRIBERS
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,7 @@ def goal_titles() -> dict[str, str]:
         GOAL_SUBSCRIPTION: "Подписчики",
         GOAL_ENGAGEMENT: "Вовлечение в готовый объект",
         GOAL_LEADS: "Заявки через лид-форму",
+        GOAL_MESSAGES: "Сообщения сообществу",
     }
 
 

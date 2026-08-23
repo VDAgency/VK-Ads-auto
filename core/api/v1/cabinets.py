@@ -1,7 +1,12 @@
 """Внутренний API статистики кабинетов (`/api/v1/cabinets`).
 
-Тонкий роутер: список кабинетов и метрики по периоду. Мок-гейт и агрегаты — в
-сервисе `cabinet_stats`. Скоуп — единственный тенант (см. briefs.py).
+Тонкий роутер: список кабинетов, метрики по периоду и явный синк по кабинету.
+Мок-гейт и агрегаты — в сервисе `cabinet_stats`. Скоуп — единственный тенант
+(см. briefs.py).
+
+`POST /{id}/stats/sync` (задача 2, дефект 1) — GET не должен мутировать данные,
+поэтому обновление метрик перед показом вынесено в отдельный явный эндпоинт; бот
+дёргает его при входе в кабинет, до чтения `GET /{id}/stats`.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from db.session import get_session
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from services.cabinet_stats import cabinet_stats, list_cabinets
+from services.stats_sync import sync_cabinet_stats
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/cabinets", tags=["cabinets"])
@@ -41,7 +47,17 @@ class StatsOut(BaseModel):
     results: float
     ctr: float
     cpc: float
+    cpl: float
     is_mock: bool
+
+
+class CabinetSyncOut(BaseModel):
+    """Итог синка метрик ОДНОГО кабинета: успех и построчная сводка по кампаниям."""
+
+    ok: bool
+    synced: int
+    failed: int
+    results: dict[int, str]
 
 
 @router.get("")
@@ -70,7 +86,11 @@ async def get_cabinet_stats(
     session: Annotated[AsyncSession, Depends(get_session)],
     period: Annotated[Literal["all", "month", "week"], Query()] = "all",
 ) -> StatsOut:
-    """Метрики кабинета за период (`all`/`month`/`week`) + производные."""
+    """Метрики кабинета за период (`all`/`month`/`week`) + производные.
+
+    Только чтение сохранённых данных — не мутирует БД (обновление — отдельный
+    `POST /{cabinet_id}/stats/sync`, см. ниже).
+    """
     view = await cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id, period)
     return StatsOut(
         cabinet_id=view.cabinet_id,
@@ -81,5 +101,29 @@ async def get_cabinet_stats(
         results=view.results,
         ctr=view.ctr,
         cpc=view.cpc,
+        cpl=view.cpl,
         is_mock=view.is_mock,
+    )
+
+
+@router.post("/{cabinet_id}/stats/sync")
+async def sync_cabinet(
+    cabinet_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CabinetSyncOut:
+    """Обновить метрики и статус кампаний ЭТОГО кабинета перед показом (дефект 1).
+
+    Синк по кампании никогда не бросает исключение наружу (см.
+    `services.stats_sync`): сбой площадки попадает в `results` как `error`, а
+    `ok=False` — честная сводка вместо 5xx, чтобы бот показал сохранённые данные
+    с пометкой о сбое, а не уронил экран статистики.
+    """
+    results = await sync_cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id)
+    await session.commit()
+    failed = sum(1 for outcome in results.values() if outcome != "ok")
+    return CabinetSyncOut(
+        ok=failed == 0,
+        synced=len(results) - failed,
+        failed=failed,
+        results=results,
     )

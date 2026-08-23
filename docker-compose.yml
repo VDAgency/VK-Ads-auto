@@ -110,6 +110,34 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Автоматическое резервное копирование БД (Договор, Приложение №1, п.2.4).
+  # Раз в сутки ночью по МСК (00:00 UTC = 03:00 МСК — фиксированное смещение,
+  # Россия не переходит на летнее время) снимает pg_dump и хранит
+  # BACKUP_KEEP_DAYS последних копий в ОТДЕЛЬНОМ томе pgbackups — не в pgdata,
+  # иначе потеря тома БД унесла бы с собой и все бэкапы разом. Подробности,
+  # ротация и процедура восстановления — docs/DEPLOY.md, раздел
+  # «Резервное копирование и восстановление».
+  backup:
+    build:
+      context: .
+      dockerfile: infra/backup/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Те же реквизиты, что у сервиса postgres, но в стандартных для libpq
+      # именах — pg_dump читает их сам, без пароля в аргументах команды.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-0}
+      BACKUP_MINUTE_UTC: ${BACKUP_MINUTE_UTC:-0}
+    volumes:
+      - pgbackups:/backups
+    depends_on:
+      - postgres
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -122,7 +150,13 @@ services:
     environment:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
     ports:
-      - "5678:5678"
+      # ТОЛЬКО loopback, как у api (см. комментарий выше). Веб-интерфейс n8n
+      # даёт доступ к воркфлоу и (пока не введены креды) к настройкам
+      # интеграций — публикация на всех интерфейсах открыла бы его всему
+      # интернету без пароля по умолчанию. Наш код и воркфлоу ходят к n8n
+      # внутри compose-сети (http://n8n:5678); полноценный внешний доступ —
+      # через поддомен и Caddy после DNS-записи (docs/N8N.md).
+      - "127.0.0.1:5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
 
@@ -141,6 +175,9 @@ services:
 
 volumes:
   pgdata:
+  # Отдельный том под дампы БД (сервис backup) — намеренно не тот же том, что
+  # pgdata: потеря/пересоздание тома с данными не должно уносить и бэкапы.
+  pgbackups:
   redisdata:
   n8n_data:
   caddy_data:

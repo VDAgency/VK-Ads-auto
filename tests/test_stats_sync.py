@@ -24,7 +24,7 @@ from db.models import Account, Brief, Cabinet, Campaign, Client, Stat
 from integrations.adapter import PlatformAdapter
 from pydantic import SecretStr
 from services.ad_accounts import add_account
-from services.stats_sync import sync_campaign_stats
+from services.stats_sync import sync_cabinet_stats, sync_campaign_stats
 from services.vk_identity import VkIdentity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -532,3 +532,75 @@ def test_sync_skips_campaign_when_default_cabinet_is_ambiguous(
         return await sync_campaign_stats(session, 1, settings=cfg)
 
     assert asyncio.run(_with_db(scenario)) == {1: "skipped"}
+
+
+# --- дефект 1: синк ОДНОГО кабинета (вход в кабинет в боте), не всех активных ------
+
+
+def test_sync_cabinet_stats_only_syncs_the_matching_campaign() -> None:
+    """Два кабинета (две кампании) в тенанте — синк одного не должен трогать другой."""
+    vk = _FakeAdapter(stats={"shows": 10.0})
+    kotbot = _FakeAdapter(stats={"shows": 20.0})
+
+    async def scenario(session: AsyncSession) -> tuple[dict[int, str], list[str]]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1))
+        session.add(_campaign(2, external_id="kot-1", cabinet_id=2))
+        await session.commit()
+        summary = await sync_cabinet_stats(
+            session, 1, "vk-1", settings=_settings(), adapters={"vk_api": vk, "kotbot": kotbot}
+        )
+        await session.commit()
+        return summary, vk.stats_calls
+
+    summary, vk_calls = asyncio.run(_with_db(scenario))
+    assert summary == {1: "ok"}
+    assert vk_calls == ["vk-1"]
+    assert kotbot.stats_calls == []  # другой кабинет синк не тронул
+
+
+def test_sync_cabinet_stats_returns_empty_for_unknown_cabinet() -> None:
+    """Кабинета с таким внешним id среди активных кампаний нет — честный пустой синк."""
+    adapter = _FakeAdapter()
+
+    async def scenario(session: AsyncSession) -> dict[int, str]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1))
+        await session.commit()
+        return await sync_cabinet_stats(
+            session, 1, "does-not-exist", settings=_settings(), adapters={"vk_api": adapter}
+        )
+
+    assert asyncio.run(_with_db(scenario)) == {}
+    assert adapter.stats_calls == []
+
+
+def test_sync_cabinet_stats_saves_stat_row() -> None:
+    """Синк по кабинету реально сохраняет срез, а не только считает summary."""
+    adapter = _FakeAdapter(stats={"shows": 100.0, "clicks": 5.0, "spent": 250.0, "goals": 10.0})
+
+    async def scenario(session: AsyncSession) -> list[Stat]:
+        session.add(_campaign(1, external_id="ext-1", cabinet_id=1))
+        await session.commit()
+        await sync_cabinet_stats(
+            session, 1, "ext-1", settings=_settings(), adapters={"vk_api": adapter}
+        )
+        await session.commit()
+        return list((await session.execute(select(Stat))).scalars().all())
+
+    stats = asyncio.run(_with_db(scenario))
+    assert len(stats) == 1
+    assert stats[0].campaign_id == "ext-1"
+    assert stats[0].shows == 100.0
+
+
+def test_sync_cabinet_stats_error_is_reported_not_raised() -> None:
+    """Сбой площадки по кампании кабинета — честная сводка `error`, не исключение наружу."""
+    broken = _FakeAdapter(broken=True)
+
+    async def scenario(session: AsyncSession) -> dict[int, str]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1))
+        await session.commit()
+        return await sync_cabinet_stats(
+            session, 1, "vk-1", settings=_settings(), adapters={"vk_api": broken}
+        )
+
+    assert asyncio.run(_with_db(scenario)) == {1: "error"}

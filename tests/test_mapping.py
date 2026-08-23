@@ -1,7 +1,8 @@
 from typing import Any
 
-from services.brief_parser import BriefVariant, parse_brief
-from services.mapping import SOCIAL_ENGAGEMENT, build_campaign_spec
+import pytest
+from services.brief_parser import BriefVariant, Goal, TargetType, parse_brief
+from services.mapping import SOCIAL_ENGAGEMENT, UnsupportedBriefGoalError, build_campaign_spec
 
 BASE = {
     "full_name": "Иван",
@@ -65,3 +66,41 @@ def test_budget_discussion() -> None:
     spec = _spec({"budget": "готов обсудить"})
     assert spec.budget_rub is None
     assert spec.needs_budget_discussion is True
+
+
+# --- цель «лид-форма» --------------------------------------------------------
+
+
+def test_lead_form_goal_is_accepted_not_only_subscribers() -> None:
+    """`build_campaign_spec` больше не требует именно подписчиков."""
+    spec = _spec({"target_type": "📋 Лид-форма ВКонтакте", "object_url": "leadads://857898/"})
+    assert spec.object_kind == TargetType.LEAD_FORM.value
+    assert spec.object_url == "leadads://857898/"
+
+
+def test_lead_form_name_says_zayavki_not_podpischiki() -> None:
+    # Кампания на заявки не должна называться «Подписчики · …» — вводит в заблуждение.
+    spec = _spec({"target_type": "📋 Лид-форма ВКонтакте"})
+    assert "Заявки" in spec.name
+    assert "Подписчики" not in spec.name
+
+
+# --- цель «сообщения» (непроверенная площадка) --------------------------------
+
+
+def test_messages_goal_raises_typed_error_not_bare_value_error() -> None:
+    """Бриф с площадкой «сообщения» отклоняется типизированной ошибкой, а не
+    голым `ValueError` — иначе выше по стеку её некому поймать (см. code review:
+    непроверенная цель валилась 500-й вместо честного 422)."""
+    brief = parse_brief(
+        {**BASE, "target_type": "написать сообщение", "object_url": "https://vk.com/community1"},
+        BriefVariant.INDIVIDUAL,
+    )
+    assert brief.goal is Goal.MESSAGES
+
+    with pytest.raises(UnsupportedBriefGoalError) as excinfo:
+        build_campaign_spec(brief)
+    assert excinfo.value.goal is Goal.MESSAGES
+    # Именно типизированная ошибка, не её широкий родитель `ValueError` — раньше
+    # `build_campaign_spec` бросал `ValueError` напрямую, и это никто не ловил.
+    assert not isinstance(excinfo.value, ValueError)

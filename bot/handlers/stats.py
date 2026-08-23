@@ -2,6 +2,11 @@
 
 Тонкий хендлер: данные через `api_client`, рендер здесь. Демо-данные помечаются
 баннером (флаг `is_mock` из ядра) — оператор всегда видит, что метрики не боевые.
+
+Вход в кабинет и переключение периода (задача 2, дефект 1) сначала синкают метрики
+ИМЕННО этого кабинета (`api_client.sync_cabinet_stats`), потом читают их из БД.
+Если синк не удался — экран всё равно показывается по сохранённым данным, с честной
+пометкой, что обновить не получилось (не имитируем успех, CLAUDE.md §7).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ router.callback_query.filter(OperatorOnly())
 
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
 _MOCK_BANNER = "⚠️ Демо-данные. Реальные появятся после подключения VK.\n\n"
+_SYNC_FAILED_NOTE = "\n\n⚠️ Не удалось обновить данные, показаны последние сохранённые."
 _STATUS_HINT = {"active": "активен", "paused": "на паузе", "stopped": "остановлен"}
 _PERIOD_HINT = {"all": "с запуска", "month": "за месяц", "week": "за неделю"}
 
@@ -48,7 +54,8 @@ def _render_stats(name: str, stats: CabinetStats) -> str:
         f"Расход: {stats.spent:.0f} ₽\n"
         f"Результаты: {int(stats.results)}\n"
         f"CTR: {stats.ctr}%\n"
-        f"CPC: {stats.cpc} ₽"
+        f"CPC: {stats.cpc} ₽\n"
+        f"CPL: {stats.cpl} ₽"
     )
 
 
@@ -65,10 +72,13 @@ async def show_stats(message: Message) -> None:
 
 
 async def _answer_cabinet(message: Message, cabinet_id: str, period: str) -> None:
+    """Обновить метрики кабинета и показать их. Сбой синка не роняет показ (дефект 1)."""
+    synced = await api_client.sync_cabinet_stats(cabinet_id)
     stats = await api_client.get_cabinet_stats(cabinet_id, period)
-    await message.answer(
-        _render_stats(cabinet_id, stats), reply_markup=stats_period_keyboard(cabinet_id)
-    )
+    text = _render_stats(cabinet_id, stats)
+    if not synced:
+        text += _SYNC_FAILED_NOTE
+    await message.answer(text, reply_markup=stats_period_keyboard(cabinet_id))
 
 
 @router.callback_query(F.data.startswith("cabinet:"))
