@@ -1,19 +1,27 @@
-"""Отказ для непроверенной цели «Сообщения» — честный 422, а не 500 (code review).
+"""Отказ для неподдержанной цели «Senler» — честный 422, а не 500 (code review).
 
-`tests/test_messages_goal.py` закрепляет, что площадка «Сообщения» заведена, но
-не предлагается клиенту/оператору через интерфейсы (кнопка, `subscription_targets`).
-Здесь — другая часть той же дыры: раньше `services.mapping.build_campaign_spec`
-бросал голый `ValueError`, если бриф всё-таки пришёл с `target_type` «написать
-сообщение» (веб-форма его дизейблит, но прямой HTTP-запрос — нет). Эту ошибку
-никто не ловил: она долетала до оператора как необработанное исключение (500),
-а бот показывал «Сервис временно недоступен» — неправду, сервис был доступен,
-просто цель не реализована.
+Раньше этот файл проверял цель «Сообщения»: она была заведена в перечисление
+(`services.brief_parser.Goal`), но площадка `integrations.vk_surfaces.VK_MESSAGES`
+не прошла боевую проверку, и раскладка (`services.mapping.build_campaign_spec`)
+отклоняла её `UnsupportedBriefGoalError`. Боевой зонд 2026-08-23 подтвердил пакет
+3127/objective/10 из 13 шаблонов (`tests/test_messages_goal.py`), площадка получила
+`verified=True`, и `Goal.MESSAGES` добавлена в `services.mapping._SUPPORTED_GOALS` —
+«Сообщения» теперь проходят раскладку наравне с подписчиками и лид-формой.
 
-Тесты здесь: бриф с этой площадкой спокойно принимается (приём цель не проверяет),
-а вот попытка запустить кампанию — что через приём креатива, что через запуск
-готового поста без креатива — обязана вернуть 422 `goal_not_supported`, причём
-в ОБОИХ роутерах (публичный `/api/v1/briefs`, admin `/api/v1/admin/briefs`),
-и не должна успеть дойти до площадки VK.
+Единственная оставшаяся нереализованная цель — Senler (CLAUDE.md §1.4, платная
+доработка вне MVP). У неё нет ни `Goal`, ни `TargetType`: оператор выбирает её
+только явным параметром `goal="senler"` при запуске (кнопка в боте, `bot.handlers.
+creative.GOALS`, и JSON-поле `goal` в теле `/creative`), бриф её вообще не разбирает.
+Поэтому путь отказа здесь другой, чем был у «Сообщений»: guard срабатывает раньше
+брифа — `services.launch_service._validate_goal` отклоняет параметр `goal` ДО того,
+как код успевает прочитать бриф или разобрать площадку (`services.launch_service.
+SUPPORTED_GOALS` — "subscribers"/"lead_form"/"messages", "senler" туда не входит).
+
+Из-за этого пропадает часть прежнего покрытия: эндпоинт `/api/v1/briefs/{id}/launch`
+(`LaunchIn`) параметра `goal` вообще не принимает — для него неподдержанную цель
+получить неоткуда (единственный источник цели там — сам бриф, а Senler бриф не
+разбирает). Эквивалентный «безкреативный» путь здесь проверен на уровне сервиса
+(`launch_without_creative(goal="senler")`), а не HTTP.
 """
 
 from __future__ import annotations
@@ -37,8 +45,8 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from services.ad_accounts import add_account
 from services.admin_auth import generate_admin_session
+from services.creative_intake import launch_without_creative
 from services.launch_service import UnsupportedGoalError, launch_from_creative
-from services.mapping import UnsupportedBriefGoalError
 from services.vk_identity import VkIdentity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -52,9 +60,11 @@ IDENTITY = VkIdentity("10000001", "a1b2c3d4e5@agency_client", "Кабинет «
 
 _IMAGE_B64 = base64.b64encode(b"\xff\xd8\xff\x00" * 100).decode("ascii")
 
-# Бриф с площадкой «сообщения» — веб-форма её дизейблит, но прямому HTTP-запросу
-# в приём брифа это не мешает: `intake_brief` цель не проверяет вовсе.
-MESSAGES_PAYLOAD = {
+# Бриф, самый обычный (площадка «подписчики»): Senler не заведена ни в `Goal`, ни в
+# `TargetType`, поэтому её нельзя выразить полем брифа — только явным параметром
+# `goal` при запуске. Какой именно бриф лежит под ним, значения не имеет: guard
+# срабатывает раньше, чем код успевает его прочитать.
+SUBSCRIBERS_PAYLOAD = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/community1",
     "email": "v@example.com",
@@ -63,7 +73,7 @@ MESSAGES_PAYLOAD = {
     "geo": "Самара",
     "budget": "30000",
     "term": "1 месяц",
-    "target_type": "написать сообщение",
+    "target_type": "сообщество",
 }
 
 
@@ -151,7 +161,7 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
                 client_id=100,
                 variant="individual",
                 status="received",
-                payload=dict(MESSAGES_PAYLOAD),
+                payload=dict(SUBSCRIBERS_PAYLOAD),
             )
         )
         await session.commit()
@@ -160,10 +170,10 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
     return result
 
 
-def test_launch_from_creative_rejects_messages_goal_without_reaching_the_adapter() -> None:
-    """Раньше это был необработанный `ValueError` (→ 500). Теперь — типизированный
-    `UnsupportedGoalError`, и площадка VK ни разу не вызывается: `create_campaign_from_spec`
-    не сработал (`RecordingAdapter.last_spec` остаётся `None`)."""
+def test_launch_from_creative_rejects_senler_goal_without_reaching_the_adapter() -> None:
+    """`goal="senler"` — типизированный `UnsupportedGoalError`, площадка VK ни разу
+    не вызывается (`RecordingAdapter.last_spec` остаётся `None`). Guard срабатывает
+    в `services.launch_service._validate_goal`, раньше чтения брифа."""
     RecordingAdapter.last_spec = None
 
     async def scenario(session: AsyncSession) -> None:
@@ -181,40 +191,37 @@ def test_launch_from_creative_rejects_messages_goal_without_reaching_the_adapter
                 "Текст",
                 settings=_settings(),
                 ad_account_id=cabinet_view.id,
+                goal="senler",
             )
 
     asyncio.run(_with_db(scenario))
     assert RecordingAdapter.last_spec is None
 
 
-def test_launch_service_wraps_mapping_error_not_the_bare_one() -> None:
-    """Ошибка из `services.mapping` (`UnsupportedBriefGoalError`) не долетает наружу
-    как есть — `launch_from_creative` транслирует её в `UnsupportedGoalError`,
-    который уже умеют ловить роутеры (`goal_not_supported`, 422)."""
+def test_launch_without_creative_also_rejects_senler_goal() -> None:
+    """Тот же guard и для «безкреативного» пути (продвижение готового поста): HTTP
+    `/launch` параметра `goal` не принимает вовсе (`LaunchIn` его не объявляет —
+    Senler бриф не разбирает, отклонять там нечего), поэтому этот путь проверяем на
+    уровне сервиса, куда параметр `goal` всё же можно передать напрямую."""
 
     async def scenario(session: AsyncSession) -> BaseException:
         cabinet_view = await add_account(session, 1, TOKEN, settings=_settings())
         await session.commit()
         try:
-            await launch_from_creative(
+            await launch_without_creative(
                 session,
                 1,
                 500,
-                "photo",
-                "creative.jpg",
-                "Заголовок",
-                "Текст",
                 settings=_settings(),
                 ad_account_id=cabinet_view.id,
+                goal="senler",
             )
         except Exception as exc:  # noqa: BLE001 — тест ловит ровно то, что бросил сервис
             return exc
-        raise AssertionError("launch_from_creative did not raise")
+        raise AssertionError("launch_without_creative did not raise")
 
     exc = asyncio.run(_with_db(scenario))
     assert isinstance(exc, UnsupportedGoalError)
-    assert not isinstance(exc, UnsupportedBriefGoalError)
-    assert not isinstance(exc, ValueError)
 
 
 # --- HTTP-уровень: оба роутера отвечают 422, а не 500 --------------------------
@@ -245,7 +252,9 @@ async def _with_client(
         session.add(Account(id=1, name="default"))
         session.add(Client(id=1, account_id=1, full_name="Вячеслав", email="v@example.com"))
         session.add(
-            Brief(id=1, account_id=1, client_id=1, variant="individual", payload=MESSAGES_PAYLOAD)
+            Brief(
+                id=1, account_id=1, client_id=1, variant="individual", payload=SUBSCRIBERS_PAYLOAD
+            )
         )
         await session.commit()
         if seed_ad_account:
@@ -266,21 +275,55 @@ async def _with_client(
     return result
 
 
-def test_public_brief_intake_accepts_messages_target_type() -> None:
-    """Приём брифа не проверяет цель вовсе — это подтверждает описанную в code
-    review дыру: непроверенная площадка спокойно долетает до сохранения."""
+def test_public_creative_upload_for_senler_goal_is_422_not_500() -> None:
+    """`/api/v1/briefs/{id}/creative` принимает `goal` JSON-полем (`CreativeIn.goal`) —
+    ровно тот канал, которым оператор мог бы прислать `goal=senler` в обход бота."""
 
-    async def scenario(client: AsyncClient) -> int:
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
         resp = await client.post(
-            "/api/v1/briefs",
-            json={"variant": "individual", "payload": MESSAGES_PAYLOAD},
+            "/api/v1/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст",
+                "goal": "senler",
+            },
         )
-        return resp.status_code
+        return resp.status_code, resp.json()
 
-    assert asyncio.run(_with_client(scenario, seed_ad_account=False)) == 201
+    code, body = asyncio.run(_with_client(scenario))
+    assert code == 422, body
+    assert body["detail"] == "goal_not_supported"
 
 
-def test_public_creative_upload_for_messages_goal_is_422_not_500() -> None:
+def test_admin_creative_upload_for_senler_goal_is_422_not_500() -> None:
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст",
+                "goal": "senler",
+            },
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_client(scenario))
+    assert code == 422, body
+    assert body["detail"] == "goal_not_supported"
+
+
+def test_public_creative_upload_without_explicit_goal_still_works() -> None:
+    """Регресс: без явного `goal` (обычный путь — цель берётся из брифа) площадка
+    «подписчики» запускается как раньше, никакой отказ не возникает."""
+
     async def scenario(client: AsyncClient) -> tuple[int, Any]:
         resp = await client.post(
             "/api/v1/briefs/1/creative",
@@ -296,46 +339,13 @@ def test_public_creative_upload_for_messages_goal_is_422_not_500() -> None:
         return resp.status_code, resp.json()
 
     code, body = asyncio.run(_with_client(scenario))
-    assert code == 422, body
-    assert body["detail"] == "goal_not_supported"
-
-
-def test_public_launch_without_creative_for_messages_goal_is_422_not_500() -> None:
-    """Тот же путь, но продвижение готового поста (без креатива) — `/launch`.
-    До фикса у этого эндпоинта не было `except UnsupportedGoalError` вовсе, поэтому
-    ошибка мапинга долетала до FastAPI необработанной (500)."""
-
-    async def scenario(client: AsyncClient) -> tuple[int, Any]:
-        resp = await client.post("/api/v1/briefs/1/launch", json={})
-        return resp.status_code, resp.json()
-
-    code, body = asyncio.run(_with_client(scenario))
-    assert code == 422, body
-    assert body["detail"] == "goal_not_supported"
-
-
-def test_admin_creative_upload_for_messages_goal_is_422_not_500() -> None:
-    async def scenario(client: AsyncClient) -> tuple[int, Any]:
-        resp = await client.post(
-            "/api/v1/admin/briefs/1/creative",
-            json={
-                "media_b64": _IMAGE_B64,
-                "media_type": "photo",
-                "width": 800,
-                "height": 800,
-                "title": "Заголовок",
-                "body": "Текст",
-            },
-        )
-        return resp.status_code, resp.json()
-
-    code, body = asyncio.run(_with_client(scenario))
-    assert code == 422, body
-    assert body["detail"] == "goal_not_supported"
+    assert code == 201, body
 
 
 def test_public_upload_creative_404_when_brief_missing_still_works() -> None:
-    """Регресс: 404 для отсутствующего брифа проверяется раньше цели, порядок не сломан."""
+    """Регресс: 404 для отсутствующего брифа проверяется раньше цели, порядок не
+    сломан. `goal` здесь не передан — иначе `_validate_goal` сработал бы первым и
+    замаскировал бы отсутствие брифа под 422."""
 
     async def scenario(client: AsyncClient) -> int:
         resp = await client.post(

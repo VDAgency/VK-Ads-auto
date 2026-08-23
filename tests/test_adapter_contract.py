@@ -53,6 +53,11 @@ def test_stop_is_not_implemented_by_default() -> None:
         asyncio.run(_StubAdapter().stop("camp-1"))
 
 
+def test_delete_campaign_is_not_implemented_by_default() -> None:
+    with pytest.raises(NotImplementedError):
+        asyncio.run(_StubAdapter().delete_campaign("camp-1"))
+
+
 def test_create_campaign_from_spec_defaults_to_plain_create() -> None:
     # Дефолтная реализация — прежнее поведение: одна кампания по цели из спеки.
     adapter = _StubAdapter()

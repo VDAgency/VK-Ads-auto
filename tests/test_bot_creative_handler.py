@@ -218,11 +218,48 @@ def test_cancel_creative_clears(monkeypatch: pytest.MonkeyPatch) -> None:
     assert any("Отменено" in text for text, _ in callback.message.answers)
 
 
-def test_lead_form_goal_is_marked_available() -> None:
-    """Логика запуска лид-формы боевая — кнопка больше не должна быть «серой»."""
+def test_ask_goal_escapes_cabinet_title_with_html_special_chars() -> None:
+    """Заголовок кабинета приходит из VK и может содержать `<`/`&` — тот же класс
+    бага, что чинили в `/surfaces`: без экранирования Telegram отклоняет весь
+    `sendMessage` целиком (parse_mode="HTML"), а aiogram эту ошибку молча глотает,
+    и оператор не получает вообще никакого ответа."""
+    state = _FakeState()
+    message = _FakeMessage()
+    dangerous_title = "Кабинет <b>Тест</b> & Co"
+
+    asyncio.run(creative._ask_goal(message, state, 7, 1, dangerous_title))  # type: ignore[arg-type]
+
+    text, _markup = message.answers[-1]
+    assert "<b>Тест</b>" not in text  # неэкранированный тег не должен утечь в текст
+    assert "&lt;b&gt;Тест&lt;/b&gt;" in text
+    assert "&amp; Co" in text
+
+
+def test_start_creative_escapes_cabinet_title_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Тот же дефект, но через боевой путь: один рекламный кабинет с опасным
+    заголовком — `start_creative` сразу зовёт `_ask_goal` с этим заголовком."""
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+    dangerous_title = "ООО «Ромашка» <script>alert(1)</script> & Партнёры"
+
+    async def one_account() -> list[Any]:
+        return [SimpleNamespace(id=1, external_id="100", title=dangerous_title, is_usable=True)]
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", one_account)
+    callback = _FakeCallback("creative:7")
+    state = _FakeState()
+    asyncio.run(creative.start_creative(callback, state))
+
+    text, _markup = callback.message.answers[-1]
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+    assert "&amp; Партнёры" in text
+
+
+def test_lead_form_and_messages_goals_are_marked_available() -> None:
+    """Логика запуска лид-формы и сообщений боевая — кнопки больше не «серые»."""
     goals_by_code = {code: enabled for code, _, enabled in creative.GOALS}
     assert goals_by_code["lead_form"] is True
     assert goals_by_code["subscribers"] is True
-    # Остальные цели пока не реализованы и обязаны оставаться недоступными.
-    assert goals_by_code["messages"] is False
+    assert goals_by_code["messages"] is True
+    # Senler остаётся единственной нереализованной целью и обязана быть недоступной.
     assert goals_by_code["senler"] is False

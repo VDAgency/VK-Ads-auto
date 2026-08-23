@@ -1,8 +1,7 @@
 from typing import Any
 
-import pytest
 from services.brief_parser import BriefVariant, Goal, TargetType, parse_brief
-from services.mapping import SOCIAL_ENGAGEMENT, UnsupportedBriefGoalError, build_campaign_spec
+from services.mapping import SOCIAL_ENGAGEMENT, build_campaign_spec
 
 BASE = {
     "full_name": "Иван",
@@ -85,22 +84,27 @@ def test_lead_form_name_says_zayavki_not_podpischiki() -> None:
     assert "Подписчики" not in spec.name
 
 
-# --- цель «сообщения» (непроверенная площадка) --------------------------------
+# --- цель «сообщения» (боевой зонд 2026-08-23 подтвердил пакет 3127) ----------
 
 
-def test_messages_goal_raises_typed_error_not_bare_value_error() -> None:
-    """Бриф с площадкой «сообщения» отклоняется типизированной ошибкой, а не
-    голым `ValueError` — иначе выше по стеку её некому поймать (см. code review:
-    непроверенная цель валилась 500-й вместо честного 422)."""
+def test_messages_goal_is_accepted_not_only_subscribers_and_lead_form() -> None:
+    """Бриф с площадкой «сообщения» больше не отклоняется: `VK_MESSAGES` прошла
+    боевой зонд (`integrations.vk_surfaces.VK_MESSAGES.verified=True`), и раскладка
+    строит спеку так же, как для подписчиков (тот же `objective`), просто с другим
+    `object_kind` — адаптер уже по нему выбирает пакет 3127 и кнопку сообщества."""
     brief = parse_brief(
         {**BASE, "target_type": "написать сообщение", "object_url": "https://vk.com/community1"},
         BriefVariant.INDIVIDUAL,
     )
     assert brief.goal is Goal.MESSAGES
 
-    with pytest.raises(UnsupportedBriefGoalError) as excinfo:
-        build_campaign_spec(brief)
-    assert excinfo.value.goal is Goal.MESSAGES
-    # Именно типизированная ошибка, не её широкий родитель `ValueError` — раньше
-    # `build_campaign_spec` бросал `ValueError` напрямую, и это никто не ловил.
-    assert not isinstance(excinfo.value, ValueError)
+    spec = build_campaign_spec(brief)
+    assert spec.object_kind == TargetType.MESSAGES.value
+    assert spec.object_url == "https://vk.com/community1"
+
+
+def test_messages_name_says_soobshcheniya_not_podpischiki() -> None:
+    # Кампания на сообщения не должна называться «Подписчики · …» — вводит в заблуждение.
+    spec = _spec({"target_type": "написать сообщение", "object_url": "https://vk.com/community1"})
+    assert "Сообщения" in spec.name
+    assert "Подписчики" not in spec.name

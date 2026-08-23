@@ -8,8 +8,8 @@
 Цель кампании (`Goal`) не спрашивается отдельным полем — она выводится из
 выбранной клиентом площадки (`target_type`) функцией `services.goals.goal_for_target_type`:
 площадка «лид-форма» ведёт к `Goal.LEAD_FORM`, площадка «сообщения» — к `Goal.MESSAGES`
-(площадка непроверена, `integrations.vk_surfaces.VK_MESSAGES.verified=False`, поэтому
-клиенту не предлагается), все остальные — к `Goal.SUBSCRIBERS`.
+(площадка прошла боевой зонд 2026-08-23, `integrations.vk_surfaces.VK_MESSAGES.verified=True`),
+все остальные — к `Goal.SUBSCRIBERS`.
 """
 
 from __future__ import annotations
@@ -30,14 +30,12 @@ class BriefVariant(Enum):
 class Goal(Enum):
     """Цель кампании. Выводится из площадки брифа (`services.goals.goal_for_target_type`).
 
-    Реализованы и запускаются две: подписчики (на любую из площадок подписки) и
-    заявки через лид-форму. `MESSAGES` заведена в перечисление, но площадка под ней
-    (`integrations.vk_surfaces.VK_MESSAGES`) не прошла боевую проверку
-    (`verified=False`) — клиенту она не предлагается, а `services.mapping.build_campaign_spec`
-    отклонит её отдельным `services.mapping.UnsupportedBriefGoalError`, если всё же
-    дойдёт (роутер и бот в ответ отвечают честным 422, а не 500). Senler в перечисление
-    вообще не заведена — оператор выбирает её только на уровне бота/веба, до брифа
-    она не доходит.
+    Реализованы и запускаются все три: подписчики (на любую из площадок подписки),
+    заявки через лид-форму и сообщения сообществу. `MESSAGES` прошла боевой зонд
+    2026-08-23 (`integrations.vk_surfaces.VK_MESSAGES.verified=True`) и клиенту
+    предлагается. Senler в перечисление вообще не заведена — оператор выбирает её
+    только на уровне бота/веба (параметр `goal` при запуске), до брифа она не
+    доходит и остаётся единственной нереализованной целью.
     """
 
     SUBSCRIBERS = "subscribers"
@@ -77,8 +75,7 @@ class TargetType(Enum):
     VK_MUSIC = "vk_music"
     VK_CLIP = "vk_clip"
     LEAD_FORM = "lead_form"
-    # Непроверенная площадка (integrations.vk_surfaces.VK_MESSAGES.verified=False) —
-    # клиенту не предлагается, до брифа доходит только если оператор впишет её вручную.
+    # Прошла боевой зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True).
     MESSAGES = "messages"
 
 
@@ -258,8 +255,10 @@ def parse_target_type(value: str) -> TargetType:
         return TargetType.LEAD_FORM
     # «Сообщени…» (написать сообщение) — самостоятельная смежная цель, а не опечатка
     # в слове «сообщество» (буквосочетания не пересекаются, порядок проверки неважен).
-    # Площадка непроверена (verified=False) — клиент её не выбирает, до брифа она
-    # доходит, только если оператор впишет формулировку вручную.
+    # Площадка прошла боевой зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES
+    # verified=True) и предлагается клиенту в форме брифа как готовая опция
+    # (web/lib/briefSurfaces.ts, «написать сообщение», enabled: true) — клиент
+    # выбирает её сам, а не только оператор вручную задним числом.
     if "сообщени" in text:
         return TargetType.MESSAGES
     if "клип" in text:

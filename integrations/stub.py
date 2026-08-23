@@ -33,6 +33,10 @@ class StubAdapter(PlatformAdapter):
         """Останавливать нечего: заглушка ничего не запускала во внешней системе."""
         return None
 
+    async def delete_campaign(self, campaign_id: str) -> None:
+        """Удалять нечего: заглушка ничего не создавала во внешней системе."""
+        return None
+
     async def get_stats(self, campaign_id: str) -> dict[str, float]:
         return {}
 

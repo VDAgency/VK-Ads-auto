@@ -274,9 +274,11 @@ def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
 
     available = [r for r in radios if "disabled" not in r]
     locked = [r for r in radios if "disabled" in r]
-    # Запускаем пока подписчиков и заявки через лид-форму — остальные цели ещё заблокированы.
-    assert len(available) == 2
+    # Запускаем подписчиков, сообщения в сообщество и заявки через лид-форму —
+    # остальные цели (Senler, трафик на сайт) ещё заблокированы.
+    assert len(available) == 3
     assert any('value="подписчики"' in r for r in available)
+    assert any('value="сообщения в сообщество"' in r for r in available)
     assert any('value="заявки — лид-форма"' in r for r in available)
     assert locked, "остальные цели должны быть заблокированы"
     # Каждый заблокированный вариант помечен «скоро» — клиент видит, что он

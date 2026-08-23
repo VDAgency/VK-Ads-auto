@@ -600,6 +600,21 @@ async def set_campaign_status(
     return campaign
 
 
+async def delete_campaign_row(session: AsyncSession, account_id: int, campaign_id: int) -> bool:
+    """Удалить строку кампании тенанта. `True` — удалена, `False` — не найдена/чужой тенант.
+
+    Только строка в БД: удаление на площадке (если применимо для канала) — забота
+    вызывающего сервиса (`services.campaign_cleanup`), делается ДО вызова этой
+    функции. Скоуп по `account_id` — изоляция тенанта, CLAUDE.md §1.3.
+    """
+    campaign = await get_campaign(session, account_id, campaign_id)
+    if campaign is None:
+        return False
+    await session.delete(campaign)
+    await session.flush()
+    return True
+
+
 # --- Рекламные кабинеты (AdAccount, spec 2026-07-27 §4) -----------------------
 #
 # Все выборки скоупятся по `account_id` и по умолчанию скрывают архивные строки:

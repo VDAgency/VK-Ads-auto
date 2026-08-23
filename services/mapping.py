@@ -6,7 +6,8 @@
 `package_id`/реального VK objective — на стороне адаптера по площадке
 (`integrations.vk_api.campaign_objective`, живой API, см. docs/VK_API_REFERENCE.md):
 поле `objective` здесь — неопределённое значение по умолчанию, адаптер его правит.
-Поддержаны две цели — подписчики и заявки через лид-форму (`services.brief_parser.Goal`).
+Поддержаны три цели — подписчики, заявки через лид-форму и сообщения
+(`services.brief_parser.Goal`).
 """
 
 from __future__ import annotations
@@ -40,23 +41,29 @@ _VK_AGE_MAX = 75
 
 # Цели, для которых раскладка уже реализована, и заголовок кампании под каждую —
 # чтобы кампания на заявки не называлась «Подписчики · …» (вводит в заблуждение).
-_SUPPORTED_GOALS = (Goal.SUBSCRIBERS, Goal.LEAD_FORM)
+# `Goal.MESSAGES` добавлена 2026-08-23: площадка `integrations.vk_surfaces.VK_MESSAGES`
+# прошла зонд боевым токеном (пакет/objective/10 из 13 шаблонов подтверждены,
+# `Surface.verified=True`) и теперь предлагается клиенту.
+_SUPPORTED_GOALS = (Goal.SUBSCRIBERS, Goal.LEAD_FORM, Goal.MESSAGES)
 _GOAL_NAME_PREFIX: dict[Goal, str] = {
     Goal.SUBSCRIBERS: "Подписчики",
     Goal.LEAD_FORM: "Заявки",
+    Goal.MESSAGES: "Сообщения",
 }
 
 
 class UnsupportedBriefGoalError(Exception):
     """Цель брифа (`ParsedBrief.goal`) не поддержана раскладкой в `CampaignSpec`.
 
-    Сейчас это только `Goal.MESSAGES`: площадка «Сообщения» заведена в перечисление
-    (`services.brief_parser.Goal`), но не прошла боевую проверку и клиенту не
-    предлагается — однако бриф с ней всё равно можно прислать напрямую в API, минуя
-    веб-форму. `services.launch_service.launch_from_creative` ловит эту ошибку и
-    транслирует в свой `UnsupportedGoalError`, чтобы роутеры и бот отвечали честным
-    422, а не 500 с трассировкой (не путать с `UnsupportedGoalError`: тот — про
-    параметр `goal`, который оператор передаёт явно при запуске).
+    Сейчас все три цели перечисления `services.brief_parser.Goal` (подписчики,
+    лид-форма, сообщения) поддержаны — эта ошибка на них больше не срабатывает.
+    Класс остаётся ради будущих целей (например, заявка через Senler), которые
+    когда-нибудь попадут в `Goal`, но раскладку под них ещё не напишут: тогда
+    бриф с такой целью снова будет отклонён здесь, а не голым `ValueError`.
+    `services.launch_service.launch_from_creative` ловит эту ошибку и транслирует
+    в свой `UnsupportedGoalError`, чтобы роутеры и бот отвечали честным 422, а не
+    500 с трассировкой (не путать с `UnsupportedGoalError`: тот — про параметр
+    `goal`, который оператор передаёт явно при запуске).
     """
 
     def __init__(self, goal: Goal) -> None:
