@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ApiError, apiFetch } from "@/lib/api";
+import { draftKey, readDraft } from "@/lib/briefDraft";
+
+import { BriefGoalSurface } from "./BriefGoalSurface";
 
 /** Вариант брифа: определяет и набор полей, и то, что уходит в ядро. */
 export type BriefVariant = "individual" | "community";
@@ -51,6 +54,13 @@ export type BriefRow =
   | { kind: "pair"; items: [BriefField, BriefField] }
   | { kind: "instruction"; title: string; steps: ReactNode[] }
   | { kind: "notice"; text: string }
+  // Цель рекламы (вкладки) + площадка внутри неё + ссылка на объект — один
+  // блок, а не три независимых поля: подсказка «ссылки на объект» зависит от
+  // выбранной цели, поэтому все три живут в общем состоянии (`BriefGoalSurface`).
+  // `includeGoalField` — только у брифа бизнеса есть отдельное поле `goal`
+  // (`services/brief_fields.py`); у физлица его в канонической карте нет,
+  // добавлять новое поле нельзя — сдвинет нумерацию правок `номер.значение`.
+  | { kind: "goal-surface"; includeGoalField: boolean }
   | BriefField;
 
 type BriefFormProps = {
@@ -62,11 +72,17 @@ type BriefFormProps = {
 
 type ResultKind = "ok" | "err";
 
+/** Поля payload, которыми владеет блок «цель + площадка» (см. `BriefRow.goal-surface`). */
+function goalSurfaceFieldNames(row: { includeGoalField: boolean }): string[] {
+  return ["target_type", "object_url", ...(row.includeGoalField ? ["goal"] : [])];
+}
+
 /** Ключи payload, которые создаёт строка формы. */
 function fieldNames(row: BriefRow): string[] {
   if (row.kind === "section" || row.kind === "instruction" || row.kind === "notice") return [];
   if (row.kind === "pair") return row.items.flatMap(fieldNames);
   if (row.kind === "age") return ["age_from", "age_to"];
+  if (row.kind === "goal-surface") return goalSurfaceFieldNames(row);
   return [row.name];
 }
 
@@ -74,31 +90,24 @@ function fieldNames(row: BriefRow): string[] {
 function missingNames(row: BriefRow, payload: Record<string, string>): string[] {
   if (row.kind === "section" || row.kind === "instruction" || row.kind === "notice") return [];
   if (row.kind === "pair") return row.items.flatMap((item) => missingNames(item, payload));
-  if (row.kind === "age" || !row.required) return [];
+  if (row.kind === "age") return [];
+  if (row.kind === "goal-surface") {
+    // Площадка и ссылка на объект обязательны всегда; поле `goal` —
+    // декоративное (сервер выводит цель из target_type,
+    // `services/goals.goal_for_target_type`), от него ничего не зависит,
+    // поэтому в списке обязательных его нет.
+    const missing: string[] = [];
+    if (!payload.target_type) missing.push("target_type");
+    if (!payload.object_url) missing.push("object_url");
+    return missing;
+  }
+  if (!row.required) return [];
   return payload[row.name] ? [] : [row.name];
 }
 
 /** Все незаполненные обязательные поля — в порядке отображения. */
 function collectMissing(rows: BriefRow[], payload: Record<string, string>): string[] {
   return rows.flatMap((row) => missingNames(row, payload));
-}
-
-/** Ключ черновика: у каждого варианта брифа свой. */
-function draftKey(variant: BriefVariant): string {
-  return `vk-ads-auto:brief-draft:${variant}`;
-}
-
-/** Прочитать черновик. Любая ошибка хранилища означает «черновика нет». */
-function readDraft(variant: BriefVariant): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(draftKey(variant));
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed as Record<string, string>;
-  } catch {
-    return {};
-  }
 }
 
 /**
@@ -133,7 +142,10 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
    * четырёх тысяч пикселей вслепую.
    */
   function focusFirstInvalid(name: string) {
-    const el = formRef.current?.querySelector<HTMLElement>(`[name="${name}"]`);
+    // `:not(:disabled)` — поля цели/площадки (`BriefGoalSurface`) держат панели
+    // всех вкладок смонтированными разом; у неактивных `<fieldset disabled>`
+    // (см. компонент), и без исключения фокус мог достаться невидимому полю.
+    const el = formRef.current?.querySelector<HTMLElement>(`[name="${name}"]:not(:disabled)`);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     // Фокус после прокрутки: иначе браузер сам дёрнет вид на своё место.
@@ -170,7 +182,20 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
     const form = formRef.current;
     if (!form || Object.keys(draft).length === 0) return;
 
+    // `goal` — не здесь: это скрытое поле, полностью вычисляемое из активной
+    // вкладки `BriefGoalSurface` (React-состояние), а не пользовательский
+    // ввод — восстанавливать нечего, значение подставится само, как только
+    // `BriefGoalSurface` определит вкладку по восстановленному `target_type`.
+    // Сам `target_type` из общего восстановления НЕ исключён: панели всех
+    // вкладок смонтированы одновременно (`BriefGoalSurface` держит их в DOM
+    // через `<fieldset hidden disabled>`, а не монтирует по одной), поэтому
+    // этот же цикл находит нужное радио независимо от того, какая вкладка
+    // видима на экране в момент восстановления.
+    const ownedByGoalSurface = new Set(
+      rows.some((row) => row.kind === "goal-surface") ? ["goal"] : [],
+    );
     for (const [name, value] of Object.entries(draft)) {
+      if (ownedByGoalSurface.has(name)) continue;
       const el = form.elements.namedItem(name);
       if (el instanceof RadioNodeList) {
         for (const node of Array.from(el)) {
@@ -185,7 +210,7 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
       }
     }
     showResult("ok", "Мы восстановили то, что вы заполняли раньше.", false);
-  }, [variant]);
+  }, [variant, rows]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -278,7 +303,7 @@ export function BriefForm({ variant, rows, footer }: BriefFormProps) {
         onChange={saveDraft}
       >
         {rows.map((row, index) => (
-          <Row key={rowKey(row, index)} row={row} invalid={invalid} />
+          <Row key={rowKey(row, index)} row={row} invalid={invalid} variant={variant} />
         ))}
 
         <div className="bf-submit">
@@ -307,10 +332,29 @@ function rowKey(row: BriefRow, index: number): string {
     return `${row.kind}-${index}`;
   }
   if (row.kind === "age") return "age";
+  if (row.kind === "goal-surface") return "goal-surface";
   return row.name;
 }
 
-function Row({ row, invalid }: { row: BriefRow; invalid: ReadonlySet<string> }) {
+function Row({
+  row,
+  invalid,
+  variant,
+}: {
+  row: BriefRow;
+  invalid: ReadonlySet<string>;
+  variant: BriefVariant;
+}) {
+  if (row.kind === "goal-surface") {
+    return (
+      <BriefGoalSurface
+        variant={variant}
+        includeGoalField={row.includeGoalField}
+        invalid={invalid}
+      />
+    );
+  }
+
   if (row.kind === "section") {
     return (
       <div className="bf-section__head">

@@ -329,6 +329,79 @@
 }
 
 /* --------------------------------------------------------------------------
+   Вкладки цели рекламы
+
+   Выбранная вкладка отличается не только цветом: жирным начертанием, мягкой
+   заливкой и акцентной рамкой целиком. Отдельной нижней полосы нет —
+   `border-radius` скруглял её углы в клин на 3px-полосе, выглядело как брак
+   вёрстки, а не как подчёркивание; жирного начертания и заливки достаточно.
+   -------------------------------------------------------------------------- */
+.bf-goal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+.bf-goal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-4);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-input);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .bf-goal-tab:not(:disabled):hover {
+    border-color: var(--ink);
+  }
+}
+.bf-goal-tab.is-active {
+  font-weight: 700;
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.bf-goal-tab:focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+.bf-goal-tab:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.bf-goal-tab .bf-choice__soon {
+  margin-left: 0;
+}
+
+/* Панель вкладки — обычный `<fieldset>` без браузерных border/padding по
+   умолчанию; неактивная скрыта атрибутом `hidden` (см. BriefGoalSurface). */
+.bf-goal-panel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+/* Единственная площадка цели, подставленная автоматически (лид-форма,
+   сообщения) — не карточка выбора, просто констатация факта. */
+.bf-goal-auto {
+  margin: 0 0 var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------------------
    Коробка с инструкцией и предупреждение
    -------------------------------------------------------------------------- */
 .bf-instruction {

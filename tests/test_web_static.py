@@ -260,32 +260,137 @@ def test_brief_inputs_are_styled_regardless_of_type_attribute() -> None:
         assert ".bf-age" in css
 
 
-def test_community_brief_offers_goals_and_locks_unavailable_ones() -> None:
-    """Недоступные цели показаны, но выбрать их нельзя.
+def _goal_tab_buttons(body: str) -> list[str]:
+    """Все `<button role="tab">…</button>` целиком (открывающий тег + текст)."""
+    return re.findall(r'<button[^>]*role="tab"[^>]*>.*?</button>', body, re.DOTALL)
 
-    `disabled` здесь не украшение: браузер не включает такие поля в FormData,
-    поэтому цель, которую мы ещё не умеем запускать, физически не уедет в ядро.
+
+def test_brief_forms_show_five_goal_tabs_with_senler_locked() -> None:
+    """Обе формы брифа задают вопрос вкладками: сначала цель, потом площадка внутри неё.
+
+    Раньше был один вопрос «Куда привлекаем подписчиков?» на все 15 площадок сразу —
+    половина из них (лид-форма, сообщения) подписчиков не привлекает. Пять вкладок,
+    порядок и подписи — требование §1 спеки 2026-08-23-brief-goal-tabs-design.md.
+    Заблокирована ровно одна — «Заявка через Senler»: её нет в справочнике площадок
+    вовсе, а не просто «непроверена».
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        tabs = _goal_tab_buttons(body)
+        assert len(tabs) == 5, f"{page}: ожидалось 5 вкладок цели, получено {len(tabs)}"
+
+        labels = [
+            "Подписчики",
+            "Вовлечение в готовый объект",
+            "Сообщения сообществу",
+            "Заявки — лид-форма",
+            "Заявка через Senler",
+        ]
+        for tab, label in zip(tabs, labels, strict=True):
+            assert label in tab, f"{page}: вкладка {label!r} не найдена по порядку"
+
+        locked = [tab for tab in tabs if "disabled" in tab]
+        assert len(locked) == 1, f"{page}: заблокирована должна быть ровно одна вкладка"
+        assert "Заявка через Senler" in locked[0]
+        assert 'class="bf-choice__soon"' in locked[0], "заблокированная вкладка помечена «скоро»"
+
+
+def _goal_panel_html(body: str, key: str) -> str:
+    """Разметка одной панели вкладки: `<fieldset id="goal-panel-{key}" …>…</fieldset>`.
+
+    Панели всех вкладок смонтированы одновременно (`BriefGoalSurface` прячет
+    неактивные через `hidden`/`disabled` на `<fieldset>`, а не убирает из DOM) —
+    поэтому по всему `body` искать площадки одной цели нельзя, только внутри её
+    собственного `<fieldset>`.
+    """
+    match = re.search(rf'<fieldset id="goal-panel-{key}"[^>]*>(.*?)</fieldset>', body, re.DOTALL)
+    assert match, f"панель вкладки {key!r} не найдена"
+    return match.group(0)
+
+
+def test_brief_forms_default_tab_shows_subscription_surfaces() -> None:
+    """Вкладка по умолчанию (Подписчики) отрисована на сервере со всеми площадками,
+    видимой (без атрибута `hidden` на своём `<fieldset>`).
+
+    Остальные вкладки тоже присутствуют в статике (панели вкладок смонтированы
+    разом, см. `BriefGoalSurface`), но со своим `hidden`/`disabled` — их площадки
+    здесь не считаются, чтобы тест не путал «есть в DOM» с «видно и доступно
+    для отправки».
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        panel = _goal_panel_html(body, "subscription")
+        opening_tag = panel.split(">", 1)[0]
+        assert "hidden" not in opening_tag, (
+            f"{page}: вкладка «Подписчики» должна быть видимой по умолчанию"
+        )
+        radios = re.findall(r'<input type="radio"[^>]*name="target_type"[^>]*>', panel)
+        assert len(radios) == 8, f"{page}: у цели «подписчики» должно быть 8 площадок"
+        assert all("disabled" not in radio for radio in radios), (
+            f"{page}: все восемь площадок подписки уже проверены боем"
+        )
+
+        engagement_panel = _goal_panel_html(body, "engagement")
+        assert "hidden" in engagement_panel.split(">", 1)[0], (
+            f"{page}: неактивная вкладка «Вовлечение» должна быть скрыта"
+        )
+
+
+def test_community_brief_goal_field_follows_active_tab() -> None:
+    """Декоративное поле `goal` (services/brief_fields.py) заполняется вкладкой само.
+
+    Сервер его не читает (цель выводится из target_type,
+    services.goals.goal_for_target_type), но оператор видит в карточке брифа
+    то же название цели, что видел клиент — а не пустое поле или отдельный,
+    независимо выбираемый вопрос, как было раньше.
     """
     client = TestClient(create_app())
     body = client.get(_BRIEF_PAGES["community"]).text
+    goal_input = re.search(r'<input[^>]*name="goal"[^>]*>', body)
+    assert goal_input, "скрытое поле goal не найдено"
+    assert 'value="Подписчики"' in goal_input.group(0)
 
-    radios = re.findall(r'<input type="radio"[^>]*name="goal"[^>]*>', body)
-    assert len(radios) >= 2, "цели должны быть показаны списком"
 
-    available = [r for r in radios if "disabled" not in r]
-    locked = [r for r in radios if "disabled" in r]
-    # Запускаем подписчиков, сообщения в сообщество и заявки через лид-форму —
-    # остальные цели (Senler, трафик на сайт) ещё заблокированы.
-    assert len(available) == 3
-    assert any('value="подписчики"' in r for r in available)
-    assert any('value="сообщения в сообщество"' in r for r in available)
-    assert any('value="заявки — лид-форма"' in r for r in available)
-    assert locked, "остальные цели должны быть заблокированы"
-    # Каждый заблокированный вариант помечен «скоро» — клиент видит, что он
-    # существует, но ещё не подключён. Считаем по всем группам выбора, а не только
-    # по целям: непроверенные площадки блокируются тем же способом.
-    all_locked = re.findall(r'<input type="radio"[^>]*disabled[^>]*>', body)
-    assert body.count('class="bf-choice__soon"') == len(all_locked)
+def test_individual_brief_has_no_goal_field() -> None:
+    """У физлица в канонической карте (services/brief_fields.py) поля `goal` нет —
+    добавлять его нельзя: сдвинет нумерацию правок `номер.значение`."""
+    client = TestClient(create_app())
+    body = client.get(_BRIEF_PAGES["individual"]).text
+    assert 'name="goal"' not in body
+
+
+def test_object_url_copy_matches_default_subscription_tab() -> None:
+    """Подсказка поля «ссылка на объект» — своя для цели (требование §4 спеки).
+
+    На сервере отрисована вкладка по умолчанию (Подписчики) — её текст и
+    проверяется; тексты остальных целей закреплены тестом на сверку каталогов
+    (tests/test_brief_goal_tabs.py), не сборкой статики.
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        assert "Ссылка на сообщество или страницу, куда привлекаем подписчиков" in body
+
+
+def test_goal_tabs_are_keyboard_and_screen_reader_operable() -> None:
+    """Вкладки — доступны с клавиатуры (роль tab/tablist) и понятны без цвета.
+
+    `aria-selected` — не декоративный атрибут: без role="tablist"/"tab" скринридер
+    не объявит группу вкладок вообще. Активная вкладка также отличается не только
+    цветом — стиль `.bf-goal-tab.is-active` меняет начертание (см. brief.css).
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        assert 'role="tablist"' in body
+        assert body.count('role="tab"') == 5
+        assert 'aria-selected="true"' in body
+        assert 'aria-selected="false"' in body
+    css = page_css(client, _BRIEF_PAGES["community"])
+    assert ".bf-goal-tab" in css
+    assert ".bf-goal-tab.is-active" in css or ".bf-goal-tab.is-active," in css
 
 
 def test_extensionless_path_serves_html_file() -> None:
