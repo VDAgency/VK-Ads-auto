@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BriefForm, type BriefRow } from "@/components/BriefForm";
-import { BRIEF_GOALS } from "@/lib/briefGoals";
-import { BRIEF_SURFACES } from "@/lib/briefSurfaces";
 
 import "../brief.css";
 
@@ -47,20 +45,6 @@ const ORG_TYPE_OPTIONS = [
   { value: "иностранное юрлицо", label: "Иностранное юр. лицо" },
   { value: "иностранное физлицо", label: "Иностранное физ. лицо" },
 ];
-
-// Доступность целей — единственный флаг в web/lib/briefGoals.ts.
-const GOAL_OPTIONS = BRIEF_GOALS.map((goal) => ({
-  value: goal.value,
-  label: goal.label,
-  disabled: !goal.enabled,
-}));
-
-// Площадки подписки — единый список для обеих форм брифа (web/lib/briefSurfaces.ts).
-const SURFACE_OPTIONS = BRIEF_SURFACES.map((surface) => ({
-  value: surface.value,
-  label: surface.label,
-  disabled: !surface.enabled,
-}));
 
 // Порядок строк = порядок COMMUNITY_FIELDS в services/brief_fields.py.
 // Менять только синхронно с ним: по этим номерам оператор правит сводку в боте.
@@ -158,27 +142,17 @@ const ROWS: BriefRow[] = [
     placeholder: "ООО «Название»",
   },
 
-  { kind: "section", num: 2, title: "О продукте и услуге" },
-  {
-    kind: "choices",
-    name: "target_type",
-    label: "Куда привлекаем подписчиков?",
-    hint: "Подписка возможна не только на сообщество — выберите нужный объект",
-    required: true,
-    error: "Выберите вариант",
-    options: SURFACE_OPTIONS,
-  },
-  {
-    kind: "input",
-    name: "object_url",
-    maxLength: 300,
-    label: "Ссылка на объект продвижения",
-    hint: "Ссылка именно на то, куда будем набирать подписчиков",
-    type: "url",
-    placeholder: "https://vk.com/your_group",
-    required: true,
-    error: "Укажите ссылку на объект",
-  },
+  { kind: "section", num: 2, title: "Цель рекламы и объект продвижения" },
+  // Вкладки цели + площадка внутри неё + ссылка на объект — один блок
+  // (web/components/BriefGoalSurface.tsx). Раньше «Что хотите получить?» было
+  // отдельным необязательным вопросом в конце формы (поле `goal`), значение
+  // которого сервер не читал (цель выводится из target_type,
+  // `services/goals.goal_for_target_type`) — теперь оно заполняется
+  // автоматически по выбранной вкладке и осталось только как заметка в
+  // карточке оператора.
+  { kind: "goal-surface", includeGoalField: true },
+
+  { kind: "section", num: 3, title: "О продукте и услуге" },
   {
     kind: "input",
     name: "site_url",
@@ -221,7 +195,7 @@ const ROWS: BriefRow[] = [
     placeholder: "Например: первый урок бесплатно, скидка 20% до конца месяца…",
   },
 
-  { kind: "section", num: 3, title: "Целевая аудитория" },
+  { kind: "section", num: 4, title: "Целевая аудитория" },
   {
     kind: "textarea",
     name: "audience_description",
@@ -262,15 +236,6 @@ const ROWS: BriefRow[] = [
     label: "Кому НЕ нужно показывать рекламу?",
     hint: "Исключения: конкуренты, нецелевые города, возрастные группы",
     placeholder: "Например: дети до 18, конкуренты…",
-  },
-
-  { kind: "section", num: 4, title: "Цель рекламы" },
-  {
-    kind: "choices",
-    name: "goal",
-    label: "Что хотите получить?",
-    hint: "Сейчас мы запускаем кампании на подписчиков. Остальные цели помечены «скоро» — подключим их следующими.",
-    options: GOAL_OPTIONS,
   },
 
   { kind: "section", num: 5, title: "Бюджет и сроки" },

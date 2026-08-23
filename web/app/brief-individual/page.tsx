@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BriefForm, type BriefRow } from "@/components/BriefForm";
-import { BRIEF_SURFACES } from "@/lib/briefSurfaces";
 
 import "../brief.css";
 
@@ -20,13 +19,6 @@ const BUDGET_OPTIONS = [
   { value: "до 50 000 ₽", label: "до 50 000 ₽" },
   { value: "готов обсудить", label: "Готов(а) обсудить" },
 ];
-
-// Площадки подписки — единый список для обеих форм брифа (web/lib/briefSurfaces.ts).
-const SURFACE_OPTIONS = BRIEF_SURFACES.map((surface) => ({
-  value: surface.value,
-  label: surface.label,
-  disabled: !surface.enabled,
-}));
 
 const TERM_OPTIONS = [
   { value: "1 неделя", label: "1 неделя" },
@@ -104,43 +96,12 @@ const ROWS: BriefRow[] = [
     inputMode: "numeric",
   },
 
-  { kind: "section", num: 2, title: "Ваша страница ВКонтакте" },
-  {
-    kind: "input",
-    name: "object_url",
-    maxLength: 300,
-    label: "Ссылка на личную страницу или сообщество ВК",
-    hint: "Скопируйте ссылку из адресной строки браузера или из приложения",
-    type: "url",
-    placeholder: "https://vk.com/your_page",
-    required: true,
-    error: "Укажите ссылку на страницу",
-  },
-  {
-    kind: "instruction",
-    title: "Как скопировать ссылку на свою страницу ВК",
-    steps: [
-      <>
-        Откройте приложение ВКонтакте или зайдите на <strong>vk.com</strong>
-      </>,
-      <>Перейдите в свой профиль (нажмите на аватарку или «Моя страница»)</>,
-      <>
-        В приложении: нажмите <strong>⋯</strong> (три точки) → <strong>«Копировать ссылку»</strong>
-      </>,
-      <>
-        В браузере: скопируйте адрес из строки сверху (начинается с <strong>vk.com/</strong>)
-      </>,
-      <>Вставьте ссылку в поле выше</>,
-    ],
-  },
-  {
-    kind: "choices",
-    name: "target_type",
-    label: "Куда привлекаем подписчиков?",
-    required: true,
-    error: "Выберите вариант",
-    options: SURFACE_OPTIONS,
-  },
+  { kind: "section", num: 2, title: "Цель и объект рекламы" },
+  // Вкладки цели + площадка внутри неё + ссылка на объект — один блок
+  // (web/components/BriefGoalSurface.tsx). У физлица нет отдельного поля
+  // `goal` в канонической карте (services/brief_fields.py) — не добавляем,
+  // сдвинет нумерацию правок `номер.значение`.
+  { kind: "goal-surface", includeGoalField: false },
 
   { kind: "section", num: 3, title: "Кого хотите привлечь" },
   {

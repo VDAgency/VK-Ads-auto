@@ -14,42 +14,92 @@
  * КАК ВКЛЮЧИТЬ ПЛОЩАДКУ: `enabled: false` → `true` после боевой проверки.
  * Заблокированные варианты рендерятся с атрибутом `disabled`, поэтому не
  * попадают в `FormData` и физически не могут уехать в ядро.
+ *
+ * Поле `goal` дублирует `integrations.vk_surfaces.Surface.goal` — по нему
+ * `web/lib/briefGoals.ts` группирует площадки по вкладкам. Расхождение с
+ * бэкендом ловит `tests/test_brief_goal_tabs.py::test_brief_surfaces_ts_matches_catalog`
+ * (сверяет этот список с `services.goals.subscription_targets()`).
  */
+export type BriefGoalKey = "subscription" | "engagement" | "messages" | "leads";
+
 export type BriefSurfaceOption = {
   /** Значение, уходящее в payload брифа (ключ поля — `target_type`). */
   value: string;
   label: string;
   /** false → карточка заблокирована и помечена «скоро». */
   enabled: boolean;
+  /** Цель кампании площадки — определяет, на какой вкладке она показана. */
+  goal: BriefGoalKey;
 };
 
 export const BRIEF_SURFACES: BriefSurfaceOption[] = [
-  { value: "сообщество", label: "👥 Сообщество ВКонтакте", enabled: true },
-  { value: "личная страница", label: "👤 Личная страница ВКонтакте", enabled: true },
-  { value: "рассылка", label: "✉️ Рассылка ВКонтакте", enabled: true },
-  { value: "канал ВКонтакте", label: "📺 Канал ВКонтакте", enabled: true },
-  { value: "канал MAX", label: "🅼 Канал MAX", enabled: true },
-  { value: "сообщество в Одноклассниках", label: "🟠 Сообщество в Одноклассниках", enabled: true },
-  { value: "профиль в Одноклассниках", label: "🟠 Профиль в Одноклассниках", enabled: true },
-  { value: "канал Дзен", label: "📄 Канал Дзен", enabled: true },
+  { value: "сообщество", label: "👥 Сообщество ВКонтакте", enabled: true, goal: "subscription" },
+  {
+    value: "личная страница",
+    label: "👤 Личная страница ВКонтакте",
+    enabled: true,
+    goal: "subscription",
+  },
+  { value: "рассылка", label: "✉️ Рассылка ВКонтакте", enabled: true, goal: "subscription" },
+  { value: "канал ВКонтакте", label: "📺 Канал ВКонтакте", enabled: true, goal: "subscription" },
+  { value: "канал MAX", label: "🅼 Канал MAX", enabled: true, goal: "subscription" },
+  {
+    value: "сообщество в Одноклассниках",
+    label: "🟠 Сообщество в Одноклассниках",
+    enabled: true,
+    goal: "subscription",
+  },
+  {
+    value: "профиль в Одноклассниках",
+    label: "🟠 Профиль в Одноклассниках",
+    enabled: true,
+    goal: "subscription",
+  },
+  { value: "канал Дзен", label: "📄 Канал Дзен", enabled: true, goal: "subscription" },
   // Смежные цели: продвигаем готовый объект или собираем заявки. Креатив для постов
   // не нужен — объявлением служит сам пост.
-  { value: "пост сообщества", label: "📝 Пост сообщества ВКонтакте", enabled: true },
-  { value: "пост личной страницы", label: "📝 Пост личной страницы", enabled: true },
-  { value: "пост со ссылкой на сайт", label: "🔗 Пост с переходом на сайт", enabled: true },
-  { value: "музыка", label: "🎵 Музыка ВКонтакте", enabled: true },
-  { value: "клип", label: "🎬 Клип ВКонтакте", enabled: false },
-  { value: "лид-форма", label: "📋 Лид-форма ВКонтакте", enabled: true },
+  {
+    value: "пост сообщества",
+    label: "📝 Пост сообщества ВКонтакте",
+    enabled: true,
+    goal: "engagement",
+  },
+  // Название повторяет integrations.vk_surfaces.VK_POST_PERSONAL.title целиком —
+  // без «ВКонтакте» расходилось с бэкендом (поймано тестом на сверку каталогов).
+  {
+    value: "пост личной страницы",
+    label: "📝 Пост личной страницы ВКонтакте",
+    enabled: true,
+    goal: "engagement",
+  },
+  {
+    value: "пост со ссылкой на сайт",
+    label: "🔗 Пост с переходом на сайт",
+    enabled: true,
+    goal: "engagement",
+  },
+  { value: "музыка", label: "🎵 Музыка ВКонтакте", enabled: true, goal: "engagement" },
+  { value: "клип", label: "🎬 Клип ВКонтакте", enabled: false, goal: "engagement" },
+  { value: "лид-форма", label: "📋 Лид-форма ВКонтакте", enabled: true, goal: "leads" },
   // Требование договора (ТЗ §3): объект «Сообщество», цель «Написать сообщение».
   // Пакет VK (3127) прошёл боевой зонд 2026-08-23 (package_id/objective/10 из 13
   // шаблонов подтверждены), integrations/vk_surfaces.VK_MESSAGES.verified=True —
   // включена. Значение кнопки пока догадка (docs/VK_API_REFERENCE.md), но это не
   // мешает выбору площадки — на неё не влияет.
-  { value: "написать сообщение", label: "✉️ Сообщения сообществу ВКонтакте", enabled: true },
+  {
+    value: "написать сообщение",
+    label: "✉️ Сообщения сообществу ВКонтакте",
+    enabled: true,
+    goal: "messages",
+  },
 ];
 
-/** Площадка по умолчанию для брифа физлица — личная страница. */
-export const DEFAULT_SURFACE_INDIVIDUAL = "личная страница";
+/** Площадки одной цели — источник для вкладок `web/lib/briefGoals.ts`. */
+export function surfacesForGoal(goal: BriefGoalKey): BriefSurfaceOption[] {
+  return BRIEF_SURFACES.filter((surface) => surface.goal === goal);
+}
 
-/** Площадка по умолчанию для брифа бизнеса — сообщество. */
-export const DEFAULT_SURFACE_COMMUNITY = "сообщество";
+/** Цель площадки по её значению payload; неизвестное значение — `undefined`. */
+export function goalOfSurfaceValue(value: string): BriefGoalKey | undefined {
+  return BRIEF_SURFACES.find((surface) => surface.value === value)?.goal;
+}
