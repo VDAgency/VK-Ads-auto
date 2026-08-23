@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+from html import escape as _escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -52,13 +53,13 @@ _NO_LIVE_CABINETS = (
 
 # Цели рекламы: (код, подпись, реализована ли). Нереализованные показываем
 # «серыми» — оператор видит план, но выбрать не может: кнопка ведёт на «goal:soon»,
-# а не на реальный код цели. «Сообщения» отклоняются не валидатором ядра (тот их
-# уже принимает, services/launch_service.SUPPORTED_GOALS), а тем, что площадка под
-# них не прошла боевую проверку (integrations.vk_surfaces.VK_MESSAGES.verified=False) —
-# заблокировано здесь.
+# а не на реальный код цели. «Сообщения» прошли боевой зонд 2026-08-23
+# (integrations.vk_surfaces.VK_MESSAGES.verified=True) и включены. Senler остаётся
+# единственной нереализованной целью — её нет ни в справочнике площадок, ни в
+# services/launch_service.SUPPORTED_GOALS.
 GOALS: list[tuple[str, str, bool]] = [
     ("subscribers", "👥 Подписчики", True),
-    ("messages", "✉️ Сообщения в сообщество", False),
+    ("messages", "✉️ Сообщения в сообщество", True),
     ("lead_form", "📝 Заявки — лид-форма", True),
     ("senler", "🤖 Заявка через Senler", False),
 ]
@@ -114,11 +115,18 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
 async def _ask_goal(
     message: Message, state: FSMContext, brief_id: int, ad_account_id: int, title: str
 ) -> None:
-    """Запомнить кабинет и предложить выбрать цель рекламы."""
+    """Запомнить кабинет и предложить выбрать цель рекламы.
+
+    `title` — заголовок рекламного кабинета из VK, он может содержать `<`/`&`.
+    Сообщение отправляется с `parse_mode="HTML"`, поэтому заголовок обязан пройти
+    через `html.escape` — иначе Telegram отклоняет весь `sendMessage`, а aiogram
+    эту ошибку молча глотает: оператор не получает вообще никакого ответа. Тот же
+    дефект и то же лечение, что в `bot/handlers/surfaces.py`.
+    """
     await state.update_data(ad_account_id=ad_account_id)
     await state.set_state(LaunchCampaign.choosing_goal)
     await message.answer(
-        f"Кабинет: <b>{title}</b>\n\nВыберите цель рекламы:",
+        f"Кабинет: <b>{_escape(title)}</b>\n\nВыберите цель рекламы:",
         parse_mode="HTML",
         reply_markup=launch_goal_keyboard(brief_id, GOALS),
     )

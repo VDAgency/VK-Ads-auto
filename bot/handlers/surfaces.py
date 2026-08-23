@@ -6,9 +6,19 @@
 иначе непонятое значение молча уедет как «сообщество».
 
 Хендлер тонкий: список берётся из `services.goals`, своей логики здесь нет.
+
+Заголовки и подсказки — данные из справочника площадок (`integrations.vk_surfaces`),
+а не буквальный код: они обязаны идти через `html.escape`, прежде чем лечь в текст с
+`parse_mode="HTML"`. Иначе символы `<`/`>`/`&` в них (например, плейсхолдер
+«<номер>» в подсказке лид-формы) Telegram трактует как незакрытый тег и отклоняет
+`sendMessage` целиком — а aiogram эту ошибку молча проглатывает
+(`Dispatcher._process_update` ловит любое исключение хендлера и только логирует его),
+поэтому оператор не получает вообще никакого ответа.
 """
 
 from __future__ import annotations
+
+from html import escape as _escape
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -29,21 +39,25 @@ _OUTRO = (
 
 
 def render_surfaces() -> str:
-    """Текст справки: площадки по целям, что писать в бриф и нужен ли креатив."""
+    """Текст справки: площадки по целям, что писать в бриф и нужен ли креатив.
+
+    Всё, что приходит из справочника площадок, экранируется через `html.escape` —
+    см. пояснение в докстринге модуля.
+    """
     targets = subscription_targets()
     lines = [_INTRO]
     for goal, goal_title in goal_titles().items():
         group = [target for target in targets if target.goal == goal]
         if not group:
             continue
-        lines.append(f"<b>— {goal_title} —</b>")
+        lines.append(f"<b>— {_escape(goal_title)} —</b>")
         for target in group:
             mark = "✅" if target.available else "🔜"
             # Где объявлением служит сам объект, картинку просить не нужно.
             creative = "" if target.needs_creative else "  (креатив не нужен)"
-            lines.append(f"{mark} <b>{target.title}</b>{creative}")
-            lines.append(f"   в бриф: «{target.kind}» или своими словами")
-            lines.append(f"   {target.hint}")
+            lines.append(f"{mark} <b>{_escape(target.title)}</b>{creative}")
+            lines.append(f"   в бриф: «{_escape(target.kind)}» или своими словами")
+            lines.append(f"   {_escape(target.hint)}")
         lines.append("")
     lines.append(_OUTRO)
     return "\n".join(lines)

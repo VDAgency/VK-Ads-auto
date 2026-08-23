@@ -157,8 +157,8 @@ def test_picking_cabinet_moves_to_goal(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_goal_keyboard_offers_only_implemented_goals(monkeypatch: pytest.MonkeyPatch) -> None:
     """Нереализованные цели видны, но не выбираются — молчаливой подмены нет.
 
-    Реализованы «подписчики» и «лид-форма» (см. `services.launch_service.SUPPORTED_GOALS`);
-    «сообщения» и «Senler» остаются заблокированными.
+    Реализованы «подписчики», «сообщения» и «лид-форма» (см. `services.launch_service.
+    SUPPORTED_GOALS`); Senler остаётся единственной заблокированной целью.
     """
     _stub_list(monkeypatch, [_item()])
     callback, state = _FakeCallback("creative:5"), _FakeState()
@@ -166,7 +166,11 @@ def test_goal_keyboard_offers_only_implemented_goals(monkeypatch: pytest.MonkeyP
     keyboard = callback.message.answer_kwargs[-1]["reply_markup"]
     buttons = [b for row in keyboard.inline_keyboard for b in row]
     enabled = [b for b in buttons if b.callback_data != "goal:soon"]
-    assert [b.callback_data for b in enabled] == ["goal:subscribers:5", "goal:lead_form:5"]
+    assert [b.callback_data for b in enabled] == [
+        "goal:subscribers:5",
+        "goal:messages:5",
+        "goal:lead_form:5",
+    ]
     assert any("скоро" in b.text for b in buttons)
 
 

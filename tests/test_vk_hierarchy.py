@@ -428,6 +428,28 @@ def test_stop_blocks_ad_plan_and_its_groups() -> None:
     )
 
 
+def test_delete_campaign_sends_deleted_status_and_survives_empty_204() -> None:
+    # Подтверждено боевой проверкой 2026-08-23 (docs/VK_API_REFERENCE.md): статус
+    # `deleted` — отдельный от `blocked` (его ставит stop()), ответ пустой (204).
+    # `_run` уже мокает POST /ad_plans/{id}.json 204-ответом на любой id — здесь
+    # смотрим на тело фактически ушедшего запроса (как в test_stop_blocks_*).
+    def scenario(router: respx.MockRouter) -> Awaitable[dict[str, str]]:
+        async def call() -> dict[str, str]:
+            await _adapter().delete_campaign("555")  # не должно упасть на пустом 204
+            calls: list[tuple[str, dict[str, str]]] = [
+                (str(call_.request.url), json.loads(call_.request.content))
+                for call_ in router.calls
+                if call_.request.method == "POST"
+            ]
+            matching = [body for url, body in calls if url.endswith("/ad_plans/555.json")]
+            assert len(matching) == 1
+            return matching[0]
+
+        return call()
+
+    assert _run(scenario) == {"status": "deleted"}
+
+
 # --- статистика: результат лежит в base.vk.result ---------------------------------
 
 _LIVE_SUMMARY: dict[str, Any] = {

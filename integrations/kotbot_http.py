@@ -233,6 +233,18 @@ class KotbotAdapter(PlatformAdapter):
         """`POST /campaigns/{ext}/stop` — остановить кампанию."""
         await self._request("POST", f"/campaigns/{campaign_id}/stop")
 
+    async def delete_campaign(self, campaign_id: str) -> None:
+        """`POST /campaigns/{ext}/delete` — удалить кампанию (по аналогии со `stop`).
+
+        Маршрут расширяет контракт спеки 2026-07-17 §4.3 (там `delete` нет — только
+        create/creative/launch/stop/stats/status), но следует тому же соглашению
+        именования действий. Пока в `kotbot/api/actions.py` для него нет обработчика,
+        сервис ответит не 2xx — вызов честно упадёт `KotbotRequestError`, а не
+        притворится успехом (CLAUDE.md §7). Менять маршрут можно только вместе с
+        сервисом (docstring модуля).
+        """
+        await self._request("POST", f"/campaigns/{campaign_id}/delete")
+
     async def get_status(self, campaign_id: str) -> str:
         """`GET /campaigns/{ext}/status` — статус кампании; без поля — `unknown`."""
         payload = await self._request("GET", f"/campaigns/{campaign_id}/status")

@@ -61,6 +61,9 @@ AUTOBIDDING_MAX_GOALS = "max_goals"
 # Остановка кампании в VK — перевод статуса в `blocked`.
 STATUS_ACTIVE = "active"
 STATUS_BLOCKED = "blocked"
+# Удаление кампании — ОТДЕЛЬНЫЙ статус, не путать с `blocked` (боевая проверка
+# 2026-08-23, см. docs/VK_API_REFERENCE.md).
+STATUS_DELETED = "deleted"
 
 # Загрузка медиа: у картинок и видео РАЗНЫЕ эндпоинты. Ролик, отправленный в статику,
 # отвергается как `format_not_supported` (боевая проверка 2026-07-27).
@@ -406,6 +409,24 @@ class VkApiAdapter(PlatformAdapter):
                 "POST", f"/ad_groups/{group_id}.json", json={"status": STATUS_BLOCKED}
             )
             group.raise_for_status()
+
+    async def delete_campaign(self, campaign_id: str) -> None:
+        """Удалить кампанию в VK Ads API — перевод `ad_plan` в статус `deleted`.
+
+        Подтверждено боевой проверкой 2026-08-23 (docs/VK_API_REFERENCE.md, раздел
+        «Удаление кампании»): `POST /ad_plans/{id}.json` с телом `{"status":
+        "deleted"}` отвечает `204 No Content` без тела. Статус `deleted` ОТДЕЛЬНЫЙ
+        от `blocked` (его ставит `stop()`) — это не то же самое, что остановка.
+
+        Это МЯГКОЕ удаление: кампания пропадает из обычной выдачи `/ad_plans.json`,
+        но остаётся доступной при явном запросе по id — площадка её физически не
+        стирает. Ответ пустой, поэтому `response.json()` здесь не вызываем (как и в
+        `stop()`) — парсить нечего.
+        """
+        response = await self._request(
+            "POST", f"/ad_plans/{campaign_id}.json", json={"status": STATUS_DELETED}
+        )
+        response.raise_for_status()
 
     async def _campaign_ids(self, campaign_id: str) -> list[str]:
         """Id групп объявлений плана.

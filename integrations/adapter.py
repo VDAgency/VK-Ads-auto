@@ -61,6 +61,16 @@ class PlatformAdapter(ABC):
         """Остановить кампанию. По умолчанию не поддерживается каналом."""
         raise NotImplementedError("stop is not supported by this adapter")
 
+    async def delete_campaign(self, campaign_id: str) -> None:
+        """Удалить кампанию на площадке. По умолчанию не поддерживается каналом.
+
+        Разовая операция обслуживания (`services.campaign_cleanup`), а не часть
+        обычного жизненного цикла запуска — поэтому нет дефолтной реализации через
+        `stop()`: остановленная кампания не то же самое, что удалённая, и площадки
+        могут не поддерживать удаление вовсе.
+        """
+        raise NotImplementedError("delete_campaign is not supported by this adapter")
+
     async def create_campaign_from_spec(
         self,
         cabinet_id: str,

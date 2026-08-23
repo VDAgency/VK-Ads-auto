@@ -238,6 +238,22 @@ def test_stop_calls_stop_route() -> None:
     assert asyncio.run(scenario()) is True
 
 
+def test_delete_campaign_calls_delete_route() -> None:
+    # Маршрут расширяет контракт спеки §4.3 (там удаления нет) — по аналогии с
+    # `stop`. Пока флоу в kotbot/api/actions.py не написан, реальный сервис
+    # ответит не 200, а адаптер честно поднимет `KotbotRequestError` — здесь же
+    # только форма запроса.
+    async def scenario() -> bool:
+        with respx.mock() as router:
+            route = router.post(f"{_URL}/campaigns/555/delete").mock(
+                return_value=httpx.Response(200, json={"status": "deleted"})
+            )
+            await _adapter().delete_campaign("555")
+            return route.called
+
+    assert asyncio.run(scenario()) is True
+
+
 def test_get_status_returns_platform_status() -> None:
     async def scenario() -> str:
         with respx.mock() as router:
