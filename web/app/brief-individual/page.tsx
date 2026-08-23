@@ -36,8 +36,12 @@ const MATERIALS_OPTIONS = [
   { value: "ничего нет, нужна помощь", label: "Ничего нет, нужна помощь" },
 ];
 
-// Порядок строк = порядок INDIVIDUAL_FIELDS в services/brief_fields.py.
-// Менять только синхронно с ним: по этим номерам оператор правит сводку в боте.
+// Состав строк = состав INDIVIDUAL_FIELDS в services/brief_fields.py, но НЕ их
+// порядок: вкладка цели (goal-surface, см. web/components/BriefGoalSurface.tsx)
+// рендерит target_type раньше object_url, а канонический список ниже — наоборот.
+// Нумерация правок `номер.значение` берётся из порядка INDIVIDUAL_FIELDS,
+// а не из DOM — менять состав полей можно только синхронно со списком,
+// порядок вёрстки от него независим.
 const ROWS: BriefRow[] = [
   { kind: "section", num: 1, title: "Контактная информация" },
   {

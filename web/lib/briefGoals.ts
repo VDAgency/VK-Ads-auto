@@ -22,7 +22,7 @@
  * но недоступна: клиент видит замысел сервиса целиком, но выбрать её не может
  * («enabled: false» — вкладка рендерится с атрибутом `disabled`).
  */
-import { type BriefGoalKey, BRIEF_SURFACES, surfacesForGoal } from "./briefSurfaces";
+import { type BriefGoalKey, goalOfSurfaceValue, surfacesForGoal } from "./briefSurfaces";
 
 export type BriefGoalTab = {
   /** Ключ цели; для «скоро»-вкладки без площадок в справочнике — `"senler"`. */
@@ -75,7 +75,7 @@ export const BRIEF_GOAL_TABS: BriefGoalTab[] = [
     enabled: true,
     objectUrl: {
       label: "Ссылка на лид-форму из кабинета VK",
-      hint: "Форма создаётся в интерфейсе VK Рекламы, эндпоинта для создания через API нет — скопируйте адрес готовой формы: он выглядит как leadads://<номер>/",
+      hint: "Создайте форму в интерфейсе VK Рекламы и скопируйте её адрес — он выглядит как leadads://<номер>/",
       placeholder: "leadads://857898/",
     },
   },
@@ -99,9 +99,13 @@ export function surfacesForTab(tab: BriefGoalTab): ReturnType<typeof surfacesFor
 export const DEFAULT_GOAL_TAB: BriefGoalTab =
   BRIEF_GOAL_TABS.find((tab) => tab.enabled) ?? BRIEF_GOAL_TABS[0];
 
-/** Вкладка, которой принадлежит площадка с данным значением payload. */
+/** Вкладка, которой принадлежит площадка с данным значением payload.
+ *
+ * Переиспользует `goalOfSurfaceValue` (web/lib/briefSurfaces.ts) вместо
+ * повторного поиска по `BRIEF_SURFACES` — раньше здесь была продублирована
+ * та же логика поиска площадки по значению. */
 export function tabForSurfaceValue(value: string): BriefGoalTab | undefined {
-  const surface = BRIEF_SURFACES.find((item) => item.value === value);
-  if (!surface) return undefined;
-  return BRIEF_GOAL_TABS.find((tab) => tab.key === surface.goal);
+  const goal = goalOfSurfaceValue(value);
+  if (!goal) return undefined;
+  return BRIEF_GOAL_TABS.find((tab) => tab.key === goal);
 }

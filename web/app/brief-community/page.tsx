@@ -46,8 +46,13 @@ const ORG_TYPE_OPTIONS = [
   { value: "иностранное физлицо", label: "Иностранное физ. лицо" },
 ];
 
-// Порядок строк = порядок COMMUNITY_FIELDS в services/brief_fields.py.
-// Менять только синхронно с ним: по этим номерам оператор правит сводку в боте.
+// Состав строк = состав COMMUNITY_FIELDS в services/brief_fields.py, но НЕ их
+// порядок: вкладки цели (goal-surface, см. web/components/BriefGoalSurface.tsx)
+// рендерят target_type/object_url/goal не на канонических позициях списка
+// (например, скрытое поле `goal` уезжает из конца формы в блок цели).
+// Нумерация правок `номер.значение` берётся из порядка COMMUNITY_FIELDS,
+// а не из DOM — менять состав полей можно только синхронно со списком,
+// порядок вёрстки от него независим.
 const ROWS: BriefRow[] = [
   { kind: "section", num: 1, title: "Контактная информация" },
   {

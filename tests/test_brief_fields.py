@@ -23,7 +23,10 @@ def test_fields_for_unknown_variant_raises() -> None:
 
 
 def test_field_keys_match_web_form_names_individual() -> None:
-    # Ключи == name-инпутов web/app/brief-individual/page.tsx (в том же порядке).
+    # Состав ключей == name-инпутов web/app/brief-individual/page.tsx, но НЕ их
+    # порядок: вкладка цели (web/components/BriefGoalSurface.tsx) рендерит
+    # target_type раньше object_url, а список ниже — наоборот. Порядок в этом
+    # списке и есть нумерация правок `номер.значение` — DOM его не задаёт.
     keys = [f.key for f in INDIVIDUAL_FIELDS]
     assert keys == [
         "full_name",
