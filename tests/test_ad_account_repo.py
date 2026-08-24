@@ -18,7 +18,9 @@ from db.repositories import (
     find_active_ad_account_by_external_id,
     get_ad_account,
     list_ad_accounts,
+    list_ad_accounts_for_client,
     rename_ad_account,
+    set_ad_account_client,
     set_ad_account_health,
 )
 from sqlalchemy.exc import IntegrityError
@@ -48,7 +50,12 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
     return result
 
 
-async def _add(session: AsyncSession, account_id: int = 1, external_id: str = "10000001") -> int:
+async def _add(
+    session: AsyncSession,
+    account_id: int = 1,
+    external_id: str = "10000001",
+    client_id: int | None = None,
+) -> int:
     row = await create_ad_account(
         session,
         account_id,
@@ -59,6 +66,7 @@ async def _add(session: AsyncSession, account_id: int = 1, external_id: str = "1
         refresh_encrypted="refresh-cipher",
         token_tail="4iA6",
         advertiser_kind="owner",
+        client_id=client_id,
     )
     await session.commit()
     return row.id
@@ -272,6 +280,99 @@ def test_count_active_ignores_archived() -> None:
         assert await count_active_ad_accounts(session, 1) == 2
         await archive_ad_account(session, 1, first)
         assert await count_active_ad_accounts(session, 1) == 1
+
+    asyncio.run(_with_db(scenario))
+
+
+# --- привязка к клиенту (spec 2026-08-25 §1.1) --------------------------------
+
+
+def test_create_stores_client_binding() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session, client_id=100)
+        row = await get_ad_account(session, 1, row_id)
+        assert row is not None
+        assert row.client_id == 100
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_create_without_client_is_common_by_default() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session)
+        row = await get_ad_account(session, 1, row_id)
+        assert row is not None
+        assert row.client_id is None
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_list_for_client_includes_unbound_and_own_bound_accounts() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        await _add(session, external_id="111")  # общий
+        await _add(session, external_id="222", client_id=100)  # свой
+        found = {r.external_id for r in await list_ad_accounts_for_client(session, 1, 100)}
+        assert found == {"111", "222"}
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_list_for_client_excludes_accounts_bound_to_other_clients() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        await _add(session, external_id="111", client_id=100)
+        found = [r.external_id for r in await list_ad_accounts_for_client(session, 1, 999)]
+        assert found == []
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_list_for_client_hides_archived_rows() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session, external_id="111")
+        await archive_ad_account(session, 1, row_id)
+        assert await list_ad_accounts_for_client(session, 1, 100) == []
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_list_for_client_is_scoped_to_tenant() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        await _add(session, account_id=1, external_id="111")
+        await _add(session, account_id=2, external_id="222")
+        assert [r.external_id for r in await list_ad_accounts_for_client(session, 1, 100)] == [
+            "111"
+        ]
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_client_updates_binding() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session)
+        updated = await set_ad_account_client(session, 1, row_id, 100)
+        assert updated is not None
+        assert updated.client_id == 100
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_client_to_none_makes_account_common_again() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session, client_id=100)
+        updated = await set_ad_account_client(session, 1, row_id, None)
+        assert updated is not None
+        assert updated.client_id is None
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_client_other_tenant_returns_none() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        row_id = await _add(session, account_id=1)
+        assert await set_ad_account_client(session, 2, row_id, 100) is None
+        row = await get_ad_account(session, 1, row_id)
+        assert row is not None
+        assert row.client_id is None
 
     asyncio.run(_with_db(scenario))
 

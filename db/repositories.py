@@ -729,10 +729,15 @@ async def create_ad_account(
     advertiser_kind: str,
     advertiser_name: str | None = None,
     advertiser_inn: str | None = None,
+    client_id: int | None = None,
     health: str = "healthy",
     balance_rub: str | None = None,
 ) -> AdAccount:
-    """Завести кабинет. Токен приходит уже зашифрованным — сырой сюда не попадает."""
+    """Завести кабинет. Токен приходит уже зашифрованным — сырой сюда не попадает.
+
+    `client_id` — необязательная привязка к клиенту (spec 2026-08-25 §1.1):
+    `None` заводит кабинет общим, доступным любому клиенту.
+    """
     row = AdAccount(
         account_id=account_id,
         title=title,
@@ -744,6 +749,7 @@ async def create_ad_account(
         advertiser_kind=advertiser_kind,
         advertiser_name=advertiser_name,
         advertiser_inn=advertiser_inn,
+        client_id=client_id,
         status=ACTIVE,
         health=health,
         health_checked_at=datetime.now(UTC),
@@ -806,5 +812,38 @@ async def rename_ad_account(
     if row is None:
         return None
     row.title = title
+    await session.flush()
+    return row
+
+
+async def list_ad_accounts_for_client(
+    session: AsyncSession, account_id: int, client_id: int
+) -> Sequence[AdAccount]:
+    """Активные кабинеты тенанта, пригодные клиенту (spec 2026-08-25 §1.1).
+
+    Пустая привязка — общий кабинет оператора, подходит любому клиенту (текущее
+    поведение); заполненная — виден только своему. `account_id` — обязательный
+    скоуп тенанта, как и во всех остальных выборках этого файла.
+    """
+    stmt = (
+        select(AdAccount)
+        .where(
+            AdAccount.account_id == account_id,
+            AdAccount.status == ACTIVE,
+            or_(AdAccount.client_id.is_(None), AdAccount.client_id == client_id),
+        )
+        .order_by(AdAccount.id.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def set_ad_account_client(
+    session: AsyncSession, account_id: int, ad_account_id: int, client_id: int | None
+) -> AdAccount | None:
+    """Изменить привязку кабинета к клиенту. `client_id=None` делает его снова общим."""
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        return None
+    row.client_id = client_id
     await session.flush()
     return row

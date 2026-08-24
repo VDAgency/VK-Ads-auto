@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -25,7 +26,10 @@ from db.repositories import (
     create_ad_account,
     find_active_ad_account_by_external_id,
     get_ad_account,
+    get_client,
     list_ad_accounts,
+    list_ad_accounts_for_client,
+    set_ad_account_client,
     set_ad_account_health,
 )
 from pydantic import SecretStr
@@ -83,6 +87,14 @@ class AmbiguousAdAccountError(AdAccountError):
     """Кабинетов несколько, а оператор не выбрал ни одного."""
 
 
+class ClientNotFoundError(AdAccountError):
+    """Клиент, которому хотят привязать кабинет, не найден у этого тенанта."""
+
+    def __init__(self, client_id: str) -> None:
+        super().__init__(client_id)
+        self.client_id = client_id
+
+
 @dataclass(frozen=True, slots=True)
 class AdAccountView:
     """Кабинет, каким его можно показывать наружу. Токена здесь нет и быть не может."""
@@ -95,6 +107,8 @@ class AdAccountView:
     advertiser_kind: str
     advertiser_name: str | None
     advertiser_inn: str | None
+    client_id: int | None
+    client_name: str | None
     status: str
     health: str
     health_checked_at: datetime | None
@@ -107,7 +121,7 @@ class AdAccountView:
         return self.status == "active" and self.health != HEALTH_UNAUTHORIZED
 
 
-def _view(row: AdAccount) -> AdAccountView:
+def _view(row: AdAccount, *, client_name: str | None = None) -> AdAccountView:
     return AdAccountView(
         id=row.id,
         title=row.title,
@@ -117,12 +131,47 @@ def _view(row: AdAccount) -> AdAccountView:
         advertiser_kind=row.advertiser_kind,
         advertiser_name=row.advertiser_name,
         advertiser_inn=row.advertiser_inn,
+        client_id=row.client_id,
+        client_name=client_name,
         status=row.status,
         health=row.health,
         health_checked_at=row.health_checked_at,
         health_error=row.health_error,
         balance_rub=row.balance_rub,
     )
+
+
+async def _view_with_client(
+    session: AsyncSession, account_id: int, row: AdAccount
+) -> AdAccountView:
+    """Представление кабинета с именем привязанного клиента (`Client.full_name`).
+
+    Кабинет без привязки — `client_name=None`, и это не заглушка, а корректное
+    значение «общий кабинет» (решение проекта — не выдумывать «Без имени» на
+    уровне сервиса, это дело интерфейса).
+    """
+    name: str | None = None
+    if row.client_id is not None:
+        client = await get_client(session, account_id, row.client_id)
+        name = client.full_name if client is not None else None
+    return _view(row, client_name=name)
+
+
+async def _resolve_client_name(
+    session: AsyncSession, account_id: int, client_id: int | None
+) -> str | None:
+    """Проверить, что клиент существует у тенанта, и вернуть его имя.
+
+    `client_id=None` — кабинет остаётся общим, проверять нечего. Иначе клиент
+    обязан существовать: привязка к чужому/несуществующему id — опечатка
+    оператора, а не новый клиент.
+    """
+    if client_id is None:
+        return None
+    client = await get_client(session, account_id, client_id)
+    if client is None:
+        raise ClientNotFoundError(str(client_id))
+    return client.full_name
 
 
 def _box(settings: Settings) -> SecretBox:
@@ -144,6 +193,7 @@ async def add_account(
     advertiser_kind: str = ADVERTISER_OWNER,
     advertiser_name: str | None = None,
     advertiser_inn: str | None = None,
+    client_id: int | None = None,
     settings: Settings | None = None,
 ) -> AdAccountView:
     """Добавить кабинет по токену.
@@ -152,13 +202,19 @@ async def add_account(
     «кабинет добавлен» и узнал правду только при запуске кампании. Название, id
     и логин берутся из ответа VK — вводить их руками не нужно.
 
-    Бросает `InvalidTokenError`, `VkUnreachableError`, `DuplicateAccountError`
-    и `NotConfiguredError` (не задан ключ шифрования). Коммит — на вызывающем.
+    `client_id` — необязательная привязка к клиенту (spec 2026-08-25 §1.1):
+    пусто заводит общий кабинет (текущее поведение), заполнено — закрепляет
+    кабинет за клиентом, и он перестаёт быть виден чужим брифам.
+
+    Бросает `InvalidTokenError`, `VkUnreachableError`, `DuplicateAccountError`,
+    `ClientNotFoundError` (указанного клиента нет у тенанта) и
+    `NotConfiguredError` (не задан ключ шифрования). Коммит — на вызывающем.
     """
     cfg = settings or get_settings()
     box = _box(cfg)
     if not box.configured:
         raise NotConfiguredError("VK_ADS_SECRET_KEY is empty")
+    client_name = await _resolve_client_name(session, account_id, client_id)
 
     token = token.strip()
     identity = await fetch_identity(token)
@@ -182,16 +238,18 @@ async def add_account(
         advertiser_kind=kind,
         advertiser_name=advertiser_name if kind == ADVERTISER_THIRD_PARTY else None,
         advertiser_inn=advertiser_inn if kind == ADVERTISER_THIRD_PARTY else None,
+        client_id=client_id,
         health=HEALTH_HEALTHY,
         balance_rub=await fetch_balance(token),
     )
     logger.info(
-        "ad account added: id=%s external_id=%s kind=%s",
+        "ad account added: id=%s external_id=%s kind=%s client_id=%s",
         row.id,
         row.external_id,
         row.advertiser_kind,
+        row.client_id,
     )
-    return _view(row)
+    return _view(row, client_name=client_name)
 
 
 def _is_stale(row: AdAccount, ttl_minutes: int) -> bool:
@@ -204,6 +262,27 @@ def _is_stale(row: AdAccount, ttl_minutes: int) -> bool:
     return datetime.now(UTC) - checked > timedelta(minutes=ttl_minutes)
 
 
+async def _build_views(
+    session: AsyncSession,
+    account_id: int,
+    rows: Sequence[AdAccount],
+    *,
+    refresh_stale: bool,
+    settings: Settings,
+) -> list[AdAccountView]:
+    """Представления по строкам: общая часть `list_accounts`/`list_accounts_for_client`."""
+    if not refresh_stale:
+        return [await _view_with_client(session, account_id, row) for row in rows]
+
+    views: list[AdAccountView] = []
+    for row in rows:
+        if _is_stale(row, settings.ad_account_health_ttl_minutes):
+            views.append(await check_health(session, account_id, row.id, settings=settings))
+        else:
+            views.append(await _view_with_client(session, account_id, row))
+    return views
+
+
 async def list_accounts(
     session: AsyncSession,
     account_id: int,
@@ -214,16 +293,27 @@ async def list_accounts(
     """Кабинеты тенанта без токенов; устаревшие health-check обновляются по пути."""
     cfg = settings or get_settings()
     rows = await list_ad_accounts(session, account_id)
-    if not refresh_stale:
-        return [_view(row) for row in rows]
+    return await _build_views(session, account_id, rows, refresh_stale=refresh_stale, settings=cfg)
 
-    views: list[AdAccountView] = []
-    for row in rows:
-        if _is_stale(row, cfg.ad_account_health_ttl_minutes):
-            views.append(await check_health(session, account_id, row.id, settings=cfg))
-        else:
-            views.append(_view(row))
-    return views
+
+async def list_accounts_for_client(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    *,
+    refresh_stale: bool = True,
+    settings: Settings | None = None,
+) -> list[AdAccountView]:
+    """Кабинеты, пригодные клиенту (spec 2026-08-25 §1.1): общие плюс закреплённые за ним.
+
+    Фундамент для сверки при запуске (Т2) и для выбора кабинета в карточке
+    подтверждения (Т3): список сужен до того, чем клиенту действительно можно
+    запускать рекламу — общий кабинет без привязки виден всем, закреплённый
+    доступен только своему.
+    """
+    cfg = settings or get_settings()
+    rows = await list_ad_accounts_for_client(session, account_id, client_id)
+    return await _build_views(session, account_id, rows, refresh_stale=refresh_stale, settings=cfg)
 
 
 async def get_account(
@@ -231,7 +321,29 @@ async def get_account(
 ) -> AdAccountView | None:
     """Один кабинет тенанта (без токена). `None` — нет такого."""
     row = await get_ad_account(session, account_id, ad_account_id)
-    return None if row is None else _view(row)
+    return None if row is None else await _view_with_client(session, account_id, row)
+
+
+async def set_account_client(
+    session: AsyncSession,
+    account_id: int,
+    ad_account_id: int,
+    client_id: int | None,
+    *,
+    settings: Settings | None = None,
+) -> AdAccountView:
+    """Изменить привязку существующего кабинета к клиенту.
+
+    `client_id=None` снова делает кабинет общим. Бросает `ClientNotFoundError`,
+    если указанный клиент не найден у тенанта, и `AccountNotFoundError`, если
+    нет такого кабинета.
+    """
+    await _resolve_client_name(session, account_id, client_id)
+    row = await set_ad_account_client(session, account_id, ad_account_id, client_id)
+    if row is None:
+        raise AccountNotFoundError(str(ad_account_id))
+    logger.info("ad account client binding changed: id=%s client_id=%s", ad_account_id, client_id)
+    return await _view_with_client(session, account_id, row)
 
 
 async def check_health(
@@ -250,7 +362,7 @@ async def check_health(
     if row is None:
         raise AccountNotFoundError(str(ad_account_id))
     if row.status != "active" or not row.token_encrypted:
-        return _view(row)
+        return await _view_with_client(session, account_id, row)
 
     box = _box(cfg)
     try:
@@ -260,7 +372,7 @@ async def check_health(
         updated = await set_ad_account_health(
             session, account_id, ad_account_id, HEALTH_ERROR, error="cannot decrypt stored token"
         )
-        return _view(updated or row)
+        return await _view_with_client(session, account_id, updated or row)
 
     health, error, balance = HEALTH_HEALTHY, None, None
     try:
@@ -276,7 +388,7 @@ async def check_health(
     updated = await set_ad_account_health(
         session, account_id, ad_account_id, health, error=error, balance_rub=balance
     )
-    return _view(updated or row)
+    return await _view_with_client(session, account_id, updated or row)
 
 
 async def resolve_token(
@@ -395,6 +507,7 @@ __all__ = [
     "AdAccountError",
     "AdAccountView",
     "AmbiguousAdAccountError",
+    "ClientNotFoundError",
     "DuplicateAccountError",
     "NoAdAccountError",
     "TokenUnavailableError",
@@ -403,8 +516,10 @@ __all__ = [
     "delete_account",
     "get_account",
     "list_accounts",
+    "list_accounts_for_client",
     "mark_unauthorized",
     "resolve_default_account",
     "resolve_token",
     "seed_from_env",
+    "set_account_client",
 ]

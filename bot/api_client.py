@@ -226,6 +226,11 @@ class AdAccountItem:
     health_error: str | None
     balance_rub: str | None
     is_usable: bool
+    # Привязка к клиенту (spec 2026-08-25 §1.1) — добавлена позже остальных
+    # полей и вынесена в хвост с дефолтом `None`, чтобы не ломать существующие
+    # прямые конструкторы `AdAccountItem(...)` в тестах хендлеров бота.
+    client_id: int | None = None
+    client_name: str | None = None
 
 
 class AdAccountRejected(RuntimeError):
@@ -824,6 +829,8 @@ def _to_ad_account(payload: dict[str, Any]) -> AdAccountItem:
         advertiser_kind=str(payload.get("advertiser_kind", "owner")),
         advertiser_name=payload.get("advertiser_name"),
         advertiser_inn=payload.get("advertiser_inn"),
+        client_id=payload.get("client_id"),
+        client_name=payload.get("client_name"),
         status=str(payload.get("status", "active")),
         health=str(payload.get("health", "unknown")),
         health_checked_at=payload.get("health_checked_at"),
@@ -833,9 +840,15 @@ def _to_ad_account(payload: dict[str, Any]) -> AdAccountItem:
     )
 
 
-async def list_ad_accounts() -> list[AdAccountItem]:
-    """`GET /ad-accounts`: рекламные кабинеты оператора (без токенов)."""
-    payload = await _get("/ad-accounts")
+async def list_ad_accounts(client_id: int | None = None) -> list[AdAccountItem]:
+    """`GET /ad-accounts`: рекламные кабинеты оператора (без токенов).
+
+    `client_id` сужает список до кабинетов, пригодных этому клиенту (Т3):
+    общие (без привязки) плюс закреплённые за ним — та же выборка, что ядро
+    будет сверять при запуске.
+    """
+    params = {"client_id": client_id} if client_id is not None else None
+    payload = await _get("/ad-accounts", params)
     return [_to_ad_account(item) for item in payload.get("items", [])]
 
 
@@ -847,6 +860,7 @@ _AD_ACCOUNT_ERRORS = {
         "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
         "без него токен негде хранить. Нужна помощь администратора."
     ),
+    "client_not_found": "Такого клиента нет — обновите список и попробуйте снова.",
 }
 
 
@@ -857,11 +871,14 @@ async def add_ad_account(
     advertiser_kind: str = "owner",
     advertiser_name: str | None = None,
     advertiser_inn: str | None = None,
+    client_id: int | None = None,
 ) -> AdAccountItem:
     """`POST /ad-accounts`: добавить кабинет по токену.
 
-    Токен уходит только сюда и обратно не возвращается. Понятные отказы ядра
-    (битый токен, дубль, VK лежит) превращаются в `AdAccountRejected`.
+    Токен уходит только сюда и обратно не возвращается. `client_id` — привязка
+    к клиенту (необязательная, spec 2026-08-25 §1.1). Понятные отказы ядра
+    (битый токен, дубль, неизвестный клиент, VK лежит) превращаются в
+    `AdAccountRejected`.
     """
     url = f"{_base_url()}/api/v1/ad-accounts"
     payload: dict[str, Any] = {
@@ -870,6 +887,7 @@ async def add_ad_account(
         "advertiser_kind": advertiser_kind,
         "advertiser_name": advertiser_name,
         "advertiser_inn": advertiser_inn,
+        "client_id": client_id,
     }
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -882,6 +900,31 @@ async def add_ad_account(
             detail = str(response.json().get("detail", ""))
         raise AdAccountRejected(
             _AD_ACCOUNT_ERRORS.get(detail, "Не получилось добавить кабинет, проверьте токен.")
+        )
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    return _to_ad_account(response.json())
+
+
+async def set_ad_account_client(ad_account_id: int, client_id: int | None) -> AdAccountItem:
+    """`PATCH /ad-accounts/{id}/client`: привязать кабинет к клиенту или снять привязку.
+
+    `client_id=None` делает кабинет снова общим.
+    """
+    url = f"{_base_url()}/api/v1/ad-accounts/{ad_account_id}/client"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.patch(url, json={"client_id": client_id})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise AdAccountNotFound(str(ad_account_id))
+    if response.status_code == 422:
+        detail = ""
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", ""))
+        raise AdAccountRejected(
+            _AD_ACCOUNT_ERRORS.get(detail, "Не получилось изменить привязку кабинета.")
         )
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
