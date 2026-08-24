@@ -57,9 +57,9 @@ _NO_LIVE_CABINETS = (
 # (integrations.vk_surfaces.VK_MESSAGES.verified=True) и включены. «Заявка через
 # Senler» технически работает тем же пакетом VK, что и «Сообщения»
 # (integrations.vk_surfaces.VK_SENLER) и включена в services/launch_service.
-# SUPPORTED_GOALS — собственный боевой прогон под именем Senler ещё не проведён
-# (Surface.verified=False), но это не блокирует явный выбор цели оператором здесь;
-# в каталоге площадок подписки она по-прежнему показана как «скоро».
+# SUPPORTED_GOALS — собственный боевой прогон под именем Senler тоже проведён
+# 2026-08-24 (Surface.verified=True): площадка больше не «скоро» ни здесь, ни в
+# каталоге площадок подписки.
 GOALS: list[tuple[str, str, bool]] = [
     ("subscribers", "👥 Подписчики", True),
     ("messages", "✉️ Сообщения в сообщество", True),

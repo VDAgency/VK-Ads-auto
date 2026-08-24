@@ -10,8 +10,8 @@
 площадка «лид-форма» ведёт к `Goal.LEAD_FORM`, площадка «сообщения» — к `Goal.MESSAGES`
 (площадка прошла боевой зонд 2026-08-23, `integrations.vk_surfaces.VK_MESSAGES.verified=True`),
 площадка «заявка через Senler» — к `Goal.SENLER` (технически тот же пакет VK, что и у
-«Сообщений», `integrations.vk_surfaces.VK_SENLER`; свой боевой прогон под именем Senler
-ещё не проведён, поэтому `verified=False`), все остальные — к `Goal.SUBSCRIBERS`.
+«Сообщений», `integrations.vk_surfaces.VK_SENLER`; собственный боевой прогон под именем
+Senler проведён 2026-08-24, `verified=True`), все остальные — к `Goal.SUBSCRIBERS`.
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ class Goal(Enum):
     прошла боевой зонд 2026-08-23 (`integrations.vk_surfaces.VK_MESSAGES.verified=True`)
     и клиенту предлагается. `SENLER` технически работает тем же пакетом VK, что и
     «Сообщения» (боевая кампания 28694299 подтвердила пакет 3127 напрямую из VK,
-    2026-08-24), но собственный боевой прогон под именем Senler ещё не проведён
-    (`integrations.vk_surfaces.VK_SENLER.verified=False`) — площадка показывается
-    клиенту как «скоро», хотя раскладка и запуск для неё уже полностью реализованы.
+    2026-08-24), и собственный боевой прогон под именем Senler руководитель тоже
+    провёл 2026-08-24 (`integrations.vk_surfaces.VK_SENLER.verified=True`) — площадка
+    предлагается клиенту наравне с остальными.
     """
 
     SUBSCRIBERS = "subscribers"
@@ -82,8 +82,8 @@ class TargetType(Enum):
     LEAD_FORM = "lead_form"
     # Прошла боевой зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True).
     MESSAGES = "messages"
-    # Тот же пакет VK, что у MESSAGES (integrations.vk_surfaces.VK_SENLER) — свой
-    # боевой прогон под именем Senler ещё не проведён, verified=False.
+    # Тот же пакет VK, что у MESSAGES (integrations.vk_surfaces.VK_SENLER) — собственный
+    # боевой прогон под именем Senler проведён 2026-08-24, verified=True.
     SENLER = "senler"
 
 

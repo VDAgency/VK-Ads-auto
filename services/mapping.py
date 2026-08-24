@@ -46,7 +46,8 @@ _VK_AGE_MAX = 75
 # `Surface.verified=True`) и теперь предлагается клиенту.
 # `Goal.SENLER` добавлена 2026-08-24: технически тот же пакет VK, что у «Сообщений»
 # (`integrations.vk_surfaces.VK_SENLER`) — собственный боевой прогон под именем
-# Senler ещё не проведён (`Surface.verified=False`), но раскладка уже поддержана.
+# Senler проведён в тот же день (`Surface.verified=True`), площадка предлагается
+# клиенту наравне с остальными.
 _SUPPORTED_GOALS = (Goal.SUBSCRIBERS, Goal.LEAD_FORM, Goal.MESSAGES, Goal.SENLER)
 _GOAL_NAME_PREFIX: dict[Goal, str] = {
     Goal.SUBSCRIBERS: "Подписчики",

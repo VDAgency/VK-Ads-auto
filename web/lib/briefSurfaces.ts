@@ -95,13 +95,14 @@ export const BRIEF_SURFACES: BriefSurfaceOption[] = [
   // Решение 2026-08-24: технически тот же пакет VK 3127, что у «Сообщений» выше —
   // боевая кампания 28694299, прочитанная напрямую из VK, подтвердила
   // {"objective": "socialengagement", "package_id": 3127}. Собственный боевой
-  // прогон под именем Senler ещё не проведён (integrations/vk_surfaces.
-  // VK_SENLER.verified=False), поэтому площадка (единственная в этой цели)
-  // остаётся заблокированной — тот же паттерн, что и у «клипа» выше.
+  // прогон под именем Senler руководитель провёл в тот же день на сообществе
+  // DJ BEAUTY (228817082): токен привязан, бриф принят, кампания создана и
+  // прочитана напрямую из VK с верным пакетом/целью/префиксом имени —
+  // integrations/vk_surfaces.VK_SENLER.verified=True, площадка открыта.
   {
     value: "заявка через senler",
     label: "🤖 Заявка через Senler",
-    enabled: false,
+    enabled: true,
     goal: "senler",
   },
 ];

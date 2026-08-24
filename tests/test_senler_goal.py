@@ -8,13 +8,14 @@
 Набор шаблонов объявления переиспользуется буквально (`_MESSAGES_PATTERNS`), а не
 копируется — два экземпляра словаря расходятся при первой же правке.
 
-`VK_SENLER.verified` остаётся `False`: отдельный боевой прогон именно под именем
-Senler выполняет руководитель отдельно («Боевой прогон Senler» в плане), только
-после него флаг поднимется. До этого площадка показывается как «скоро» — тем же
-паттерном, что уже проверенный `VK_CLIP` (единственный до этой задачи непроверенный
-элемент `services.goals.subscription_targets()`), а не «выдаём непроверенное за
-проверенное». Раскладка и запуск при этом уже полностью реализованы: заблокирован
-только клиентский выбор площадки в брифе/веб-форме, а не код.
+`VK_SENLER.verified` стал `True` в тот же день: отдельный боевой прогон именно под
+именем Senler руководитель провёл 2026-08-24 на сообществе DJ BEAUTY (228817082) —
+токен привязан (`connected: true`), бриф с площадкой Senler принят, кампания создана
+и прочитана напрямую из VK с верным пакетом/целью/префиксом имени, тестовые данные
+удалены. Площадка теперь показывается клиенту как доступная — тем же путём, каким
+уже раньше открылись «Сообщения». Единственный оставшийся непроверенный элемент
+`services.goals.subscription_targets()` — `VK_CLIP` (ждёт настоящей ссылки на клип,
+доступный кабинету).
 """
 
 from __future__ import annotations
@@ -68,16 +69,17 @@ def test_senler_surface_is_registered_in_surfaces_tuple() -> None:
     assert "senler" in {surface.kind for surface in SURFACES}
 
 
-def test_senler_surface_stays_unverified_pending_the_dedicated_probe() -> None:
-    """Флаг честный: боевой прогон конкретно под именем Senler ещё не проведён."""
-    assert surface_for("senler").verified is False
+def test_senler_surface_is_verified_after_the_dedicated_probe() -> None:
+    """Флаг честный: боевой прогон конкретно под именем Senler проведён 2026-08-24."""
+    assert surface_for("senler").verified is True
 
 
-def test_senler_is_the_second_unverified_surface_alongside_the_clip() -> None:
-    """Единственный ранее непроверенный элемент каталога — `vk_clip`. Теперь их два,
-    остальные площадки боевую проверку уже прошли."""
+def test_senler_is_no_longer_unverified_only_the_clip_remains() -> None:
+    """После боевого прогона Senler единственный непроверенный элемент каталога —
+    `vk_clip` (он же был единственным до появления цели Senler): тот же паттерн
+    «показываем, но выбрать не даём» продолжает работать хотя бы на одной площадке."""
     unverified = sorted(target.kind for target in subscription_targets() if not target.available)
-    assert unverified == sorted(["vk_clip", "senler"])
+    assert unverified == ["vk_clip"]
 
 
 # --- разбор брифа --------------------------------------------------------------
