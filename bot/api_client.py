@@ -147,6 +147,12 @@ class BriefCard:
     # Распознанная площадка подписки — приходит из ядра готовой строкой.
     surface_title: str = ""
     surface_needs_creative: bool = True
+    # Числовой `Client.id` брифа (spec 2026-08-25 §Т3) — сузить список кабинетов
+    # до пригодных этому клиенту (`list_ad_accounts(client_id=...)`). `None` — у
+    # брифа нет привязанного клиента (не должно случаться в норме, сервис всегда
+    # привязывает клиента при приёме брифа, но карточка не должна падать, если
+    # вдруг случится).
+    client_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +300,7 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         campaign_status=payload.get("campaign_status"),
         surface_title=str(payload.get("surface_title") or ""),
         surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
+        client_id=client.get("id"),
     )
 
 
@@ -353,6 +360,30 @@ def _creative_reject_reason(detail: Any) -> str:
     return "Креатив не принят. Проверьте файл и текст."
 
 
+def _cabinet_reject_reason(detail: str) -> str:
+    """Человекочитаемая причина отказа по 409-детали ядра: кабинет выбран, но не годится.
+
+    Три известных причины (spec 2026-08-25-cabinet-client-binding-design §1.2-1.3):
+    кабинет закреплён за другим клиентом, ИНН конечного рекламодателя кабинета не
+    совпал с ИНН брифа, либо токен кабинета сейчас недоступен (удалён/сменился ключ).
+    Незнакомая деталь — тот же текст, что был здесь единственным до сверки с брифом.
+    """
+    if detail == "ad_account_client_mismatch":
+        return (
+            "Этот кабинет закреплён за другим клиентом — деньги спишутся не с того "
+            "счёта. Выберите кабинет, закреплённый за клиентом брифа, либо общий."
+        )
+    if detail == "advertiser_mismatch":
+        return (
+            "Конечный рекламодатель кабинета не совпадает с клиентом брифа "
+            "(разошёлся ИНН). Выберите другой кабинет либо проверьте бриф."
+        )
+    return (
+        "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
+        "Выберите другой кабинет или добавьте его заново через /cabinets."
+    )
+
+
 async def upload_creative(
     brief_id: int,
     media_b64: str,
@@ -396,11 +427,11 @@ async def upload_creative(
             detail = response.json().get("detail")
         raise CreativeRejected(_creative_reject_reason(detail))
     if response.status_code == 409:
-        # Кабинет выбран, но токеном воспользоваться нельзя (удалён, сменился ключ).
-        raise CreativeRejected(
-            "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
-            "Выберите другой кабинет или добавьте его заново через /cabinets."
-        )
+        # Кабинет выбран, но не годится: токен недоступен либо не соответствует брифу.
+        detail_409 = ""
+        with contextlib.suppress(ValueError):
+            detail_409 = str(response.json().get("detail", ""))
+        raise CreativeRejected(_cabinet_reject_reason(detail_409))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()
@@ -419,7 +450,9 @@ async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> Creat
     `bot/handlers/brief_card.py`); без него ядро пробует кабинет по умолчанию.
 
     404 → `BriefNotFound`; 422 → `CreativeRejected`; 409 → `CabinetChoiceRequired`
-    (ядро не смогло само выбрать кабинет); сеть/5xx → `CoreUnavailable`.
+    (ядро не смогло само выбрать кабинет — кабинетов нет либо их несколько) либо
+    `CreativeRejected` (кабинет выбран, но не годится — токен, привязка к клиенту
+    или ИНН конечного рекламодателя); сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
     try:
@@ -438,7 +471,9 @@ async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> Creat
         detail = ""
         with contextlib.suppress(ValueError):
             detail = str(response.json().get("detail", ""))
-        raise CabinetChoiceRequired(detail)
+        if detail in ("no_ad_account", "ambiguous_ad_account"):
+            raise CabinetChoiceRequired(detail)
+        raise CreativeRejected(_cabinet_reject_reason(detail))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()

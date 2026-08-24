@@ -8,9 +8,55 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from bot.api_client import CreativeRejected, CreativeResult
+from bot.api_client import AdAccountItem, BriefCard, CreativeRejected, CreativeResult
 from bot.handlers import creative
 from bot.states import UploadCreative
+
+
+def _account(**over: Any) -> AdAccountItem:
+    base: dict[str, Any] = {
+        "id": 1,
+        "title": "Студия «Пример»",
+        "external_id": "10000001",
+        "username": None,
+        "token_tail": "0000",
+        "advertiser_kind": "owner",
+        "advertiser_name": None,
+        "advertiser_inn": None,
+        "status": "active",
+        "health": "healthy",
+        "health_checked_at": None,
+        "health_error": None,
+        "balance_rub": None,
+        "is_usable": True,
+    }
+    base.update(over)
+    return AdAccountItem(**base)
+
+
+def _card(**over: Any) -> BriefCard:
+    base: dict[str, Any] = {
+        "brief_id": 7,
+        "variant": "individual",
+        "status": "received",
+        "client_name": "Иван Петров",
+        "client_email": None,
+        "client_phone": None,
+        "client_telegram": None,
+        "fields": [],
+        "has_creative": False,
+        "campaign_status": None,
+        "client_id": 42,
+    }
+    base.update(over)
+    return BriefCard(**base)
+
+
+def _stub_get_brief(monkeypatch: pytest.MonkeyPatch, card: BriefCard | None = None) -> None:
+    async def fake(brief_id: int) -> BriefCard:
+        return card or _card(brief_id=brief_id)
+
+    monkeypatch.setattr("bot.api_client.get_brief", fake)
 
 
 class _FakeState:
@@ -76,8 +122,9 @@ def test_start_creative_asks_for_cabinet_first(monkeypatch: pytest.MonkeyPatch) 
     после того, как выяснилось, что запускать вообще есть куда.
     """
     monkeypatch.setattr(creative, "Message", _FakeMessage)
+    _stub_get_brief(monkeypatch)
 
-    async def no_accounts() -> list[Any]:
+    async def no_accounts(client_id: int | None = None) -> list[Any]:
         return []
 
     monkeypatch.setattr("bot.api_client.list_ad_accounts", no_accounts)
@@ -123,7 +170,8 @@ def test_got_media_non_media_asks_again() -> None:
     assert message.answers
 
 
-def test_got_description_shows_confirm() -> None:
+def test_got_description_shows_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_get_brief(monkeypatch)
     state = _FakeState()
     state.state = UploadCreative.waiting_description
     state.data = {
@@ -132,6 +180,8 @@ def test_got_description_shows_confirm() -> None:
         "media_type": "photo",
         "width": 800,
         "height": 800,
+        "ad_account_id": 1,
+        "ad_account_title": "Студия «Пример»",
     }
     message = _FakeMessage(text="Заголовок\nТекст объявления")
     asyncio.run(creative.got_description(message, state))
@@ -140,6 +190,8 @@ def test_got_description_shows_confirm() -> None:
     assert state.data["body"] == "Текст объявления"
     text, markup = message.answers[-1]
     assert markup is not None  # клавиатура подтверждения
+    assert "Заголовок" in text
+    assert "Текст объявления" in text
 
 
 def test_send_creative_uploads_and_confirms(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,7 +279,9 @@ def test_ask_goal_escapes_cabinet_title_with_html_special_chars() -> None:
     message = _FakeMessage()
     dangerous_title = "Кабинет <b>Тест</b> & Co"
 
-    asyncio.run(creative._ask_goal(message, state, 7, 1, dangerous_title))  # type: ignore[arg-type]
+    asyncio.run(
+        creative._ask_goal(message, state, 7, _account(title=dangerous_title))  # type: ignore[arg-type]
+    )
 
     text, _markup = message.answers[-1]
     assert "<b>Тест</b>" not in text  # неэкранированный тег не должен утечь в текст
@@ -239,10 +293,11 @@ def test_start_creative_escapes_cabinet_title_end_to_end(monkeypatch: pytest.Mon
     """Тот же дефект, но через боевой путь: один рекламный кабинет с опасным
     заголовком — `start_creative` сразу зовёт `_ask_goal` с этим заголовком."""
     monkeypatch.setattr(creative, "Message", _FakeMessage)
+    _stub_get_brief(monkeypatch)
     dangerous_title = "ООО «Ромашка» <script>alert(1)</script> & Партнёры"
 
-    async def one_account() -> list[Any]:
-        return [SimpleNamespace(id=1, external_id="100", title=dangerous_title, is_usable=True)]
+    async def one_account(client_id: int | None = None) -> list[Any]:
+        return [_account(title=dangerous_title)]
 
     monkeypatch.setattr("bot.api_client.list_ad_accounts", one_account)
     callback = _FakeCallback("creative:7")

@@ -59,7 +59,9 @@ class _FakeCallback:
         self.answered = True
 
 
-def _card(status: str = "received", has_creative: bool = False) -> BriefCard:
+def _card(
+    status: str = "received", has_creative: bool = False, client_id: int | None = None
+) -> BriefCard:
     return BriefCard(
         brief_id=7,
         variant="individual",
@@ -74,6 +76,7 @@ def _card(status: str = "received", has_creative: bool = False) -> BriefCard:
         ],
         has_creative=has_creative,
         campaign_status=None,
+        client_id=client_id,
     )
 
 
@@ -264,29 +267,38 @@ def _account(account_id: int, *, usable: bool = True, title: str = "Кабине
     )
 
 
-def test_launch_without_creative_single_cabinet_launches_immediately(
+def _stub_get_brief(monkeypatch: pytest.MonkeyPatch, card: BriefCard | None = None) -> None:
+    async def fake_get(brief_id: int) -> BriefCard:
+        return card or _card()
+
+    monkeypatch.setattr("bot.api_client.get_brief", fake_get)
+
+
+def test_launch_without_creative_single_cabinet_shows_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Один пригодный кабинет — выбирать не из чего, запускаем сразу им."""
-    captured: dict[str, Any] = {}
+    """Один пригодный кабинет — выбирать не из чего, но запуск ждёт подтверждения
+    (Т3): раньше кампания уходила в ядро сразу по нажатию кнопки карточки брифа."""
 
-    async def fake_accounts() -> list[AdAccountItem]:
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
         return [_account(3)]
 
-    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
-        captured["brief_id"] = brief_id
-        captured["ad_account_id"] = ad_account_id
-        return CreativeResult(campaign_status="prepared", campaign_id=1, message="🚀 подготовлена")
+    async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise AssertionError("launch_brief не должен вызываться до подтверждения")
 
+    _stub_get_brief(monkeypatch)
     monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
-    monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
+    monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
     monkeypatch.setattr(brief_card, "Message", _FakeMessage)
     callback = _FakeCallback("launch:7")
     asyncio.run(brief_card.launch_without_creative(callback))
 
-    assert captured["brief_id"] == 7
-    assert captured["ad_account_id"] == 3
-    assert any("подготовлена" in text for text, _ in callback.message.answers)
+    text, markup = callback.message.answers[-1]
+    assert "кабинет" in text.lower()
+    assert markup is not None
+    datas = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "nocre_confirm:7:3" in datas
+    assert "nocre_cancel" in datas
     assert callback.answered
 
 
@@ -295,12 +307,13 @@ def test_launch_without_creative_several_cabinets_shows_keyboard(
 ) -> None:
     """Несколько пригодных кабинетов — показываем выбор, запуск не трогаем."""
 
-    async def fake_accounts() -> list[AdAccountItem]:
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
         return [_account(3, title="Первый"), _account(4, title="Второй")]
 
     async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
         raise AssertionError("launch_brief не должен вызываться до выбора кабинета")
 
+    _stub_get_brief(monkeypatch)
     monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
     monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
     monkeypatch.setattr(brief_card, "Message", _FakeMessage)
@@ -319,12 +332,13 @@ def test_launch_without_creative_several_cabinets_shows_keyboard(
 def test_launch_without_creative_zero_cabinets_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
     """Кабинетов нет вовсе — честный отказ вместо попытки запуска."""
 
-    async def fake_accounts() -> list[AdAccountItem]:
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
         return []
 
     async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
         raise AssertionError("launch_brief не должен вызываться без единого кабинета")
 
+    _stub_get_brief(monkeypatch)
     monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
     monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
     monkeypatch.setattr(brief_card, "Message", _FakeMessage)
@@ -335,8 +349,32 @@ def test_launch_without_creative_zero_cabinets_refuses(monkeypatch: pytest.Monke
     assert callback.answered
 
 
-def test_picked_cabinet_for_launch_uses_selected_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    """После выбора кабинета из клавиатуры запуск идёт именно им."""
+def test_picked_cabinet_for_launch_shows_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """После выбора кабинета из клавиатуры показываем карточку, а не запускаем сразу."""
+
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(3, title="Первый"), _account(4, title="Второй")]
+
+    async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise AssertionError("launch_brief не должен вызываться до подтверждения")
+
+    _stub_get_brief(monkeypatch)
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("adacc:nocre:7:4")
+    asyncio.run(brief_card.picked_cabinet_for_launch(callback))
+
+    text, markup = callback.message.answers[-1]
+    assert "Второй" in text
+    assert markup is not None
+    datas = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "nocre_confirm:7:4" in datas
+    assert callback.answered
+
+
+def test_confirm_launch_without_creative_reaches_the_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Подтверждение карточки — единственный путь, которым запуск доезжает до ядра."""
     captured: dict[str, Any] = {}
 
     async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
@@ -346,9 +384,26 @@ def test_picked_cabinet_for_launch_uses_selected_account(monkeypatch: pytest.Mon
 
     monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
     monkeypatch.setattr(brief_card, "Message", _FakeMessage)
-    callback = _FakeCallback("adacc:nocre:7:4")
-    asyncio.run(brief_card.picked_cabinet_for_launch(callback))
+    callback = _FakeCallback("nocre_confirm:7:4")
+    asyncio.run(brief_card.confirm_launch_without_creative(callback))
 
     assert captured == {"brief_id": 7, "ad_account_id": 4}
     assert any("подготовлена" in text for text, _ in callback.message.answers)
+    assert callback.answered
+
+
+def test_cancel_launch_without_creative_does_not_reach_the_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Отмена на карточке — в ядро ничего не уходит."""
+
+    async def fail_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise AssertionError("launch_brief не должен вызываться после отмены")
+
+    monkeypatch.setattr("bot.api_client.launch_brief", fail_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("nocre_cancel")
+    asyncio.run(brief_card.cancel_launch_without_creative(callback))
+
+    assert any("Отменено" in text for text, _ in callback.message.answers)
     assert callback.answered

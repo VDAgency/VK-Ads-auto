@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 from html import escape as _escape
+from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -18,7 +19,13 @@ from aiogram.types import CallbackQuery, Message
 
 from bot import api_client
 from bot.access import OperatorOnly
-from bot.api_client import BriefNotFound, CoreUnavailable, CreativeRejected
+from bot.api_client import (
+    AdAccountItem,
+    BriefCard,
+    BriefNotFound,
+    CoreUnavailable,
+    CreativeRejected,
+)
 from bot.keyboards import (
     ad_account_pick_keyboard,
     brief_card_keyboard,
@@ -67,6 +74,11 @@ GOALS: list[tuple[str, str, bool]] = [
     ("senler", "🤖 Заявка через Senler", True),
 ]
 
+# Те же цели без эмодзи и без разметки кнопок — для карточки подтверждения запуска
+# (Т3, spec 2026-08-25-cabinet-client-binding-design §2: «цель по-русски»). Считаем
+# из GOALS, а не дублируем текстом, чтобы подписи не могли разойтись.
+GOAL_LABELS: dict[str, str] = {code: label.split(" ", 1)[1] for code, label, _ in GOALS}
+
 
 @router.callback_query(F.data.startswith("creative:"))
 async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
@@ -74,6 +86,11 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
 
     Кабинет и цель спрашиваем ДО материалов (spec 2026-07-27 §9): если живого
     кабинета нет, оператор узнает об этом сразу, а не после выгрузки видео.
+
+    Список кабинетов запрашивается для клиента ЭТОГО брифа (`client_id` брифа
+    из его карточки), а не весь пул (spec 2026-08-25-cabinet-client-binding-design
+    §Т3): оператору незачем видеть и тем более случайно выбрать кабинет, закреплённый
+    за другим клиентом.
     """
     brief_id = int((callback.data or "").split(":", 1)[1])
     if not isinstance(callback.message, Message):
@@ -82,7 +99,18 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
     message = callback.message
 
     try:
-        accounts = await api_client.list_ad_accounts()
+        card = await api_client.get_brief(brief_id)
+    except BriefNotFound:
+        await message.answer(_NOT_FOUND)
+        await callback.answer()
+        return
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    try:
+        accounts = await api_client.list_ad_accounts(client_id=card.client_id)
     except CoreUnavailable:
         await message.answer(_UNAVAILABLE)
         await callback.answer()
@@ -103,7 +131,7 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
     if len(usable) == 1:
         # Один кабинет — выбирать не из чего, но подтверждение показываем:
         # оператор должен видеть, куда именно уедет кампания.
-        await _ask_goal(message, state, brief_id, usable[0].id, usable[0].title)
+        await _ask_goal(message, state, brief_id, usable[0])
     else:
         await message.answer(
             _ASK_CABINET,
@@ -116,22 +144,57 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _ask_goal(
-    message: Message, state: FSMContext, brief_id: int, ad_account_id: int, title: str
+    message: Message, state: FSMContext, brief_id: int, account: AdAccountItem
 ) -> None:
     """Запомнить кабинет и предложить выбрать цель рекламы.
 
-    `title` — заголовок рекламного кабинета из VK, он может содержать `<`/`&`.
+    Запоминаем не только id, но и поля кабинета, нужные карточке подтверждения
+    (`render_launch_confirmation`) на шаге `got_description` — там кабинет заново
+    не запрашивается, чтобы не показывать оператору данные, которые могли смениться
+    прямо во время загрузки материалов.
+
+    `account.title` — заголовок рекламного кабинета из VK, он может содержать `<`/`&`.
     Сообщение отправляется с `parse_mode="HTML"`, поэтому заголовок обязан пройти
     через `html.escape` — иначе Telegram отклоняет весь `sendMessage`, а aiogram
     эту ошибку молча глотает: оператор не получает вообще никакого ответа. Тот же
     дефект и то же лечение, что в `bot/handlers/surfaces.py`.
     """
-    await state.update_data(ad_account_id=ad_account_id)
+    await state.update_data(
+        ad_account_id=account.id,
+        ad_account_title=account.title,
+        ad_account_external_id=account.external_id,
+        ad_account_advertiser_kind=account.advertiser_kind,
+        ad_account_advertiser_name=account.advertiser_name,
+        ad_account_advertiser_inn=account.advertiser_inn,
+        ad_account_client_id=account.client_id,
+        ad_account_client_name=account.client_name,
+    )
     await state.set_state(LaunchCampaign.choosing_goal)
     await message.answer(
-        f"Кабинет: <b>{_escape(title)}</b>\n\nВыберите цель рекламы:",
+        f"Кабинет: <b>{_escape(account.title)}</b>\n\nВыберите цель рекламы:",
         parse_mode="HTML",
         reply_markup=launch_goal_keyboard(brief_id, GOALS),
+    )
+
+
+def _fallback_account(ad_account_id: int) -> AdAccountItem:
+    """Кабинет пропал из списка между показом клавиатуры и нажатием (редкая гонка) —
+    минимальная заглушка, лишь бы карточка не падала. Настоящая сверка — на ядре."""
+    return AdAccountItem(
+        id=ad_account_id,
+        title="выбранный кабинет",
+        external_id="",
+        username=None,
+        token_tail="",
+        advertiser_kind="owner",
+        advertiser_name=None,
+        advertiser_inn=None,
+        status="active",
+        health="unknown",
+        health_checked_at=None,
+        health_error=None,
+        balance_rub=None,
+        is_usable=True,
     )
 
 
@@ -149,8 +212,10 @@ async def picked_cabinet(callback: CallbackQuery, state: FSMContext) -> None:
             await callback.message.answer(_UNAVAILABLE)
             await callback.answer()
             return
-        title = next((a.title for a in accounts if a.id == ad_account_id), "выбранный кабинет")
-        await _ask_goal(callback.message, state, brief_id, ad_account_id, title)
+        account = next(
+            (a for a in accounts if a.id == ad_account_id), _fallback_account(ad_account_id)
+        )
+        await _ask_goal(callback.message, state, brief_id, account)
     await callback.answer()
 
 
@@ -215,20 +280,146 @@ def _split_description(text: str) -> tuple[str, str]:
     return title, body
 
 
+def _field_value(card: BriefCard, *labels: str) -> str:
+    """Значение первого поля брифа с одной из подписей (individual/community расходятся)."""
+    for field in card.fields:
+        if field.label in labels:
+            return field.value
+    return ""
+
+
+def _tax_id(card: BriefCard) -> str:
+    """ИНН клиента из брифа. Подпись поля разная у вариантов («ИНН» /
+    «ИНН / ОГРН / ОГРНИП», services/brief_fields.py) — обе начинаются с «ИНН»."""
+    for field in card.fields:
+        if field.label.startswith("ИНН"):
+            return field.value
+    return ""
+
+
+def _advertiser_line(account: AdAccountItem) -> str:
+    """Конечный рекламодатель кабинета — та же логика, что в списке кабинетов
+    (`bot/handlers/ad_accounts.py:_account_line`), продублирована здесь намеренно:
+    импорт приватной функции другого хендлера создал бы скрытую связь между
+    модулями разных задач владения."""
+    if account.advertiser_kind == "third_party":
+        name = account.advertiser_name or "не указан"
+        inn = f", ИНН {account.advertiser_inn}" if account.advertiser_inn else ""
+        return f"{name}{inn}"
+    return "владелец кабинета (реклама от своего имени)"
+
+
+def _binding_line(account: AdAccountItem) -> str:
+    """Закреплён ли кабинет за клиентом — та же формулировка, что в /cabinets
+    (`bot/handlers/ad_accounts.py:_client_binding_label`), для единого языка бота."""
+    if account.client_id is None:
+        return (
+            "Кабинет не закреплён за клиентом — общий, проверьте, что запускаете с нужного счёта."
+        )
+    if account.client_name:
+        return f"Кабинет закреплён за этим клиентом: {_escape(account.client_name)}."
+    return "Кабинет закреплён за этим клиентом (имя не указано)."
+
+
+def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_label: str) -> str:
+    """Карточка подтверждения запуска — клиент, объект, цель, бюджет, кабинет,
+    отметка соответствия (spec 2026-08-25-cabinet-client-binding-design §2).
+
+    Одна и та же карточка для обоих сценариев запуска (с креативом и без) —
+    вызывающая сторона добавляет только свой хвост. Ядро само отказывает при
+    несовпадении ИНН/привязки (Т2) — карточка их не проверяет, только показывает,
+    чтобы оператор мог сверить глазами до отправки (бот остаётся тонким).
+
+    Экранируем каждое значение, пришедшее из брифа/VK/оператора: неэкранированный
+    `<`/`&` в HTML-сообщении молча рушит всю отправку целиком (тот же дефект, что
+    чинили для заголовка кабинета в `_ask_goal`).
+    """
+    client_name = _escape(card.client_name or "не указан")
+    client_inn = _escape(_tax_id(card) or "не указан")
+    object_url = _escape(
+        _field_value(card, "Ссылка на страницу VK", "Ссылка на объект продвижения") or "не указана"
+    )
+    budget = _escape(_field_value(card, "Бюджет") or "не указан")
+    term = _escape(_field_value(card, "Срок / период") or "не указан")
+    advertiser = _escape(_advertiser_line(account))
+
+    lines = [
+        "📋 <b>Проверьте перед запуском</b>",
+        "",
+        f"👤 Клиент: {client_name} · ИНН {client_inn}",
+        f"🔗 Объект рекламы: {object_url}",
+        f"🎯 Цель: {_escape(goal_label)}",
+        f"💰 Бюджет: {budget} · срок: {term}",
+        "",
+        f"💼 Кабинет: {_escape(account.title)} (id {_escape(account.external_id)})",
+        f"Конечный рекламодатель кабинета: {advertiser}",
+        _binding_line(account),
+    ]
+    return "\n".join(lines)
+
+
+def _account_from_state(data: dict[str, Any]) -> AdAccountItem:
+    """Восстановить кабинет, выбранный оператором в `_ask_goal`, из данных FSM."""
+    return AdAccountItem(
+        id=int(data["ad_account_id"]),
+        title=str(data.get("ad_account_title", "")),
+        external_id=str(data.get("ad_account_external_id", "")),
+        username=None,
+        token_tail="",
+        advertiser_kind=str(data.get("ad_account_advertiser_kind", "owner")),
+        advertiser_name=data.get("ad_account_advertiser_name"),
+        advertiser_inn=data.get("ad_account_advertiser_inn"),
+        status="active",
+        health="unknown",
+        health_checked_at=None,
+        health_error=None,
+        balance_rub=None,
+        is_usable=True,
+        client_id=data.get("ad_account_client_id"),
+        client_name=data.get("ad_account_client_name"),
+    )
+
+
 @router.message(StateFilter(UploadCreative.waiting_description))
 async def got_description(message: Message, state: FSMContext) -> None:
-    """Принять описание и показать подтверждение отправки."""
+    """Принять описание и показать карточку подтверждения запуска (Т3).
+
+    Бриф запрашивается заново (а не берётся из FSM) — чтобы карточка показывала
+    актуальные данные, даже если оператор успел их поправить, пока грузил медиа.
+    """
     title, body = _split_description(message.text or "")
     await state.update_data(title=title, body=body)
-    summary = ["Проверьте креатив перед отправкой:"]
+    data = await state.get_data()
+    brief_id = int(data["brief_id"])
+
+    try:
+        card = await api_client.get_brief(brief_id)
+    except BriefNotFound:
+        await state.clear()
+        await message.answer(_NOT_FOUND)
+        return
+    except CoreUnavailable:
+        # Не сбрасываем состояние: описание уже принято, оператор может просто
+        # повторить его тем же сообщением, когда ядро отзовётся.
+        await message.answer(_UNAVAILABLE)
+        return
+
+    account = _account_from_state(data)
+    goal_code = str(data.get("goal", ""))
+    goal_label = GOAL_LABELS.get(goal_code, goal_code)
+
+    lines = [render_launch_confirmation(card, account, goal_label), "", "Креатив:"]
     if title:
-        summary.append(f"Заголовок: {title}")
+        lines.append(f"Заголовок: {_escape(title)}")
     if body:
-        summary.append(f"Текст: {body}")
+        lines.append(f"Текст: {_escape(body)}")
     if not title and not body:
-        summary.append("Без описания.")
-    summary.append("\nОтправка запустит подготовку рекламной кампании.")
-    await message.answer("\n".join(summary), reply_markup=creative_confirm_keyboard())
+        lines.append("Без описания.")
+    lines.append("")
+    lines.append("Отправка запустит подготовку рекламной кампании.")
+    await message.answer(
+        "\n".join(lines), parse_mode="HTML", reply_markup=creative_confirm_keyboard()
+    )
 
 
 @router.callback_query(F.data == "creative_cancel")

@@ -72,12 +72,20 @@ _CABINET_LINK_TTL = 24 * 3600
 
 
 class BriefClientOut(BaseModel):
-    """Контакты клиента в карточке брифа (операторский просмотр)."""
+    """Контакты клиента в карточке брифа (операторский просмотр).
+
+    `id` — числовой `Client.id` брифа (spec 2026-08-25-cabinet-client-binding-design
+    §Т3): бот использует его, чтобы запросить у `GET /ad-accounts` кабинеты,
+    пригодные именно этому клиенту (`?client_id=`), а не весь пул. В хвосте, с
+    дефолтом `None`, — тот же приём, что `AdAccountOut.client_id` в Т1, чтобы не
+    задеть остальные конструкторы `BriefClientOut`.
+    """
 
     full_name: str | None
     email: str | None
     phone: str | None
     telegram: str | None
+    id: int | None = None
 
 
 class BriefFieldOut(BaseModel):
@@ -173,6 +181,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
             email=view.client_email,
             phone=view.client_phone,
             telegram=view.client_telegram,
+            id=view.client_id,
         ),
         fields=[BriefFieldOut(n=f.number, label=f.label, value=f.value) for f in view.fields],
         has_creative=view.has_creative,

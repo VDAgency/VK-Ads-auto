@@ -56,6 +56,12 @@ class BriefCardView:
     # Нужен ли креатив этой площадке. Продвижение готового поста обходится без него,
     # и интерфейсы не должны просить у оператора картинку, которая никуда не пойдёт.
     surface_needs_creative: bool
+    # Числовой `Client.id` брифа (spec 2026-08-25-cabinet-client-binding-design §Т3) —
+    # бот использует его, чтобы запросить кабинеты, пригодные именно этому клиенту
+    # (`GET /ad-accounts?client_id=`), а не весь пул. В хвосте с дефолтом `None`, тот
+    # же приём, что `AdAccountView.client_id` в Т1: старые прямые конструкторы
+    # `BriefCardView(...)` в тестах не ломаются.
+    client_id: int | None = None
 
 
 async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> BriefCardView:
@@ -84,6 +90,7 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         campaign_status=campaign.status if campaign is not None else None,
         surface_title=target_title(kind),
         surface_needs_creative=surface_for(kind).needs_creative,
+        client_id=brief.client_id,
     )
 
 

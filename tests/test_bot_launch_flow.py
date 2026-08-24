@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from bot.api_client import AdAccountItem, CoreUnavailable
+from bot.api_client import AdAccountItem, BriefCard, CoreUnavailable
 from bot.handlers import creative
 from bot.states import LaunchCampaign, UploadCreative
 
@@ -66,6 +66,36 @@ def _fake_message_type(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(creative, "Message", _FakeMessage)
 
 
+def _card(**over: Any) -> BriefCard:
+    base: dict[str, Any] = {
+        "brief_id": 5,
+        "variant": "individual",
+        "status": "received",
+        "client_name": "Иван Петров",
+        "client_email": None,
+        "client_phone": None,
+        "client_telegram": None,
+        "fields": [],
+        "has_creative": False,
+        "campaign_status": None,
+        "client_id": None,
+    }
+    base.update(over)
+    return BriefCard(**base)
+
+
+@pytest.fixture(autouse=True)
+def _stub_get_brief(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Карточка брифа для сценариев, которым важен лишь выбор кабинета/цели —
+    тесты, которым важен сам бриф (`client_id` для сужения списка), переопределяют
+    `bot.api_client.get_brief` заново поверх этого стаба."""
+
+    async def fake(brief_id: int) -> BriefCard:
+        return _card(brief_id=brief_id)
+
+    monkeypatch.setattr("bot.api_client.get_brief", fake)
+
+
 def _item(**over: Any) -> AdAccountItem:
     base: dict[str, Any] = {
         "id": 1,
@@ -88,7 +118,7 @@ def _item(**over: Any) -> AdAccountItem:
 
 
 def _stub_list(monkeypatch: pytest.MonkeyPatch, items: list[AdAccountItem]) -> None:
-    async def fake() -> list[AdAccountItem]:
+    async def fake(client_id: int | None = None) -> list[AdAccountItem]:
         return items
 
     monkeypatch.setattr("bot.api_client.list_ad_accounts", fake)
@@ -191,7 +221,7 @@ def test_picking_goal_finally_asks_for_media() -> None:
 
 
 def test_core_down_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def broken() -> list[AdAccountItem]:
+    async def broken(client_id: int | None = None) -> list[AdAccountItem]:
         raise CoreUnavailable("down")
 
     monkeypatch.setattr("bot.api_client.list_ad_accounts", broken)

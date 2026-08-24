@@ -104,6 +104,25 @@ def creative_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def launch_confirm_keyboard(brief_id: int, ad_account_id: int) -> InlineKeyboardMarkup:
+    """Подтверждение запуска кампании без креатива (карточка подтверждения, Т3).
+
+    В отличие от `creative_confirm_keyboard` кладём оба id в `callback_data`: у
+    сценария «без креатива» нет отдельного FSM-состояния, которое хранило бы их
+    между показом карточки и нажатием кнопки.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚀 Запустить", callback_data=f"nocre_confirm:{brief_id}:{ad_account_id}"
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="nocre_cancel"),
+            ]
+        ]
+    )
+
+
 def code_keypad() -> InlineKeyboardMarkup:
     """Цифровая клавиатура для кода авторизации юзер-бота (/link_userbot).
 
