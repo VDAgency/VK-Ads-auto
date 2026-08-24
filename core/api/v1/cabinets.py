@@ -18,7 +18,7 @@ from db.session import get_session
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from services.cabinet_stats import cabinet_stats, list_cabinets
-from services.stats_sync import sync_cabinet_stats
+from services.stats_sync import cabinet_sync_ok, sync_cabinet_stats
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/cabinets", tags=["cabinets"])
@@ -116,13 +116,16 @@ async def sync_cabinet(
     Синк по кампании никогда не бросает исключение наружу (см.
     `services.stats_sync`): сбой площадки попадает в `results` как `error`, а
     `ok=False` — честная сводка вместо 5xx, чтобы бот показал сохранённые данные
-    с пометкой о сбое, а не уронил экран статистики.
+    с пометкой о сбое, а не уронил экран статистики. `ok` считается через
+    `cabinet_sync_ok` (A2): пустая сводка (под этим кабинетом нет ни одной активной
+    кампании) — тоже `ok=False`, а не тривиальный успех — иначе бот показывал бы
+    устаревшие цифры без всякой пометки.
     """
     results = await sync_cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id)
     await session.commit()
     failed = sum(1 for outcome in results.values() if outcome != "ok")
     return CabinetSyncOut(
-        ok=failed == 0,
+        ok=cabinet_sync_ok(results),
         synced=len(results) - failed,
         failed=failed,
         results=results,

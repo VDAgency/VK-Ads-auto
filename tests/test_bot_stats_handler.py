@@ -33,9 +33,9 @@ class _FakeCallback:
         self.answered = True
 
 
-def _cabinet(cid: str, is_mock: bool) -> CabinetItem:
+def _cabinet(cid: str, is_mock: bool, status: str = "active") -> CabinetItem:
     return CabinetItem(
-        id=cid, name=f"Кабинет {cid}", status="active", launched_at="2026-08-01", is_mock=is_mock
+        id=cid, name=f"Кабинет {cid}", status=status, launched_at="2026-08-01", is_mock=is_mock
     )
 
 
@@ -234,3 +234,26 @@ def test_sync_success_has_no_honest_note(monkeypatch: pytest.MonkeyPatch) -> Non
 
     text, _ = callback.message.answers[0]
     assert "не удалось обновить" not in text.lower()
+
+
+# --- A2: список кабинетов показывает честный статус кампании, не только "active" ---
+
+
+def test_list_translates_real_campaign_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Статус кабинета теперь — реальный статус кампании (`launched`/`prepared`/...),
+    а не захардкоженный "active" — оператор должен видеть его по-русски, не сырым
+    кодом площадки."""
+
+    async def fake() -> list[CabinetItem]:
+        return [
+            _cabinet("777", False, status="launched"),
+            _cabinet("888", False, status="prepared"),
+        ]
+
+    monkeypatch.setattr("bot.api_client.get_cabinets", fake)
+    message = _FakeMessage()
+    asyncio.run(stats.show_stats(message))
+
+    text = message.answers[0][0]
+    assert "launched" not in text
+    assert "prepared" not in text

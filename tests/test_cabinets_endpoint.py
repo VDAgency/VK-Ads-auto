@@ -109,12 +109,14 @@ def test_list_returns_mock_cabinets_when_flag_enabled(monkeypatch: pytest.Monkey
     assert all(item["is_mock"] for item in data["items"])
 
 
-def test_list_returns_real_when_stats_exist() -> None:
-    code, data = asyncio.run(_call("/api/v1/cabinets", with_stats=True))
+def test_list_returns_real_when_campaign_exists() -> None:
+    """Список кабинетов строится из кампаний, не из истории срезов `Stat` (A2)."""
+    code, data = asyncio.run(_call("/api/v1/cabinets", with_stub_campaign=True))
     assert code == 200
     ids = [i["id"] for i in data["items"]]
-    assert ids == ["camp-1"]
+    assert ids == ["stub-campaign-1"]
     assert data["items"][0]["is_mock"] is False
+    assert data["items"][0]["status"] == "launched"
 
 
 def test_stats_detail_real() -> None:
@@ -182,7 +184,12 @@ def test_sync_cabinet_endpoint_persists_stat_for_matching_campaign() -> None:
 
 
 def test_sync_cabinet_endpoint_does_not_touch_other_cabinets() -> None:
-    """Синк по конкретному кабинету не должен цеплять кампании других кабинетов."""
+    """Синк по конкретному кабинету не должен цеплять кампании других кабинетов.
+
+    Пустая сводка (A2) — честное «нечего обновлять», а не успех: раньше `ok=True`
+    здесь ошибочно означал бы, что данные обновились, хотя синк не тронул ни одной
+    кампании.
+    """
 
     code, data = asyncio.run(
         _call(
@@ -192,4 +199,4 @@ def test_sync_cabinet_endpoint_does_not_touch_other_cabinets() -> None:
         )
     )
     assert code == 200
-    assert data == {"ok": True, "synced": 0, "failed": 0, "results": {}}
+    assert data == {"ok": False, "synced": 0, "failed": 0, "results": {}}

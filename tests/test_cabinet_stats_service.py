@@ -2,6 +2,10 @@
 
 Задача 2 (дефекты 2 и 4): мок-гейт закрыт по умолчанию (нужен явный
 `MOCK_STATS_ENABLED=true`), агрегат по кабинету не задваивает историю срезов.
+
+A2 (2026-08-24): список кабинетов строится из кампаний, а не из истории срезов
+`Stat` — иначе удалённая кампания висит кабинетом-призраком (срезы остаются
+сиротами), а свежезапущенная не видна до первого синка.
 """
 
 from __future__ import annotations
@@ -15,8 +19,10 @@ import pytest
 import services.cabinet_stats as cabinet_stats_module
 from config.settings import Settings
 from db.base import Base
-from db.models import Account, Client, Stat
+from db.models import Account, Brief, Campaign, Client, Stat
+from db.repositories import delete_campaign_row, save_stat
 from services.cabinet_stats import CabinetView, cabinet_stats, list_cabinets
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -54,6 +60,28 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
         result = await scenario(session)
     await engine.dispose()
     return result
+
+
+async def _create_campaign(
+    session: AsyncSession,
+    *,
+    account_id: int = 1,
+    external_id: str,
+    status: str = "launched",
+) -> Campaign:
+    """Кампания-«кабинет»: минимальные Client/Brief под FK (см. tests/test_cabinet_repo.py)."""
+    session.add(Client(id=1, account_id=account_id, full_name="Клиент"))
+    session.add(Brief(id=1, account_id=account_id, client_id=1, variant="individual", payload={}))
+    campaign = Campaign(
+        account_id=account_id,
+        brief_id=1,
+        objective="socialengagement",
+        status=status,
+        external_id=external_id,
+    )
+    session.add(campaign)
+    await session.commit()
+    return campaign
 
 
 # --- дефект 2: демо-гейт закрыт по умолчанию, показывается только по явному флагу --
@@ -95,10 +123,11 @@ def test_no_mock_stats_by_default_when_no_real_data(monkeypatch: pytest.MonkeyPa
     assert is_mock is False
 
 
-def test_real_cabinets_when_stats_exist() -> None:
+def test_real_cabinets_when_campaign_exists() -> None:
+    """Кабинет виден по кампании, даже если среза `Stat` по ней ещё нет вовсе (A2)."""
+
     async def scenario(session: AsyncSession) -> list[tuple[str, bool]]:
-        session.add(Stat(account_id=1, campaign_id="camp-1", shows=100, clicks=5, spent=70))
-        await session.commit()
+        await _create_campaign(session, external_id="camp-1")
         cabinets = await list_cabinets(session, 1, now=NOW)
         return [(c.id, c.is_mock) for c in cabinets]
 
@@ -219,3 +248,54 @@ def test_mock_metrics_differ_by_period(monkeypatch: pytest.MonkeyPatch) -> None:
 
     month, week = asyncio.run(_with_db(scenario))
     assert month > week > 0  # больше окно — больше показов
+
+
+# --- A2: список кабинетов строится из кампаний, а не из истории срезов Stat -------
+
+
+def test_launched_campaign_is_listed_before_any_stat_snapshot() -> None:
+    """Запущенная кампания видна сразу, а не после первого синка."""
+
+    async def scenario(session: AsyncSession) -> list[CabinetView]:
+        await _create_campaign(session, external_id="777", status="launched")
+        return await list_cabinets(session, 1, now=NOW)
+
+    cabinets = asyncio.run(_with_db(scenario))
+    assert [c.id for c in cabinets] == ["777"]
+    assert cabinets[0].status == "launched"
+
+
+def test_deleted_campaign_does_not_haunt_the_list() -> None:
+    """Срез удалённой кампании (сирота без строки `Campaign`) не создаёт кабинет-призрак."""
+
+    async def scenario(session: AsyncSession) -> list[CabinetView]:
+        await save_stat(session, 1, "666", 0, 0, 0, 0)
+        await session.commit()
+        return await list_cabinets(session, 1, now=NOW)
+
+    assert asyncio.run(_with_db(scenario)) == []
+
+
+def test_prepared_and_stopped_campaigns_are_listed_with_honest_status() -> None:
+    """Статус кабинета — реальный статус кампании, не захардкоженный "active"."""
+
+    async def scenario(session: AsyncSession) -> list[tuple[str, str]]:
+        await _create_campaign(session, external_id="prep-1", status="prepared")
+        return [(c.id, c.status) for c in await list_cabinets(session, 1, now=NOW)]
+
+    assert asyncio.run(_with_db(scenario)) == [("prep-1", "prepared")]
+
+
+def test_deleting_campaign_row_also_removes_its_stat_snapshots() -> None:
+    """Удаление строки кампании чистит и её срезы `Stat` — иначе они остаются сиротами."""
+
+    async def scenario(session: AsyncSession) -> list[Stat]:
+        campaign = await _create_campaign(session, external_id="ext-del")
+        await save_stat(session, 1, "ext-del", 100, 5, 50, 1)
+        await session.commit()
+        deleted = await delete_campaign_row(session, 1, campaign.id)
+        await session.commit()
+        assert deleted is True
+        return list((await session.execute(select(Stat))).scalars().all())
+
+    assert asyncio.run(_with_db(scenario)) == []

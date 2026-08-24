@@ -24,7 +24,7 @@ from db.models import Account, Brief, Cabinet, Campaign, Client, Stat
 from integrations.adapter import PlatformAdapter
 from pydantic import SecretStr
 from services.ad_accounts import add_account
-from services.stats_sync import sync_cabinet_stats, sync_campaign_stats
+from services.stats_sync import cabinet_sync_ok, sync_cabinet_stats, sync_campaign_stats
 from services.vk_identity import VkIdentity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -604,3 +604,42 @@ def test_sync_cabinet_stats_error_is_reported_not_raised() -> None:
         )
 
     assert asyncio.run(_with_db(scenario)) == {1: "error"}
+
+
+# --- A2: пустой синк кабинета — это «нечего обновлять», а не успех -----------------
+
+
+def test_cabinet_sync_ok_is_false_when_nothing_matched() -> None:
+    """Пустая сводка (кампаний под этим кабинетом нет вовсе) — не успех.
+
+    Раньше `failed == 0` на пустом словаре ошибочно засчитывался роутером как удачный
+    синк, и бот показывал устаревшие цифры без всякой пометки об этом.
+    """
+    assert cabinet_sync_ok({}) is False
+
+
+def test_cabinet_sync_ok_is_true_when_matched_campaign_synced() -> None:
+    assert cabinet_sync_ok({1: "ok"}) is True
+
+
+def test_cabinet_sync_ok_is_false_on_any_error_or_skip() -> None:
+    assert cabinet_sync_ok({1: "error"}) is False
+    assert cabinet_sync_ok({1: "skipped"}) is False
+    assert cabinet_sync_ok({1: "ok", 2: "error"}) is False
+
+
+def test_sync_cabinet_stats_for_unmatched_cabinet_is_not_a_successful_update() -> None:
+    """Синк кабинета, для которого нет активных кампаний, не считается успешным
+    обновлением — не только на уровне пустого словаря, но и на уровне итоговой оценки.
+    """
+    adapter = _FakeAdapter()
+
+    async def scenario(session: AsyncSession) -> dict[int, str]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1))
+        await session.commit()
+        return await sync_cabinet_stats(
+            session, 1, "does-not-exist", settings=_settings(), adapters={"vk_api": adapter}
+        )
+
+    results = asyncio.run(_with_db(scenario))
+    assert cabinet_sync_ok(results) is False

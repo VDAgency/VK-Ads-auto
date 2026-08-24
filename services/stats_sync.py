@@ -191,12 +191,14 @@ async def sync_cabinet_stats(
     """Синхронизировать метрики и статус кампаний ОДНОГО кабинета (задача 2, дефект 1).
 
     «Кабинет» здесь — то же, чем оперирует `services.cabinet_stats`: внешний id
-    кампании (`Campaign.external_id`, см. `db.repositories.list_stat_campaign_ids`).
+    кампании (`Campaign.external_id`, см. `db.repositories.list_cabinet_campaigns`).
     Используется входом оператора в кабинет в боте — обновить метрики ИМЕННО этого
     кабинета перед показом, не трогая остальные активные кампании тенанта.
 
     Возвращает пустую сводку, если среди активных кампаний нет ни одной с таким
-    `external_id` — честно нечего синкать, это не ошибка.
+    `external_id` — честно нечего синкать, это не ошибка сама по себе. Но и не
+    успешное обновление: вызывающий определяет это через `cabinet_sync_ok`
+    (пустая сводка — это «нечего обновлять», не «обновлено»).
     """
     cfg = settings or get_settings()
     overrides = dict(adapters or {})
@@ -204,3 +206,19 @@ async def sync_cabinet_stats(
         c for c in await list_active_campaigns(session, account_id) if c.external_id == cabinet_id
     ]
     return await _sync_campaigns(session, account_id, campaigns, cfg, overrides)
+
+
+def cabinet_sync_ok(results: Mapping[int, str]) -> bool:
+    """Честная оценка синка ОДНОГО кабинета (A2, ещё один дефект той же зоны).
+
+    Пустая сводка — под этим `external_id` нет ни одной активной кампании (кабинет
+    не найден или ничего не запущено) — раньше на уровне `core/api/v1/cabinets.py`
+    ошибочно засчитывалась успехом: `failed == sum(... != "ok")` тривиально равен
+    нулю на пустом словаре, поэтому `ok=True` возвращался, даже когда синк не тронул
+    ни одной кампании. Бот показывал устаревшие цифры без всякой пометки о том, что
+    обновить их не удалось.
+
+    Успех — это «что-то реально совпало и обновилось без ошибок», а не просто
+    «ошибок не было» (на пустом множестве это условие выполняется всегда).
+    """
+    return bool(results) and all(outcome == "ok" for outcome in results.values())
