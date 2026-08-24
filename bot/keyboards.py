@@ -93,11 +93,17 @@ def brief_card_keyboard(brief_id: int, *, needs_creative: bool = True) -> Inline
 
 
 def creative_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Подтверждение отправки креатива (триггер запуска РК)."""
+    """Подтверждение запуска кампании с креативом (тратит бюджет клиента).
+
+    Тот же текст кнопки, что у `launch_confirm_keyboard` (сценарий без креатива,
+    ревью операторского опыта §2.1): оба нажатия запускают кампанию, а к этому
+    моменту оператор уже видел слово «Отправить» для медиа и текста — третье
+    значение того же слова путает.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Отправить", callback_data="creative_send"),
+                InlineKeyboardButton(text="🚀 Запустить", callback_data="creative_send"),
                 InlineKeyboardButton(text="✖ Отмена", callback_data="creative_cancel"),
             ]
         ]
@@ -187,6 +193,9 @@ def ad_accounts_keyboard(has_accounts: bool) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🗑 Удалить", callback_data="adacc:del"),
             ]
         )
+        rows.append(
+            [InlineKeyboardButton(text="🔗 Привязать к клиенту", callback_data="adacc:client")]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -227,6 +236,48 @@ def ad_account_delete_confirm_keyboard(account_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+# Клиентов сейчас девять, со временем станет больше — режем список на страницы,
+# а не вываливаем всех разом: длинная клавиатура неудобна для выбора и рискует
+# упереться в лимиты Telegram на число рядов.
+_CLIENTS_PAGE_SIZE = 8
+
+
+def client_pick_keyboard(
+    items: list[tuple[int, str]], page: int, action: str
+) -> InlineKeyboardMarkup:
+    """Выбор клиента для привязки кабинета — постранично, с быстрым «оставить общим».
+
+    Общая клавиатура для двух сценариев (`bot/handlers/ad_accounts.py`): привязка
+    при добавлении нового кабинета и перепривязка уже заведённого. `items` — уже
+    готовый список `[(client_id, подпись)]`; функция сама режет его на страницы
+    по `_CLIENTS_PAGE_SIZE`, поэтому вызывающая сторона не хранит постраничные
+    срезы отдельно. `action` — префикс callback_data, который разводит сценарии
+    и (для перепривязки) несёт id кабинета:
+    `{action}:none` — оставить общим, `{action}:{client_id}` — закрепить,
+    `{action}:pg:{page}` — другая страница.
+    """
+    start = page * _CLIENTS_PAGE_SIZE
+    page_items = items[start : start + _CLIENTS_PAGE_SIZE]
+    rows = [[InlineKeyboardButton(text="🌐 Оставить общим", callback_data=f"{action}:none")]]
+    rows += [
+        [InlineKeyboardButton(text=label[:60], callback_data=f"{action}:{client_id}")]
+        for client_id, label in page_items
+    ]
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text="◀ Ещё клиенты", callback_data=f"{action}:pg:{page - 1}")
+        )
+    if start + _CLIENTS_PAGE_SIZE < len(items):
+        nav.append(
+            InlineKeyboardButton(text="Ещё клиенты ▶", callback_data=f"{action}:pg:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="✖ Отмена", callback_data="adacc:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:

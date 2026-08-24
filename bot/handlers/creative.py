@@ -127,7 +127,10 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await state.set_state(LaunchCampaign.choosing_cabinet)
-    await state.update_data(brief_id=brief_id)
+    # `client_id` брифа остаётся в FSM, чтобы `picked_cabinet` ниже мог им
+    # воспользоваться при повторном запросе списка — тот же принцип фильтрации,
+    # что уже применён в этом самом вызове (ревью операторского опыта §2.5).
+    await state.update_data(brief_id=brief_id, client_id=card.client_id)
     if len(usable) == 1:
         # Один кабинет — выбирать не из чего, но подтверждение показываем:
         # оператор должен видеть, куда именно уедет кампания.
@@ -202,12 +205,19 @@ def _fallback_account(ad_account_id: int) -> AdAccountItem:
     F.data.startswith("adacc:launch:"), StateFilter(LaunchCampaign.choosing_cabinet)
 )
 async def picked_cabinet(callback: CallbackQuery, state: FSMContext) -> None:
-    """Оператор выбрал кабинет — переходим к цели."""
+    """Оператор выбрал кабинет — переходим к цели.
+
+    Список перезапрашивается для клиента ЭТОГО брифа (`client_id`, сохранённый
+    в FSM в `start_creative`), а не всего пула (ревью операторского опыта §2.5,
+    тот же дефект и то же выравнивание, что в
+    `bot/handlers/brief_card.py:picked_cabinet_for_launch`).
+    """
     parts = (callback.data or "").split(":")
     brief_id, ad_account_id = int(parts[2]), int(parts[3])
     if isinstance(callback.message, Message):
+        data = await state.get_data()
         try:
-            accounts = await api_client.list_ad_accounts()
+            accounts = await api_client.list_ad_accounts(client_id=data.get("client_id"))
         except CoreUnavailable:
             await callback.message.answer(_UNAVAILABLE)
             await callback.answer()
@@ -310,12 +320,15 @@ def _advertiser_line(account: AdAccountItem) -> str:
 
 
 def _binding_line(account: AdAccountItem) -> str:
-    """Закреплён ли кабинет за клиентом — та же формулировка, что в /cabinets
-    (`bot/handlers/ad_accounts.py:_client_binding_label`), для единого языка бота."""
+    """Закреплён ли кабинет за клиентом — тот же корень формулировки, что в
+    /cabinets (`bot/handlers/ad_accounts.py:_client_binding_label`: «кабинет
+    общий — доступен любому клиенту»), для единого языка бота (ревью
+    операторского опыта §2.4: раньше здесь звучало «не закреплён», а в
+    /cabinets — «общий», хотя этот комментарий утверждал обратное). Здесь фраза
+    не дословная — это самостоятельное предложение карточки подтверждения
+    оплаты, а не продолжение строки списка, плюс совет проверить счёт."""
     if account.client_id is None:
-        return (
-            "Кабинет не закреплён за клиентом — общий, проверьте, что запускаете с нужного счёта."
-        )
+        return "Кабинет общий — доступен любому клиенту. Проверьте, что запускаете с нужного счёта."
     if account.client_name:
         return f"Кабинет закреплён за этим клиентом: {_escape(account.client_name)}."
     return "Кабинет закреплён за этим клиентом (имя не указано)."
@@ -333,6 +346,12 @@ def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_lab
     Экранируем каждое значение, пришедшее из брифа/VK/оператора: неэкранированный
     `<`/`&` в HTML-сообщении молча рушит всю отправку целиком (тот же дефект, что
     чинили для заголовка кабинета в `_ask_goal`).
+
+    Показываем и распознанную площадку (`card.surface_title`, ревью операторского
+    опыта §2.6) — она уже есть в карточке брифа (`bot/handlers/brief_card.py:
+    _render_card`) рядом с этой же ссылкой на объект и заметно ускоряет сверку
+    глазами: без неё оператор видит только сырую ссылку и не понимает, во что
+    именно бот превратил формулировку клиента.
     """
     client_name = _escape(card.client_name or "не указан")
     client_inn = _escape(_tax_id(card) or "не указан")
@@ -348,6 +367,10 @@ def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_lab
         "",
         f"👤 Клиент: {client_name} · ИНН {client_inn}",
         f"🔗 Объект рекламы: {object_url}",
+    ]
+    if card.surface_title:
+        lines.append(f"🎯 Площадка: {_escape(card.surface_title)}")
+    lines += [
         f"🎯 Цель: {_escape(goal_label)}",
         f"💰 Бюджет: {budget} · срок: {term}",
         "",

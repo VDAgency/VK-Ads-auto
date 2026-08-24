@@ -21,12 +21,19 @@ from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 
 from bot import api_client
 from bot.access import OperatorOnly
-from bot.api_client import AdAccountItem, AdAccountNotFound, AdAccountRejected, CoreUnavailable
+from bot.api_client import (
+    AdAccountItem,
+    AdAccountNotFound,
+    AdAccountRejected,
+    ClientItem,
+    CoreUnavailable,
+)
 from bot.keyboards import (
     ad_account_delete_confirm_keyboard,
     ad_account_kind_keyboard,
     ad_account_pick_keyboard,
     ad_accounts_keyboard,
+    client_pick_keyboard,
 )
 from bot.states import AddAdAccount
 
@@ -66,6 +73,13 @@ _ASK_TOKEN = (
     "Где взять: в VK Рекламе «Профиль» → «Доступ к API». Нужен именно "
     "<code>access_token</code> из выданного JSON."
 )
+# Один и тот же вопрос — при добавлении нового кабинета и при перепривязке уже
+# заведённого (spec 2026-08-25 §1.1-1.2): закрепить кабинет за клиентом или
+# оставить его общим (та же формулировка общего кабинета, что в `_client_binding_label`).
+_ASK_CLIENT = (
+    "За каким клиентом закрепить кабинет? Либо оставьте его общим — тогда кабинет "
+    "будет доступен для запуска с любым клиентом."
+)
 _CANCELLED = "Отменено."
 
 _HEALTH_LABEL = {
@@ -95,12 +109,29 @@ def _client_binding_label(item: AdAccountItem) -> str:
     Привязка (`client_id`) может стоять, а имя клиента (`Client.full_name`) — быть
     пустым, поэтому пустую строку посреди сообщения не выводим, а честно говорим,
     что имя не указано.
+
+    Корень формулировки для общего кабинета («кабинет общий — доступен любому
+    клиенту») — тот же, что в карточке подтверждения запуска
+    (`bot/handlers/creative.py:_binding_line`, ревью 2026-08-25 §2.4): там та же
+    фраза плюс совет проверить счёт, здесь — как есть, продолжением строки списка.
     """
     if item.client_id is None:
-        return "общий кабинет — доступен любому клиенту"
+        return "кабинет общий — доступен любому клиенту"
     if item.client_name:
         return f"закреплён за клиентом: {item.client_name}"
     return "закреплён за клиентом (имя не указано)"
+
+
+def _client_label(item: ClientItem) -> str:
+    """Подпись кнопки выбора клиента: имя, иначе первый известный контакт."""
+    name = item.full_name or item.email or item.phone or item.telegram or f"клиент №{item.id}"
+    return f"{name} — {item.brief_count} бриф."
+
+
+async def _client_items(operator_telegram_id: int) -> list[tuple[int, str]]:
+    """Клиенты оператора для клавиатуры выбора (может поднять `CoreUnavailable`)."""
+    clients = await api_client.list_clients(operator_telegram_id)
+    return [(c.id, _client_label(c)) for c in clients]
 
 
 def _account_line(item: AdAccountItem, index: int) -> str:
@@ -187,8 +218,7 @@ async def got_kind(callback: CallbackQuery, state: FSMContext) -> None:
             await state.set_state(AddAdAccount.entering_advertiser)
             await callback.message.answer(_ASK_ADVERTISER, parse_mode="HTML")
         else:
-            await state.set_state(AddAdAccount.entering_token)
-            await callback.message.answer(_ASK_TOKEN, parse_mode="HTML")
+            await _ask_client(callback.message, callback.from_user.id, state)
     await callback.answer()
 
 
@@ -201,8 +231,47 @@ async def got_advertiser(message: Message, state: FSMContext) -> None:
     if len(parts) > 1 and parts[-1].isdigit() and 10 <= len(parts[-1]) <= 12:
         name, inn = ", ".join(parts[:-1]).strip(), parts[-1]
     await state.update_data(advertiser_name=name or None, advertiser_inn=inn)
+    operator_id = message.from_user.id if message.from_user else 0
+    await _ask_client(message, operator_id, state)
+
+
+async def _ask_client(
+    message: Message, operator_telegram_id: int, state: FSMContext, page: int = 0
+) -> None:
+    """Спросить, за каким клиентом закрепить кабинет (шаг 1.1 добавления).
+
+    Тот же вопрос и та же клавиатура, что при перепривязке уже заведённого
+    кабинета (`_ask_rebind_client` ниже) — только результат уходит не сразу в
+    ядро, а в данные FSM: кабинета ещё нет, привязывать пока нечего, `got_client`
+    лишь запоминает выбор и просит токен.
+    """
+    try:
+        items = await _client_items(operator_telegram_id)
+    except CoreUnavailable:
+        await state.clear()
+        await message.answer(_UNAVAILABLE)
+        return
+    await state.set_state(AddAdAccount.choosing_client)
+    await message.answer(_ASK_CLIENT, reply_markup=client_pick_keyboard(items, page, "addclient"))
+
+
+@router.callback_query(F.data.startswith("addclient:"), StateFilter(AddAdAccount.choosing_client))
+async def got_client(callback: CallbackQuery, state: FSMContext) -> None:
+    """Клиент выбран (или «оставить общим») — запомнить выбор и попросить токен."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    choice = (callback.data or "").split(":", 1)[1]
+    if choice.startswith("pg:"):
+        page = int(choice.split(":", 1)[1])
+        await _ask_client(callback.message, callback.from_user.id, state, page=page)
+        await callback.answer()
+        return
+    client_id = None if choice == "none" else int(choice)
+    await state.update_data(client_id=client_id)
     await state.set_state(AddAdAccount.entering_token)
-    await message.answer(_ASK_TOKEN, parse_mode="HTML")
+    await callback.message.answer(_ASK_TOKEN, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.message(StateFilter(AddAdAccount.entering_token))
@@ -223,6 +292,7 @@ async def got_token(message: Message, state: FSMContext) -> None:
             advertiser_kind=str(data.get("advertiser_kind", "owner")),
             advertiser_name=data.get("advertiser_name"),
             advertiser_inn=data.get("advertiser_inn"),
+            client_id=data.get("client_id"),
         )
     except AdAccountRejected as exc:
         await message.answer(f"❌ {exc.reason}")
@@ -233,7 +303,8 @@ async def got_token(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"✅ Кабинет добавлен: <b>{item.title}</b>\n"
-        f"id {item.external_id} · токен …{item.token_tail}",
+        f"id {item.external_id} · токен …{item.token_tail}\n"
+        f"{_client_binding_label(item)}",
         parse_mode="HTML",
     )
     await _show_list(message)
@@ -324,4 +395,85 @@ async def do_delete(callback: CallbackQuery) -> None:
     ):
         await callback.message.answer("🗑 Кабинет удалён.")
         await _show_list(callback.message)
+    await callback.answer()
+
+
+# --- перепривязка к клиенту (spec 2026-08-25 §1.2) -----------------------------
+#
+# Изменить привязку уже заведённого кабинета — та же пара вопросов, что при
+# добавлении (`_ask_client`/`got_client`), но без FSM: кабинет выбирается из
+# списка тем же приёмом, что «Проверить»/«Удалить» (`adacc:{action}:{id}`), а
+# выбор клиента сразу уходит в ядро через `set_ad_account_client`, а не оседает
+# в данных сценария — перепривязывать нечего копить, кабинет уже существует.
+
+
+@router.callback_query(F.data == "adacc:client")
+async def start_rebind(callback: CallbackQuery) -> None:
+    """Выбрать кабинет, которому нужно изменить привязку к клиенту."""
+    try:
+        items = await api_client.list_ad_accounts()
+    except CoreUnavailable:
+        await callback.answer(_UNAVAILABLE, show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Какому кабинету изменить привязку?",
+            reply_markup=ad_account_pick_keyboard(_pick_items(items), "clientpick"),
+        )
+    await callback.answer()
+
+
+async def _ask_rebind_client(
+    message: Message, operator_telegram_id: int, account_id: int, page: int = 0
+) -> None:
+    """Спросить, за каким клиентом закрепить УЖЕ заведённый кабинет `account_id`."""
+    try:
+        items = await _client_items(operator_telegram_id)
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        return
+    await message.answer(
+        _ASK_CLIENT, reply_markup=client_pick_keyboard(items, page, f"adaccbind:{account_id}")
+    )
+
+
+@router.callback_query(F.data.startswith("adacc:clientpick:"))
+async def pick_client_for_rebind(callback: CallbackQuery) -> None:
+    """Кабинет выбран — теперь спрашиваем, за каким клиентом его закрепить."""
+    account_id = int((callback.data or "").rsplit(":", 1)[1])
+    if isinstance(callback.message, Message):
+        await _ask_rebind_client(callback.message, callback.from_user.id, account_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adaccbind:"))
+async def rebind_client(callback: CallbackQuery) -> None:
+    """Применить новую привязку кабинета к клиенту — сразу через ядро (Т1.2)."""
+    parts = (callback.data or "").split(":")
+    account_id, choice = int(parts[1]), parts[2]
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    if choice == "pg":
+        page = int(parts[3])
+        await _ask_rebind_client(callback.message, callback.from_user.id, account_id, page=page)
+        await callback.answer()
+        return
+
+    client_id = None if choice == "none" else int(choice)
+    try:
+        item = await api_client.set_ad_account_client(account_id, client_id)
+    except AdAccountNotFound:
+        await callback.answer("Кабинет уже удалён.", show_alert=True)
+        return
+    except AdAccountRejected as exc:
+        await callback.message.answer(f"❌ {exc.reason}")
+        await callback.answer()
+        return
+    except CoreUnavailable:
+        await callback.answer(_UNAVAILABLE, show_alert=True)
+        return
+
+    await callback.message.answer(f"🔗 Привязка обновлена: {_client_binding_label(item)}.")
+    await _show_list(callback.message)
     await callback.answer()

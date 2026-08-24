@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 
 import httpx
 from config.settings import get_settings
+from services.admin_auth import generate_admin_session
 
 _TIMEOUT = httpx.Timeout(10.0)
 # Операции юзербота, которые реально ходят в Telegram: перебор точек на сервере
@@ -1096,3 +1097,59 @@ async def delete_community_token(reference: str) -> None:
         raise CommunityTokenNotFound(reference)
     if response.status_code >= 400:
         raise CoreUnavailable(f"core {response.status_code}")
+
+
+# --- клиенты: список для привязки кабинета (spec 2026-08-25 §1.1) ------------
+
+
+@dataclass(frozen=True, slots=True)
+class ClientItem:
+    """Клиент оператора для выбора при привязке кабинета (зеркало `ClientRow` ядра)."""
+
+    id: int
+    full_name: str | None
+    email: str | None
+    phone: str | None
+    telegram: str | None
+    brief_count: int
+
+
+def _admin_auth_cookies(operator_telegram_id: int) -> dict[str, str]:
+    """Подписать одноразовый admin-session токен для служебного вызова `/admin/*`.
+
+    `GET /admin/clients` защищён `require_admin` (веб-сессия по cookie) — у бота
+    своей веб-сессии нет, но у него есть секрет, общий с ядром. Тот же приём, что
+    `bot/handlers/admin.py:generate_admin_link` уже использует, чтобы выпустить
+    оператору magic-link входа в веб-админку: чистая HMAC-подпись, сеть не
+    участвует, секрет наружу не уходит. `operator_telegram_id` — тот же Telegram
+    ID, которым `OperatorOnly` уже опознаёт оператора.
+    """
+    token = generate_admin_session(
+        operator_telegram_id, get_settings().secret_key.get_secret_value()
+    )
+    return {"admin_session": token}
+
+
+async def list_clients(operator_telegram_id: int) -> list[ClientItem]:
+    """`GET /admin/clients`: клиенты оператора — для выбора при привязке кабинета."""
+    url = f"{_base_url()}/api/v1/admin/clients"
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, cookies=_admin_auth_cookies(operator_telegram_id)
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    payload: dict[str, Any] = response.json()
+    return [
+        ClientItem(
+            id=int(item["id"]),
+            full_name=item.get("full_name"),
+            email=item.get("email"),
+            phone=item.get("phone"),
+            telegram=item.get("telegram"),
+            brief_count=int(item.get("brief_count", 0)),
+        )
+        for item in payload.get("items", [])
+    ]

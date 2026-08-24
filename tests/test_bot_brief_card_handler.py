@@ -12,6 +12,7 @@ from bot.api_client import (
     BriefFieldItem,
     BriefNotFound,
     CoreUnavailable,
+    CreativeRejected,
     CreativeResult,
     InviteItem,
 )
@@ -371,6 +372,64 @@ def test_picked_cabinet_for_launch_shows_confirmation(monkeypatch: pytest.Monkey
     datas = [b.callback_data for row in markup.inline_keyboard for b in row]
     assert "nocre_confirm:7:4" in datas
     assert callback.answered
+
+
+def test_picked_cabinet_for_launch_filters_by_brief_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ревью 2.5: список кабинетов запрашивается для клиента ЭТОГО брифа, не всего
+    пула — иначе по старому/повторному колбэку можно вытащить в карточку кабинет
+    чужого клиента (ядро отклонит запуск, но карточка соврёт про привязку)."""
+    captured: dict[str, Any] = {}
+
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
+        captured["client_id"] = client_id
+        return [_account(3, title="Первый"), _account(4, title="Второй")]
+
+    _stub_get_brief(monkeypatch, _card(client_id=42))
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("adacc:nocre:7:4")
+    asyncio.run(brief_card.picked_cabinet_for_launch(callback))
+
+    assert captured["client_id"] == 42
+
+
+def test_no_creative_confirmation_text_names_the_button(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ревью 2.2: карточка без креатива не должна говорить «Отправка», раз кнопка
+    называется «🚀 Запустить» — иначе текст противоречит самой кнопке."""
+
+    async def fake_accounts(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(3)]
+
+    _stub_get_brief(monkeypatch)
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_accounts)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("launch:7")
+    asyncio.run(brief_card.launch_without_creative(callback))
+
+    text, _markup = callback.message.answers[-1]
+    assert "Нажмите «🚀 Запустить», чтобы кампания без креатива ушла в VK." in text
+    assert "Отправка запустит" not in text
+
+
+def test_confirm_launch_without_creative_shows_rejection_in_shared_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ревью 2.3: отказ ядра здесь подаётся тем же `⚠️ {причина}`, что и в
+    сценарии с креативом (`bot/handlers/creative.py:send_creative`) — один и
+    тот же класс отказа не должен звучать по-разному в зависимости от сценария."""
+
+    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+        raise CreativeRejected("Конечный рекламодатель кабинета не совпадает с клиентом брифа.")
+
+    monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
+    monkeypatch.setattr(brief_card, "Message", _FakeMessage)
+    callback = _FakeCallback("nocre_confirm:7:4")
+    asyncio.run(brief_card.confirm_launch_without_creative(callback))
+
+    text, _markup = callback.message.answers[-1]
+    assert text == "⚠️ Конечный рекламодатель кабинета не совпадает с клиентом брифа."
 
 
 def test_confirm_launch_without_creative_reaches_the_core(monkeypatch: pytest.MonkeyPatch) -> None:

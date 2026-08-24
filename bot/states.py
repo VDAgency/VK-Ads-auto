@@ -54,6 +54,7 @@ class AddAdAccount(StatesGroup):
 
     choosing_kind = State()  # своя реклама / реклама третьего лица
     entering_advertiser = State()  # название и ИНН конечного рекламодателя
+    choosing_client = State()  # за каким клиентом закрепить кабинет (или общий)
     entering_token = State()  # ввод токена (сообщение сразу удаляется)
 
 

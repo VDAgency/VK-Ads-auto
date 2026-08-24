@@ -97,7 +97,10 @@ async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int
         text = _NO_CABINETS if exc.reason == "no_ad_account" else _ASK_CABINET
         await message.answer(text)
     except CreativeRejected as exc:
-        await message.answer(f"Запустить не вышло: {exc}")
+        # Тот же вид отказа, что в сценарии с креативом (`bot/handlers/creative.py:
+        # send_creative`, ревью операторского опыта §2.3) — единый стиль тревожных
+        # сообщений бота, а не два разных текста для одной и той же причины.
+        await message.answer(f"⚠️ {exc.reason}")
     except CoreUnavailable:
         await message.answer(_UNAVAILABLE)
     else:
@@ -122,7 +125,7 @@ async def _show_launch_confirmation(
     Запуск происходит только по нажатию кнопки на этой карточке."""
     text = (
         render_launch_confirmation(card, account, _NO_CREATIVE_GOAL_LABEL)
-        + "\n\nОтправка запустит кампанию без креатива."
+        + "\n\nНажмите «🚀 Запустить», чтобы кампания без креатива ушла в VK."
     )
     await message.answer(
         text, parse_mode="HTML", reply_markup=launch_confirm_keyboard(card.brief_id, account.id)
@@ -195,7 +198,15 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adacc:nocre:"))
 async def picked_cabinet_for_launch(callback: CallbackQuery) -> None:
-    """Оператор выбрал кабинет из нескольких — показываем карточку подтверждения."""
+    """Оператор выбрал кабинет из нескольких — показываем карточку подтверждения.
+
+    Список перезапрашивается для клиента ЭТОГО брифа (`card.client_id`), а не
+    всего пула (ревью операторского опыта §2.5, выравнивание с
+    `bot/handlers/creative.py:picked_cabinet` и с самим `launch_without_creative`
+    выше) — иначе по старому или повторно нажатому колбэку в карточку можно
+    вытащить кабинет чужого клиента: денег это не стоит (ядро всё равно
+    отклонит запуск), но карточка соврёт про привязку.
+    """
     parts = (callback.data or "").split(":")
     brief_id, ad_account_id = int(parts[2]), int(parts[3])
     if isinstance(callback.message, Message):
@@ -210,7 +221,7 @@ async def picked_cabinet_for_launch(callback: CallbackQuery) -> None:
             await callback.answer()
             return
         try:
-            accounts = await api_client.list_ad_accounts()
+            accounts = await api_client.list_ad_accounts(client_id=card.client_id)
         except CoreUnavailable:
             await callback.message.answer(_UNAVAILABLE)
             await callback.answer()

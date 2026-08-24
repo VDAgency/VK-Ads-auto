@@ -184,6 +184,41 @@ def test_picking_cabinet_moves_to_goal(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Второй" in callback.message.answers[0]
 
 
+def test_picked_cabinet_filters_by_brief_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """То же ревью 2.5, что и `brief_card.py::picked_cabinet_for_launch`: этот
+    хендлер — точная копия того же паттерна (кабинет выбран из клавиатуры,
+    список перезапрашивается) и страдал тем же дефектом — фильтр по клиенту
+    брифа терялся. `start_creative` сохраняет `client_id` брифа в FSM
+    (`test_start_creative_remembers_brief_client` ниже) именно затем, чтобы
+    этот хендлер мог его использовать."""
+    captured: dict[str, Any] = {}
+
+    async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        captured["client_id"] = client_id
+        return [_item(id=2, external_id="10000002", title="Второй")]
+
+    monkeypatch.setattr("bot.api_client.list_ad_accounts", fake_list)
+    callback, state = _FakeCallback("adacc:launch:5:2"), _FakeState()
+    state.data = {"client_id": 42}
+    asyncio.run(creative.picked_cabinet(callback, state))
+    assert captured["client_id"] == 42
+
+
+def test_start_creative_remembers_brief_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`start_creative` уже запрашивает кабинеты для клиента брифа — теперь этот
+    id ещё и остаётся в FSM, чтобы `picked_cabinet` мог им воспользоваться при
+    повторном запросе списка (см. тест выше)."""
+
+    async def fake_get_brief(brief_id: int) -> BriefCard:
+        return _card(brief_id=brief_id, client_id=42)
+
+    monkeypatch.setattr("bot.api_client.get_brief", fake_get_brief)
+    _stub_list(monkeypatch, [_item(id=1), _item(id=2, external_id="10000002", title="Второй")])
+    callback, state = _FakeCallback("creative:5"), _FakeState()
+    asyncio.run(creative.start_creative(callback, state))
+    assert state.data["client_id"] == 42
+
+
 def test_goal_keyboard_offers_all_four_implemented_goals(monkeypatch: pytest.MonkeyPatch) -> None:
     """Все четыре цели реализованы — молчаливой подмены нет ни у одной из них.
 

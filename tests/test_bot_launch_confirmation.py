@@ -114,14 +114,16 @@ def test_card_missing_fields_show_a_placeholder_not_a_crash() -> None:
 
 
 def test_shared_cabinet_is_marked_as_common() -> None:
-    """Кабинет без привязки — «общий», та же формулировка, что в /cabinets."""
+    """Кабинет без привязки — «общий», тот же корень формулировки, что в /cabinets
+    (ревью 2.4: раньше здесь звучало «не закреплён», а в /cabinets — «общий»,
+    хотя комментарий в коде утверждал, что формулировка та же)."""
     card = _card()
     account = _account(client_id=None, client_name=None)
 
     text = creative.render_launch_confirmation(card, account, "Подписчики")
 
-    assert "не закреплён" in text
-    assert "общий" in text
+    assert "Кабинет общий — доступен любому клиенту." in text
+    assert "Проверьте, что запускаете с нужного счёта." in text
 
 
 def test_bound_cabinet_names_the_client() -> None:
@@ -132,6 +134,28 @@ def test_bound_cabinet_names_the_client() -> None:
     text = creative.render_launch_confirmation(card, account, "Подписчики")
 
     assert "закреплён за этим клиентом: Иван Петров" in text
+
+
+def test_card_shows_the_recognized_surface() -> None:
+    """Ревью 2.6: распознанная площадка (уже видна в карточке брифа) должна быть
+    видна и здесь, рядом со ссылкой — это заметно ускоряет сверку глазами."""
+    card = _card(surface_title="Сообщество ВКонтакте")
+    account = _account()
+
+    text = creative.render_launch_confirmation(card, account, "Подписчики")
+
+    assert "Сообщество ВКонтакте" in text
+
+
+def test_card_without_recognized_surface_omits_the_line() -> None:
+    """Пустая `surface_title` (сервис ещё не распознал площадку) — карточка не
+    придумывает строку из ничего."""
+    card = _card(surface_title="")
+    account = _account()
+
+    text = creative.render_launch_confirmation(card, account, "Подписчики")
+
+    assert "Площадка" not in text
 
 
 def test_third_party_advertiser_is_shown_with_inn() -> None:
