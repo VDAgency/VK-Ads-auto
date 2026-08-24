@@ -938,6 +938,23 @@ class CommunityTokenRejected(RuntimeError):
         self.reason = reason
 
 
+class CommunityTokenNotFound(RuntimeError):
+    """Активной привязки для указанного сообщества не было (нечего отвязывать)."""
+
+
+# Узнанные причины отказа 500 — точный текст. Неузнанная (в т.ч. отсутствие
+# `detail` вовсе — типовой ответ FastAPI на необработанное исключение) не
+# должна выдаваться за конкретный диагноз (ревью 2026-08-24, дефект 2: раньше
+# ЛЮБОЙ 500 объявлялся отсутствием ключа шифрования, даже когда причина была
+# совсем другой) — тот же приём, что `_AD_ACCOUNT_ERRORS`/`add_ad_account`.
+_COMMUNITY_TOKEN_ERRORS = {
+    "encryption_key_missing": (
+        "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
+        "без него токен негде хранить. Нужна помощь администратора."
+    ),
+}
+
+
 async def add_community_token(token: str) -> CommunityTokenResult:
     """`POST /senler/community-token`: привязать токен сообщества и проверить Senler.
 
@@ -951,9 +968,13 @@ async def add_community_token(token: str) -> CommunityTokenResult:
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
     if response.status_code == 500:
+        error_detail = ""
+        with contextlib.suppress(ValueError):
+            error_detail = str(response.json().get("detail", ""))
         raise CommunityTokenRejected(
-            "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
-            "без него токен негде хранить. Нужна помощь администратора."
+            _COMMUNITY_TOKEN_ERRORS.get(
+                error_detail, "Внутренняя ошибка сервера, попробуйте ещё раз позже."
+            )
         )
     if response.status_code == 422:
         detail = None
@@ -974,3 +995,26 @@ async def add_community_token(token: str) -> CommunityTokenResult:
         connected=bool(data["connected"]),
         reason=str(data.get("reason", "")),
     )
+
+
+async def delete_community_token(reference: str) -> None:
+    """`DELETE /senler/community-token`: отвязать токен сообщества.
+
+    `reference` — короткий адрес сообщества или его числовой id (то же, что
+    принимает поиск токена под запуск, `db.community_tokens.find_decrypted_token`
+    через `services.launch_service`). Ядро само решает, по какому признаку
+    сопоставить (CLAUDE.md §1.3 — вся логика на стороне ядра).
+
+    `CommunityTokenNotFound` — активной привязки не было. Любой другой отказ —
+    `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/senler/community-token"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.delete(url, params={"reference": reference})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise CommunityTokenNotFound(reference)
+    if response.status_code >= 400:
+        raise CoreUnavailable(f"core {response.status_code}")

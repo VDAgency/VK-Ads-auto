@@ -21,9 +21,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from db.community_tokens import save_community_token
+from db.community_tokens import delete_community_token, save_community_token
 from db.session import get_session
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from integrations.vk_community import (
     VkCommunityUnreachable,
     fetch_callback_servers,
@@ -112,6 +112,39 @@ async def post_community_token(
         connected=check.connected,
         reason=check.reason,
     )
+
+
+@router.delete("/community-token", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_community_token_endpoint(
+    reference: Annotated[str, Query(min_length=1, max_length=64)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    """Отвязать токен сообщества (снять устаревшую или ошибочную привязку).
+
+    Раньше `db.community_tokens.delete_community_token` существовал, но
+    ниоткуда не вызывался — у оператора не было способа снять привязку иначе
+    как правкой базы руками (ревью 2026-08-24, дефект 3). Это и была причина,
+    по которой дефект 1 (аномалия с двумя активными токенами на один короткий
+    адрес) некому было бы исправить в проде.
+
+    `reference` — короткий адрес сообщества ИЛИ его числовой id, тем же
+    приёмом и приоритетом, что и поиск токена под запуск
+    (`db.community_tokens.find_decrypted_token`): цифры целиком — числовой id,
+    иначе — короткий адрес (регистр не важен). Оператор обычно знает адрес
+    (это то же, что в ссылке из брифа), а не числовой id сообщества.
+
+    404 `not_found` — активной привязки для этого сообщества не было.
+    """
+    ref = reference.strip()
+    community_id = ref if ref.isdigit() else None
+    screen_name = None if community_id else ref.lower()
+    removed = await delete_community_token(
+        session, DEFAULT_ACCOUNT_ID, community_id=community_id, screen_name=screen_name
+    )
+    if removed is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["router"]

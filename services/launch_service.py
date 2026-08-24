@@ -385,14 +385,26 @@ async def _verify_senler(
     - подключён — `None`, запуск продолжается молча;
     - проверить нечем (сообщество из ссылки не сопоставилось ни с одним
       привязанным токеном — ни по числовому id, ни по короткому адресу, —
-      либо сходить в VK не вышло) — возвращаем предупреждение, запуск всё
-      равно продолжается: требовать токен с каждого клиента мы не будем, но и
-      выдавать непроверенное за проверенное нельзя (CLAUDE.md §7).
+      либо сходить в VK не вышло, либо сам поиск токена споткнулся об аномалию
+      БД) — возвращаем предупреждение, запуск всё равно продолжается: требовать
+      токен с каждого клиента мы не будем, но и выдавать непроверенное за
+      проверенное нельзя (CLAUDE.md §7). Проверка Senler — страховка, а не
+      критический путь: её внутренний отказ не должен ронять запуск кампании
+      (ревью 2026-08-24, дефект 1, пункт 3), поэтому ошибку поиска (в т.ч.
+      любую неучтённую аномалию данных) ловим и деградируем так же честно, как
+      уже обрабатывается недоступность VK ниже — но не молча: логируем, чтобы
+      причина не потерялась.
     """
     numeric_id, slug = _community_reference(spec.object_url)
-    match = await find_decrypted_token(
-        session, account_id, community_id=numeric_id, screen_name=slug, settings=settings
-    )
+    try:
+        match = await find_decrypted_token(
+            session, account_id, community_id=numeric_id, screen_name=slug, settings=settings
+        )
+    except Exception:  # noqa: BLE001 — поиск токена не должен ронять запуск, это подстраховка
+        logger.exception(
+            "senler token lookup failed for community reference (%s, %s)", numeric_id, slug
+        )
+        return _SENLER_UNVERIFIED_NOTE
     if match is None:
         return _SENLER_UNVERIFIED_NOTE
     try:

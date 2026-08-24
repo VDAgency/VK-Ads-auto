@@ -27,8 +27,8 @@ from aiogram.types import Message
 
 from bot import api_client
 from bot.access import OperatorOnly
-from bot.api_client import CommunityTokenRejected, CoreUnavailable
-from bot.states import AddCommunityToken
+from bot.api_client import CommunityTokenNotFound, CommunityTokenRejected, CoreUnavailable
+from bot.states import AddCommunityToken, UnlinkCommunityToken
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,14 @@ _ASK_TOKEN = (
     "Senler — он не нужен. По токену я сам определю, к какому сообществу он "
     "относится."
 )
+_ASK_REFERENCE = (
+    "Пришлите короткий адрес сообщества (то, что после vk.ru/) или его "
+    "числовой id — привязанный к нему токен я отвяжу."
+)
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
 _EMPTY_TOKEN = "Пустое сообщение — пришлите токен ещё раз."
+_EMPTY_REFERENCE = "Пустое сообщение — пришлите адрес или id ещё раз."
+_NOT_FOUND = "Активной привязки для этого сообщества не было."
 
 
 def _redact(value: str) -> str:
@@ -95,3 +101,40 @@ async def got_token(message: Message, state: FSMContext) -> None:
             f"⚠️ Токен сообщества «{result.community_name}» сохранён, но подключение "
             f"Senler не подтвердилось: {result.reason}"
         )
+
+
+@router.message(Command("senler_unlink"))
+async def start_unlink(message: Message, state: FSMContext) -> None:
+    """`/senler_unlink` — снять привязку токена сообщества (устаревшую или ошибочную).
+
+    Без этой команды у оператора не было способа исправить дефект «два
+    активных токена на один короткий адрес» (ревью 2026-08-24) иначе как
+    правкой базы руками.
+    """
+    await state.set_state(UnlinkCommunityToken.entering_reference)
+    await message.answer(_ASK_REFERENCE)
+
+
+@router.message(StateFilter(UnlinkCommunityToken.entering_reference))
+async def got_reference(message: Message, state: FSMContext) -> None:
+    """Принять адрес/id и отвязать токен через ядро.
+
+    Адрес сообщества — не секрет (в отличие от токена в `got_token`), поэтому
+    сообщение из чата не стирается.
+    """
+    reference = (message.text or "").strip()
+    await state.clear()
+    if not reference:
+        await message.answer(_EMPTY_REFERENCE)
+        return
+
+    try:
+        await api_client.delete_community_token(reference)
+    except CommunityTokenNotFound:
+        await message.answer(f"ℹ️ {_NOT_FOUND}")
+        return
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        return
+
+    await message.answer(f"🗑 Привязка токена для «{reference}» снята.")

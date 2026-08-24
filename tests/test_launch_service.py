@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
@@ -19,8 +20,8 @@ import services.launch_service as launch_service
 from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
-from db.community_tokens import save_community_token
-from db.models import Account, Brief, Cabinet, Client
+from db.community_tokens import ACTIVE, save_community_token
+from db.models import Account, Brief, Cabinet, Client, CommunityToken
 from db.repositories import (
     get_creative_for_brief,
     get_latest_campaign_for_brief,
@@ -44,6 +45,7 @@ from services.launch_service import (
     stop_campaign,
 )
 from services.mapping import CampaignSpec
+from services.secret_box import SecretBox
 from services.senler import SenlerCheck
 from services.senler import detect_senler as _detect_senler_directly
 from services.vk_identity import VkIdentity
@@ -970,3 +972,91 @@ def test_senler_check_still_finds_the_token_by_numeric_id_from_the_brief_link(
     # _SENLER_VALID уже ссылается на https://vk.com/club228817082.
     message = asyncio.run(_with_senler_db(scenario))
     assert "не удал" not in message.lower()
+
+
+# --- дефект 1 (ревью 2026-08-24, воспроизведён вживую): аномалия данных не
+# должна ронять запуск -----------------------------------------------------------
+
+
+def test_senler_launch_survives_two_active_tokens_sharing_the_same_short_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Обязательный тест ревью: сообщество сменило короткий адрес, `djbeauty`
+    достался другому сообществу — в базе (историческая аномалия, заведена в
+    обход приложения, `save_community_token` теперь такого не допускает для
+    новых сохранений) остались две активные строки с одним адресом. Раньше
+    `find_decrypted_token` падал необработанным `MultipleResultsFound` и ронял
+    `launch_from_creative` целиком (оператор получал 500 вместо честного
+    предупреждения). Теперь поиск детерминирован — запуск не падает."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> tuple[str, object]:
+        box = SecretBox(_KEY)
+        session.add(
+            CommunityToken(
+                account_id=1,
+                community_id="111111",  # старый держатель адреса, аномалия
+                screen_name=SENLER_SCREEN_NAME,
+                community_name=SENLER_COMMUNITY_NAME,
+                token_encrypted=box.encrypt("old-community-token"),
+                status=ACTIVE,
+            )
+        )
+        session.add(
+            CommunityToken(
+                account_id=1,
+                community_id=SENLER_COMMUNITY_ID,  # новый держатель адреса
+                screen_name=SENLER_SCREEN_NAME,
+                community_name=SENLER_COMMUNITY_NAME,
+                token_encrypted=box.encrypt("community-token"),
+                status=ACTIVE,
+            )
+        )
+        await session.commit()
+        outcome = await _launch_senler(session)
+        await session.commit()
+        campaign = await get_latest_campaign_for_brief(session, 1, 2)
+        return outcome.message, campaign
+
+    # Короткий адрес без числового id — тот же сценарий, что у главного дефекта.
+    message, campaign = asyncio.run(_with_senler_db(scenario, payload=_SENLER_SHORT_ADDRESS))
+    assert campaign is not None
+    assert "не удал" not in message.lower()
+
+
+def test_senler_launch_degrades_gracefully_on_unexpected_lookup_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Пункт 3 фикса дефекта 1: проверка подключения Senler — страховка, а не
+    критический путь запуска. Любая другая (не только неоднозначность БД)
+    внутренняя ошибка поиска токена обязана деградировать в честное «проверить
+    не удалось», а не ронять запуск целиком — так же, как уже обрабатывается
+    недоступность VK (`VkCommunityUnreachable`). Ошибка при этом обязана
+    попасть в лог, а не потеряться молча."""
+
+    async def broken_find(*_a: object, **_k: object) -> None:
+        raise RuntimeError("boom: simulated db anomaly")
+
+    monkeypatch.setattr(launch_service, "find_decrypted_token", broken_find)
+
+    async def scenario(session: AsyncSession) -> tuple[str, object]:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        with caplog.at_level(logging.WARNING, logger="services.launch_service"):
+            outcome = await _launch_senler(session)
+        await session.commit()
+        campaign = await get_latest_campaign_for_brief(session, 1, 2)
+        return outcome.message, campaign
+
+    message, campaign = asyncio.run(_with_senler_db(scenario))
+    assert campaign is not None
+    assert "не удал" in message.lower()
+    # Ошибка не должна потеряться молча: причина обязана попасть в лог целиком
+    # (в т.ч. трассировка исключения — `logger.exception`), а не раствориться.
+    assert "boom" in caplog.text

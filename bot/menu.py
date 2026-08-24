@@ -23,6 +23,8 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("link_userbot", "Подключить юзер-бота"),
     ("userbot_status", "Состояние юзер-бота"),
     ("link_kotbot", "Подключить kotbot"),
+    ("senler_token", "Привязать токен сообщества Senler"),
+    ("senler_unlink", "Отвязать токен сообщества Senler"),
     ("help", "Справочник по боту"),
 )
 

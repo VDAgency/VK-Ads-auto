@@ -200,3 +200,55 @@ def test_senler_not_connected_is_reported_honestly(monkeypatch: pytest.MonkeyPat
     data = asyncio.run(_with_api(scenario))
     assert data["connected"] is False
     assert data["reason"]
+
+
+# --- DELETE /senler/community-token: отвязка (дефект 3, ревью 2026-08-24) -------
+#
+# Раньше `db.community_tokens.delete_community_token` существовал, но ниоткуда
+# не вызывался — у оператора не было способа снять устаревшую или ошибочную
+# привязку иначе как правкой базы руками (см. `tests/test_community_token_repo.py`).
+
+
+def test_delete_removes_the_token_by_short_address() -> None:
+    async def scenario(client: AsyncClient, maker: async_sessionmaker[AsyncSession]) -> None:
+        resp = await client.post("/api/v1/senler/community-token", json={"token": TOKEN})
+        assert resp.status_code == 201, resp.text
+
+        resp = await client.delete(
+            "/api/v1/senler/community-token", params={"reference": IDENTITY.screen_name}
+        )
+        assert resp.status_code == 204, resp.text
+
+        async with maker() as session:
+            token = await get_decrypted_token(session, 1, IDENTITY.id, settings=_settings())
+        assert token is None
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_delete_removes_the_token_by_numeric_id() -> None:
+    async def scenario(client: AsyncClient, maker: async_sessionmaker[AsyncSession]) -> None:
+        resp = await client.post("/api/v1/senler/community-token", json={"token": TOKEN})
+        assert resp.status_code == 201, resp.text
+
+        resp = await client.delete(
+            "/api/v1/senler/community-token", params={"reference": IDENTITY.id}
+        )
+        assert resp.status_code == 204, resp.text
+
+        async with maker() as session:
+            token = await get_decrypted_token(session, 1, IDENTITY.id, settings=_settings())
+        assert token is None
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_delete_reports_not_found_when_nothing_matches() -> None:
+    async def scenario(client: AsyncClient, maker: async_sessionmaker[AsyncSession]) -> None:
+        resp = await client.delete(
+            "/api/v1/senler/community-token", params={"reference": "no-such-address"}
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "not_found"
+
+    asyncio.run(_with_api(scenario))

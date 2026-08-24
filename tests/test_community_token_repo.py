@@ -19,6 +19,7 @@ from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
 from db.community_tokens import (
+    ACTIVE,
     CommunityTokenInfo,
     CommunityTokenMatch,
     delete_community_token,
@@ -28,6 +29,7 @@ from db.community_tokens import (
 )
 from db.models import Account, CommunityToken
 from pydantic import SecretStr
+from services.secret_box import SecretBox
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -81,6 +83,34 @@ async def _save(
         community_name=community_name,
         settings=_settings(),
     )
+
+
+async def _insert_active_row(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    community_id: str,
+    screen_name: str,
+    token: str,
+    community_name: str = COMMUNITY_NAME,
+) -> CommunityToken:
+    """Завести активную строку в обход `save_community_token` — только чтобы
+    смоделировать историческую аномалию (две активные строки с одним коротким
+    адресом), от которой `save_community_token` теперь защищает НОВЫЕ сохранения
+    (см. `test_saving_a_token_archives_prior_holder_of_the_same_screen_name`), но
+    старые данные (до фикса, либо заведённые в обход приложения) поиск обязан
+    пережить, не упав `MultipleResultsFound`."""
+    row = CommunityToken(
+        account_id=account_id,
+        community_id=community_id,
+        screen_name=screen_name.strip().lower(),
+        community_name=community_name,
+        token_encrypted=SecretBox(_KEY).encrypt(token),
+        status=ACTIVE,
+    )
+    session.add(row)
+    await session.flush()
+    return row
 
 
 def test_saved_token_is_readable_decrypted() -> None:
@@ -184,19 +214,59 @@ def test_deleted_token_is_no_longer_returned() -> None:
     async def scenario(session: AsyncSession) -> str | None:
         await _save(session, 1, "token")
         await session.commit()
-        removed = await delete_community_token(session, 1, COMMUNITY_ID)
+        removed = await delete_community_token(
+            session, 1, community_id=COMMUNITY_ID, screen_name=None
+        )
         await session.commit()
-        assert removed is True
+        assert removed is not None
+        assert removed.community_id == COMMUNITY_ID
         return await get_decrypted_token(session, 1, COMMUNITY_ID, settings=_settings())
 
     assert asyncio.run(_with_db(scenario)) is None
 
 
 def test_deleting_unknown_token_reports_nothing_removed() -> None:
-    async def scenario(session: AsyncSession) -> bool:
-        return await delete_community_token(session, 1, "no-such-community")
+    async def scenario(session: AsyncSession) -> CommunityTokenInfo | None:
+        return await delete_community_token(
+            session, 1, community_id="no-such-community", screen_name=None
+        )
 
-    assert asyncio.run(_with_db(scenario)) is False
+    assert asyncio.run(_with_db(scenario)) is None
+
+
+# --- отвязка по короткому адресу (дефект 3, ревью 2026-08-24): раньше функция
+# существовала, но нигде не вызывалась — у оператора не было способа снять
+# устаревшую привязку иначе как правкой базы руками ------------------------------
+
+
+def test_delete_by_short_address_when_numeric_id_is_unknown() -> None:
+    """Оператор чаще знает короткий адрес сообщества, чем его числовой id —
+    отвязка обязана находить токен и по нему, тем же приёмом, что и поиск под
+    запуск (`find_decrypted_token`)."""
+
+    async def scenario(session: AsyncSession) -> str | None:
+        await _save(session, 1, "token")
+        await session.commit()
+        removed = await delete_community_token(
+            session, 1, community_id=None, screen_name="DjBeauty"
+        )
+        await session.commit()
+        assert removed is not None
+        assert removed.community_id == COMMUNITY_ID
+        return await get_decrypted_token(session, 1, COMMUNITY_ID, settings=_settings())
+
+    assert asyncio.run(_with_db(scenario)) is None
+
+
+def test_delete_reports_nothing_removed_when_neither_reference_matches() -> None:
+    async def scenario(session: AsyncSession) -> CommunityTokenInfo | None:
+        await _save(session, 1, "token")
+        await session.commit()
+        return await delete_community_token(
+            session, 1, community_id=None, screen_name="no-such-address"
+        )
+
+    assert asyncio.run(_with_db(scenario)) is None
 
 
 def test_tokens_are_scoped_to_tenant() -> None:
@@ -302,11 +372,102 @@ def test_find_does_not_match_archived_token() -> None:
     async def scenario(session: AsyncSession) -> CommunityTokenMatch | None:
         await _save(session, 1, "old-token")
         await session.commit()
-        removed = await delete_community_token(session, 1, COMMUNITY_ID)
-        assert removed is True
+        removed = await delete_community_token(
+            session, 1, community_id=COMMUNITY_ID, screen_name=None
+        )
+        assert removed is not None
         await session.commit()
         return await find_decrypted_token(
             session, 1, community_id=None, screen_name="djbeauty", settings=_settings()
         )
 
     assert asyncio.run(_with_db(scenario)) is None
+
+
+# --- дефект 1 (ревью 2026-08-24, воспроизведён вживую): `find_decrypted_token`
+# собирал OR(community_id, screen_name) и брал `scalar_one_or_none()` без
+# `.limit(1)` — аномалия данных (два активных токена с одним коротким адресом)
+# роняла запуск кампании необработанным `MultipleResultsFound` вместо честного
+# «проверить не удалось». Три уровня защиты: (1) сохранение больше не оставляет
+# такую аномалию НОВОЙ — архивирует прежнего держателя адреса тоже по
+# `screen_name`, не только по `community_id`; (2) поиск детерминирован —
+# `.limit(1)` + явный приоритет (числовой id надёжнее адреса, он не
+# переиспользуется); (3) `_verify_senler` (`services/launch_service.py`) не
+# роняет запуск при любой другой аномалии БД — см. `tests/test_launch_service.py`.
+
+
+def test_saving_a_token_archives_prior_holder_of_the_same_screen_name() -> None:
+    """Сообщество сменило адрес, `djbeauty` достался другому сообществу.
+    Привязка нового токена обязана снять «активен» со старой строки с тем же
+    адресом, даже если её `community_id` другой, — иначе в базе остаются два
+    активных токена на один короткий адрес и поиск по нему становится
+    неоднозначным."""
+
+    async def scenario(session: AsyncSession) -> list[str]:
+        await _save(session, 1, "old-token", community_id="111", screen_name="djbeauty")
+        await session.commit()
+        await _save(session, 1, "new-token", community_id="222", screen_name="djbeauty")
+        await session.commit()
+        rows = (
+            (
+                await session.execute(
+                    select(CommunityToken).where(
+                        CommunityToken.account_id == 1,
+                        CommunityToken.screen_name == "djbeauty",
+                        CommunityToken.status == ACTIVE,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [row.community_id for row in rows]
+
+    assert asyncio.run(_with_db(scenario)) == ["222"]
+
+
+def test_find_by_short_address_does_not_raise_when_two_active_rows_share_it() -> None:
+    """Главная репродукция дефекта 1: в базе уже есть две активные строки с
+    одним адресом (историческая аномалия, заведена в обход приложения) — поиск
+    обязан не падать `MultipleResultsFound`, а предсказуемо выбрать одну."""
+
+    async def scenario(session: AsyncSession) -> CommunityTokenMatch | None:
+        await _insert_active_row(
+            session, 1, community_id="111", screen_name="djbeauty", token="old-community-token"
+        )
+        await session.commit()
+        await _insert_active_row(
+            session, 1, community_id="222", screen_name="djbeauty", token="new-community-token"
+        )
+        await session.commit()
+        return await find_decrypted_token(
+            session, 1, community_id=None, screen_name="djbeauty", settings=_settings()
+        )
+
+    match = asyncio.run(_with_db(scenario))
+    assert match is not None
+    # Предсказуемо — самая свежая строка побеждает.
+    assert match.token == "new-community-token"
+    assert match.community_id == "222"
+
+
+def test_find_prefers_numeric_id_match_over_conflicting_screen_name_match() -> None:
+    """Числовой id надёжнее короткого адреса — он не переиспользуется, в отличие
+    от адреса, который может достаться другому сообществу. При конфликте
+    выигрывает совпадение по id."""
+
+    async def scenario(session: AsyncSession) -> CommunityTokenMatch | None:
+        await _insert_active_row(session, 1, community_id="111", screen_name="beta", token="by-id")
+        await session.commit()
+        await _insert_active_row(
+            session, 1, community_id="222", screen_name="alpha", token="by-screen-name"
+        )
+        await session.commit()
+        return await find_decrypted_token(
+            session, 1, community_id="111", screen_name="alpha", settings=_settings()
+        )
+
+    match = asyncio.run(_with_db(scenario))
+    assert match is not None
+    assert match.token == "by-id"
+    assert match.community_id == "111"

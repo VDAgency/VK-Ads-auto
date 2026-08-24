@@ -26,6 +26,8 @@ def test_menu_has_expected_commands() -> None:
         "link_userbot",
         "userbot_status",
         "link_kotbot",
+        "senler_token",
+        "senler_unlink",
         "help",
     }
 

@@ -69,6 +69,19 @@ class AddCommunityToken(StatesGroup):
     entering_token = State()  # ввод токена сообщества (сообщение сразу удаляется)
 
 
+class UnlinkCommunityToken(StatesGroup):
+    """Сценарий «отвязать токен сообщества» (ревью 2026-08-24, дефект 3).
+
+    Раньше `db.community_tokens.delete_community_token` существовал, но
+    ниоткуда не вызывался — у оператора не было способа снять устаревшую или
+    ошибочную привязку иначе как правкой базы руками. Адрес/id сообщества — не
+    секрет (в отличие от `AddCommunityToken.entering_token`), поэтому сообщение
+    не удаляется.
+    """
+
+    entering_reference = State()  # короткий адрес сообщества или его числовой id
+
+
 class LaunchCampaign(StatesGroup):
     """Сценарий запуска: кабинет → цель → креатив (spec 2026-07-27 §9).
 
