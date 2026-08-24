@@ -393,6 +393,29 @@ async def list_cabinet_campaigns(session: AsyncSession, account_id: int) -> list
     return list((await session.execute(stmt)).scalars().all())
 
 
+async def list_client_campaigns(
+    session: AsyncSession, account_id: int, client_id: int
+) -> list[Campaign]:
+    """Кампании ОДНОГО клиента с непустым `external_id` — вход мини-отчёта клиента (B1).
+
+    Тот же фильтр непустого `external_id`, что и `list_cabinet_campaigns` (кампания
+    без него ещё не заведена ни на одной площадке — показывать клиенту нечего), плюс
+    скоуп по `client_id`: клиент обязан видеть только свои кампании, не кампании
+    других клиентов того же тенанта.
+    """
+    stmt = (
+        select(Campaign)
+        .where(
+            Campaign.account_id == account_id,
+            Campaign.client_id == client_id,
+            Campaign.external_id.is_not(None),
+            Campaign.external_id != "",
+        )
+        .order_by(Campaign.id)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def aggregate_cabinet_stats(
     session: AsyncSession,
     account_id: int,
