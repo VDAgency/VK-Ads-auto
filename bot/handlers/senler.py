@@ -6,6 +6,10 @@
 Senler. Выпускает администратор сообщества клиента в его настройках, привязан
 к одному сообществу.
 
+Оператор вводит только сам токен — id сообщества называет сам VK
+(`groups.getById` без `group_id`, `core/api/v1/senler.py`), так что сценарий
+из одного шага, без риска перепутать сообщество.
+
 Тонкий хендлер: ввод и рендер здесь, всё остальное — в ядре через
 `bot/api_client` (CLAUDE.md §1.3). Сообщение с токеном удаляется из чата сразу
 после приёма — тот же приём, что в `/link_userbot` и `/cabinets`
@@ -31,19 +35,13 @@ logger = logging.getLogger(__name__)
 router = Router(name="senler")
 router.message.filter(OperatorOnly())
 
-_ASK_COMMUNITY_ID = (
-    "Введите числовой id сообщества VK (только цифры, без «club») — того самого, "
-    "к которому клиент подключил чат-бота Senler.\n"
-    "Найти его можно в адресе сообщества (vk.com/club<b>228817082</b>) или в его "
-    "настройках."
-)
 _ASK_TOKEN = (
     "Пришлите токен доступа сообщества сообщением — я сразу удалю его из чата.\n\n"
     "Токен выпускает администратор сообщества в его настройках. Это не ключ API "
-    "Senler — он не нужен."
+    "Senler — он не нужен. По токену я сам определю, к какому сообществу он "
+    "относится."
 )
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
-_BAD_COMMUNITY_ID = "Нужны только цифры id сообщества. Попробуйте ещё раз."
 _EMPTY_TOKEN = "Пустое сообщение — пришлите токен ещё раз."
 
 
@@ -63,18 +61,6 @@ async def _delete_secret(message: Message) -> None:
 @router.message(Command("senler_token"))
 async def start(message: Message, state: FSMContext) -> None:
     """`/senler_token` — привязать токен сообщества к проверке подключения Senler."""
-    await state.set_state(AddCommunityToken.entering_community_id)
-    await message.answer(_ASK_COMMUNITY_ID, parse_mode="HTML")
-
-
-@router.message(StateFilter(AddCommunityToken.entering_community_id))
-async def got_community_id(message: Message, state: FSMContext) -> None:
-    """Принять id сообщества (только цифры) и попросить токен."""
-    raw = (message.text or "").strip()
-    if not raw.isdigit():
-        await message.answer(_BAD_COMMUNITY_ID)
-        return
-    await state.update_data(community_id=raw)
     await state.set_state(AddCommunityToken.entering_token)
     await message.answer(_ASK_TOKEN)
 
@@ -88,13 +74,10 @@ async def got_token(message: Message, state: FSMContext) -> None:
         await message.answer(_EMPTY_TOKEN)
         return
     logger.info("community token received: %s", _redact(token))
-
-    data = await state.get_data()
-    community_id = str(data.get("community_id", ""))
     await state.clear()
 
     try:
-        result = await api_client.add_community_token(community_id, token)
+        result = await api_client.add_community_token(token)
     except CommunityTokenRejected as exc:
         await message.answer(f"❌ {exc.reason}")
         return
@@ -104,11 +87,11 @@ async def got_token(message: Message, state: FSMContext) -> None:
 
     if result.connected:
         await message.answer(
-            f"✅ Токен сообщества {community_id} сохранён. Чат-бот Senler подключён — "
-            "можно запускать кампанию с этой целью."
+            f"✅ Токен сообщества «{result.community_name}» сохранён. Чат-бот Senler "
+            "подключён — можно запускать кампанию с этой целью."
         )
     else:
         await message.answer(
-            f"⚠️ Токен сообщества {community_id} сохранён, но подключение Senler не "
-            f"подтвердилось: {result.reason}"
+            f"⚠️ Токен сообщества «{result.community_name}» сохранён, но подключение "
+            f"Senler не подтвердилось: {result.reason}"
         )

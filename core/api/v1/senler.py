@@ -5,8 +5,15 @@
 `infra/Caddyfile` (404), как `/ad-accounts` и `/invites` — оба тоже принимают
 секреты и не предназначены для публики.
 
-Ключевой инвариант: токен не появляется ни в одном ответе. Наружу уходит только
-id сообщества и факт подключения Senler — этого достаточно, чтобы оператор сразу
+Оператор вводит только сам токен. `community_id`/`screen_name`/`community_name`
+эндпоинт узнаёт живым запросом `groups.getById` без `group_id`
+(`integrations/vk_community.py::fetch_own_community`) — сообщество опознаёт себя
+по токену, тем же приёмом, что `services/ad_accounts.py::add_account` для
+рекламных кабинетов. Опознание идёт ДО записи в БД: не смогли — токен не
+сохраняем и честно говорим об этом, а не имитируем успех (CLAUDE.md §7).
+
+Ключевой инвариант: токен не появляется ни в одном ответе. Наружу уходит id,
+название и факт подключения Senler — этого достаточно, чтобы оператор сразу
 увидел результат привязки, не заглядывая в базу.
 """
 
@@ -17,7 +24,11 @@ from typing import Annotated
 from db.community_tokens import save_community_token
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException
-from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
+from integrations.vk_community import (
+    VkCommunityUnreachable,
+    fetch_callback_servers,
+    fetch_own_community,
+)
 from pydantic import BaseModel, Field
 from services.secret_box import NotConfiguredError
 from services.senler import detect_senler
@@ -32,16 +43,19 @@ _UNREACHABLE_REASON = "Токен сохранён, но проверить по
 
 
 class CommunityTokenIn(BaseModel):
-    """Вход привязки. `token` приходит только сюда и дальше не возвращается."""
+    """Вход привязки. `token` приходит только сюда и дальше не возвращается.
 
-    community_id: str = Field(min_length=1, max_length=32)
+    Id сообщества оператор больше не вводит — его называет сам VK.
+    """
+
     token: str = Field(min_length=8, max_length=512)
 
 
 class CommunityTokenOut(BaseModel):
-    """Результат привязки: без токена — только факт подключения Senler."""
+    """Результат привязки: без токена — id, название сообщества и факт подключения Senler."""
 
     community_id: str
+    community_name: str
     connected: bool
     reason: str
 
@@ -51,28 +65,52 @@ async def post_community_token(
     payload: CommunityTokenIn,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CommunityTokenOut:
-    """Привязать токен сообщества и сразу проверить, подключён ли Senler.
+    """Опознать сообщество по токену, сохранить токен, сразу проверить Senler.
 
-    Сохранение и проверка — раздельные шаги: даже если VK сейчас недоступен,
-    токен уже сохранён (следующий запуск кампании проверит подключение сам,
-    `services.launch_service._verify_senler`), а оператор получает честный
-    статус вместо утечки 500.
+    Три шага строго по порядку:
+    1. `groups.getById` без `group_id` — опознаём сообщество. Не ответил/вернул
+       ошибку -> 422, токен НЕ сохраняем (не подтверждённый токен хранить
+       незачем, а оператору нужен честный отказ, а не мнимый успех).
+    2. Сохранение — уже с id/screen_name/name из шага 1.
+    3. Проверка `groups.getCallbackServers` — отдельно от сохранения: даже
+       если VK сейчас недоступен именно для неё, токен уже сохранён (следующий
+       запуск кампании проверит подключение сам,
+       `services.launch_service._verify_senler`), а оператор получает честный
+       статус вместо утечки 500.
     """
     try:
-        await save_community_token(session, DEFAULT_ACCOUNT_ID, payload.community_id, payload.token)
+        identity = await fetch_own_community(payload.token)
+    except VkCommunityUnreachable:
+        raise HTTPException(status_code=422, detail="community_unreachable") from None
+
+    try:
+        await save_community_token(
+            session,
+            DEFAULT_ACCOUNT_ID,
+            identity.id,
+            payload.token,
+            screen_name=identity.screen_name,
+            community_name=identity.name,
+        )
     except NotConfiguredError:
         raise HTTPException(status_code=500, detail="encryption_key_missing") from None
     await session.commit()
 
     try:
-        servers = await fetch_callback_servers(payload.token, payload.community_id)
+        servers = await fetch_callback_servers(payload.token, identity.id)
     except VkCommunityUnreachable:
         return CommunityTokenOut(
-            community_id=payload.community_id, connected=False, reason=_UNREACHABLE_REASON
+            community_id=identity.id,
+            community_name=identity.name,
+            connected=False,
+            reason=_UNREACHABLE_REASON,
         )
     check = detect_senler(servers)
     return CommunityTokenOut(
-        community_id=payload.community_id, connected=check.connected, reason=check.reason
+        community_id=identity.id,
+        community_name=identity.name,
+        connected=check.connected,
+        reason=check.reason,
     )
 
 

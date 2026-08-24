@@ -61,10 +61,11 @@ class AddCommunityToken(StatesGroup):
     """Сценарий «привязать токен сообщества для проверки Senler» (B2, spec 2026-08-24 §7).
 
     Токен приходит сообщением, которое удаляется сразу после приёма — тот же
-    приём, что у `AddAdAccount.entering_token`.
+    приём, что у `AddAdAccount.entering_token`. Id сообщества оператор не
+    вводит вовсе — `groups.getById` называет сообщество по одному лишь токену
+    (`core/api/v1/senler.py`), поэтому у сценария всего один шаг.
     """
 
-    entering_community_id = State()  # ввод числового id сообщества VK
     entering_token = State()  # ввод токена сообщества (сообщение сразу удаляется)
 
 

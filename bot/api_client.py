@@ -922,9 +922,10 @@ async def delete_ad_account(ad_account_id: int) -> None:
 
 @dataclass(frozen=True, slots=True)
 class CommunityTokenResult:
-    """Итог привязки токена сообщества: без токена — только факт подключения."""
+    """Итог привязки токена сообщества: без токена — id, название, факт подключения."""
 
     community_id: str
+    community_name: str
     connected: bool
     reason: str
 
@@ -937,15 +938,16 @@ class CommunityTokenRejected(RuntimeError):
         self.reason = reason
 
 
-async def add_community_token(community_id: str, token: str) -> CommunityTokenResult:
+async def add_community_token(token: str) -> CommunityTokenResult:
     """`POST /senler/community-token`: привязать токен сообщества и проверить Senler.
 
-    Токен уходит только сюда и обратно не возвращается.
+    Id сообщества передавать не нужно — ядро само опознаёт его по токену
+    (`groups.getById`). Токен уходит только сюда и обратно не возвращается.
     """
     url = f"{_base_url()}/api/v1/senler/community-token"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(url, json={"community_id": community_id, "token": token})
+            response = await client.post(url, json={"token": token})
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
     if response.status_code == 500:
@@ -954,12 +956,21 @@ async def add_community_token(community_id: str, token: str) -> CommunityTokenRe
             "без него токен негде хранить. Нужна помощь администратора."
         )
     if response.status_code == 422:
-        raise CommunityTokenRejected("Проверьте id сообщества и токен, попробуйте ещё раз.")
+        detail = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        if detail == "community_unreachable":
+            raise CommunityTokenRejected(
+                "VK не подтвердил токен — проверьте, что он не истёк и выпущен "
+                "именно для сообщества клиента, и попробуйте ещё раз."
+            )
+        raise CommunityTokenRejected("Проверьте токен и попробуйте ещё раз.")
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()
     return CommunityTokenResult(
         community_id=str(data["community_id"]),
+        community_name=str(data.get("community_name", "")),
         connected=bool(data["connected"]),
         reason=str(data.get("reason", "")),
     )

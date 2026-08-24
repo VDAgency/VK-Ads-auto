@@ -314,9 +314,24 @@ class CommunityToken(TenantMixin, Base):
 
     Токен заводит оператор вручную командой бота (выпускает администратор
     сообщества, привязан к одному сообществу) — отдельный сценарий, не связан с
-    `AdAccount`. Шифрование — Fernet (`services.secret_box`), тем же ключом, что
-    и токены кабинетов; наружу расшифрованный токен не отдаётся никогда, кроме
-    внутренней проверки перед запуском (`db/community_tokens.py::get_decrypted_token`).
+    `AdAccount`. Оператор вводит только сам токен: `community_id`, `screen_name`
+    и `community_name` определяются живым запросом `groups.getById` без
+    `group_id` (сообщество опознаёт себя по токену, разведка 2026-08-24) ДО
+    сохранения строки — тем же приёмом, что `services/ad_accounts.py::add_account`
+    для рекламных кабинетов. Это убирает целый класс ошибок оператора («перепутал
+    сообщество») и заодно подтверждает, что токен рабочий.
+
+    `screen_name` — короткий адрес сообщества (`vk.ru/djbeauty` → `djbeauty`,
+    в нижнем регистре): клиенты в брифе почти всегда присылают именно его, а не
+    числовой id, поэтому запуск (`db/community_tokens.py::find_decrypted_token`)
+    сопоставляет сообщество из брифа с сохранённым токеном по любому из двух
+    признаков. `community_name` — только для читаемого ответа оператору, секретом
+    не является.
+
+    Шифрование — Fernet (`services.secret_box`), тем же ключом, что и токены
+    кабинетов; наружу расшифрованный токен не отдаётся никогда, кроме внутренней
+    проверки перед запуском (`db/community_tokens.py::get_decrypted_token`,
+    `find_decrypted_token`).
 
     `status`: `active` | `archived`. Второй токен того же сообщества не
     дублирует строку, а архивирует прежнюю: индекс `uq_community_token_active` —
@@ -337,6 +352,11 @@ class CommunityToken(TenantMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     community_id: Mapped[str] = mapped_column(String(32))
+    # Короткий адрес сообщества (без домена и префикса `club`/`public`), в
+    # нижнем регистре — так, как отдаёт VK и как разбирается ссылка из брифа.
+    screen_name: Mapped[str] = mapped_column(String(64))
+    # Название сообщества — только для читаемого ответа оператору, не секрет.
+    community_name: Mapped[str] = mapped_column(String(255))
     token_encrypted: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

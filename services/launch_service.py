@@ -20,11 +20,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from config.settings import Settings, get_settings
-from db.community_tokens import get_decrypted_token
+from db.community_tokens import find_decrypted_token
 from db.models import Campaign, Creative
 from db.repositories import (
     create_cabinet_row,
@@ -38,7 +40,7 @@ from integrations.adapter import PlatformAdapter
 from integrations.channels import Channel, ChannelConfig, ChannelRouter, NoHealthyChannelError
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
-from integrations.vk_api import VkApiAdapter, resolve_ad_object
+from integrations.vk_api import VkApiAdapter
 from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,6 +86,11 @@ LEAD_FORM_GOAL = "lead_form"
 MESSAGES_GOAL = "messages"
 SENLER_GOAL = "senler"
 SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL, SENLER_GOAL)
+
+# Числовой адрес сообщества внутри ссылки (`club228817082`, `public228817082`,
+# реже `event…`/`id…`) — используется ТОЛЬКО проверкой подключения Senler
+# (`_community_reference`), не связан с `integrations.vk_api._COMMUNITY_RE`.
+_COMMUNITY_SLUG_RE = re.compile(r"^(?:club|public|event|id)(\d+)$")
 
 
 class BriefNotFoundError(Exception):
@@ -343,6 +350,30 @@ async def _prepare_on_platform(
     return cabinet_id, result, status
 
 
+def _community_reference(object_url: str) -> tuple[str | None, str]:
+    """Разобрать ссылку на сообщество из брифа: (числовой id или `None`, короткий адрес).
+
+    Последний сегмент пути, без учёта регистра. Клиенты почти всегда присылают
+    короткий адрес (`https://vk.ru/djbeauty` -> `djbeauty`) — числового id там
+    просто нет, и раньше проверка на этом молча сдавалась. Префиксы `club`/
+    `public`/`event`/`id` перед числом отбрасываются, остаётся сам номер;
+    остальное — короткий адрес как есть. Оба признака идут в
+    `db.community_tokens.find_decrypted_token`: она сама решает, по какому
+    совпало (домены `vk.com` и `vk.ru` — оба обычные http(s)-ссылки, второй
+    парсинг для них не нужен).
+    """
+    raw = object_url.strip()
+    if "//" not in raw:
+        raw = f"https://{raw}"
+    segments = [segment for segment in urlsplit(raw).path.split("/") if segment]
+    if not segments:
+        return None, ""
+    slug = segments[-1].lower()
+    match = _COMMUNITY_SLUG_RE.match(slug)
+    numeric_id = match.group(1) if match else None
+    return numeric_id, slug
+
+
 async def _verify_senler(
     session: AsyncSession, account_id: int, spec: CampaignSpec, settings: Settings
 ) -> str | None:
@@ -352,24 +383,25 @@ async def _verify_senler(
     - Senler явно НЕ подключён (токен есть, VK это подтвердил) —
       `SenlerNotConnectedError`, кампания не создаётся;
     - подключён — `None`, запуск продолжается молча;
-    - проверить нечем (нет числового id сообщества в ссылке, токена для него не
-      привязали, либо сходить в VK не вышло) — возвращаем предупреждение,
-      запуск всё равно продолжается: требовать токен с каждого клиента мы не
-      будем, но и выдавать непроверенное за проверенное нельзя (CLAUDE.md §7).
+    - проверить нечем (сообщество из ссылки не сопоставилось ни с одним
+      привязанным токеном — ни по числовому id, ни по короткому адресу, —
+      либо сходить в VK не вышло) — возвращаем предупреждение, запуск всё
+      равно продолжается: требовать токен с каждого клиента мы не будем, но и
+      выдавать непроверенное за проверенное нельзя (CLAUDE.md §7).
     """
-    community_id = resolve_ad_object(spec.object_url, spec.object_kind).url_object_id
-    if community_id is None:
-        return _SENLER_UNVERIFIED_NOTE
-    token = await get_decrypted_token(session, account_id, community_id, settings=settings)
-    if token is None:
+    numeric_id, slug = _community_reference(spec.object_url)
+    match = await find_decrypted_token(
+        session, account_id, community_id=numeric_id, screen_name=slug, settings=settings
+    )
+    if match is None:
         return _SENLER_UNVERIFIED_NOTE
     try:
-        servers = await fetch_callback_servers(token, community_id)
+        servers = await fetch_callback_servers(match.token, match.community_id)
     except VkCommunityUnreachable:
-        logger.warning("senler check unreachable for community %s", community_id)
+        logger.warning("senler check unreachable for community %s", match.community_id)
         return _SENLER_UNVERIFIED_NOTE
     if not detect_senler(servers).connected:
-        raise SenlerNotConnectedError(community_id)
+        raise SenlerNotConnectedError(match.community_id)
     return None
 
 

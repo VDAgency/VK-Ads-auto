@@ -673,6 +673,11 @@ def test_spec_is_passed_to_adapter_untouched() -> None:
 # нельзя (CLAUDE.md §7).
 
 SENLER_COMMUNITY_ID = "228817082"
+# Короткий адрес сообщества, привязанный при заводе токена (`groups.getById`,
+# `core/api/v1/senler.py`) — клиенты в брифе почти всегда присылают именно его,
+# а не числовой id, поэтому проверка обязана находить токен и по нему.
+SENLER_SCREEN_NAME = "djbeauty"
+SENLER_COMMUNITY_NAME = "DJ BEAUTY"
 _SENLER_VALID = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/club228817082",
@@ -684,11 +689,15 @@ _SENLER_VALID = {
     "term": "1 месяц",
     "target_type": "заявка через senler",
 }
+# Тот же бриф, но ссылка — короткий адрес без числового id (главный сценарий
+# брифа на практике).
+_SENLER_SHORT_ADDRESS = {**_SENLER_VALID, "object_url": "https://vk.ru/djbeauty"}
 
 
-async def _with_senler_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
-    """Тот же стенд, что `_with_db`, но с брифом на цель Senler (сообщество с
-    числовым id, чтобы `resolve_ad_object` мог вывести `community_id`)."""
+async def _with_senler_db(
+    scenario: Callable[[AsyncSession], Awaitable[T]], *, payload: dict[str, str] | None = None
+) -> T:
+    """Тот же стенд, что `_with_db`, но с брифом на цель Senler."""
     engine = create_async_engine(
         "sqlite+aiosqlite://",
         poolclass=StaticPool,
@@ -706,7 +715,7 @@ async def _with_senler_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T
                 account_id=1,
                 client_id=1,
                 variant="individual",
-                payload=dict(_SENLER_VALID),
+                payload=dict(payload or _SENLER_VALID),
             )
         )
         await session.commit()
@@ -715,6 +724,24 @@ async def _with_senler_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T
         result = await scenario(session)
     await engine.dispose()
     return result
+
+
+async def _save_senler_token(
+    session: AsyncSession,
+    token: str,
+    *,
+    community_id: str = SENLER_COMMUNITY_ID,
+    screen_name: str = SENLER_SCREEN_NAME,
+) -> None:
+    await save_community_token(
+        session,
+        1,
+        community_id,
+        token,
+        screen_name=screen_name,
+        community_name=SENLER_COMMUNITY_NAME,
+        settings=_settings(),
+    )
 
 
 def _launch_senler(session: AsyncSession) -> Awaitable[LaunchOutcome]:
@@ -741,9 +768,7 @@ def test_senler_launch_is_blocked_when_chatbot_not_connected(
     monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
 
     async def scenario(session: AsyncSession) -> None:
-        await save_community_token(
-            session, 1, SENLER_COMMUNITY_ID, "community-token", settings=_settings()
-        )
+        await _save_senler_token(session, "community-token")
         await session.commit()
         with pytest.raises(SenlerNotConnectedError):
             await _launch_senler(session)
@@ -758,9 +783,7 @@ def test_senler_launch_blocked_leaves_no_campaign_behind(monkeypatch: pytest.Mon
     monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
 
     async def scenario(session: AsyncSession) -> object:
-        await save_community_token(
-            session, 1, SENLER_COMMUNITY_ID, "community-token", settings=_settings()
-        )
+        await _save_senler_token(session, "community-token")
         await session.commit()
         with pytest.raises(SenlerNotConnectedError):
             await _launch_senler(session)
@@ -788,9 +811,7 @@ def test_senler_launch_proceeds_silently_when_chatbot_connected(
     monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
 
     async def scenario(session: AsyncSession) -> str:
-        await save_community_token(
-            session, 1, SENLER_COMMUNITY_ID, "community-token", settings=_settings()
-        )
+        await _save_senler_token(session, "community-token")
         await session.commit()
         outcome = await _launch_senler(session)
         return outcome.message
@@ -830,9 +851,7 @@ def test_senler_launch_warns_when_vk_check_is_unreachable(monkeypatch: pytest.Mo
     monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
 
     async def scenario(session: AsyncSession) -> tuple[str, object]:
-        await save_community_token(
-            session, 1, SENLER_COMMUNITY_ID, "community-token", settings=_settings()
-        )
+        await _save_senler_token(session, "community-token")
         await session.commit()
         outcome = await _launch_senler(session)
         await session.commit()
@@ -885,11 +904,69 @@ def test_detect_senler_is_reused_by_launch_service(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(launch_service, "detect_senler", spy)
 
     async def scenario(session: AsyncSession) -> None:
-        await save_community_token(
-            session, 1, SENLER_COMMUNITY_ID, "community-token", settings=_settings()
-        )
+        await _save_senler_token(session, "community-token")
         await session.commit()
         await _launch_senler(session)
 
     asyncio.run(_with_senler_db(scenario))
     assert seen and seen[0][0]["title"] == "Senler"
+
+
+# --- главный сценарий доработки: сообщество из брифа опознаётся по короткому
+# адресу, а не только по числовому id ------------------------------------------
+
+
+def test_senler_check_finds_the_token_by_short_address_from_the_brief_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Клиенты в брифе почти всегда присылают короткий адрес (`vk.ru/djbeauty`),
+    а не числовой id — раньше проверка на этом молча сдавалась (`url_object_id`
+    для такой ссылки не извлекается). Токен привязан к сообществу с коротким
+    адресом `djbeauty`; бриф ссылается на `https://vk.ru/djbeauty` — без
+    числового id вовсе. Проверка обязана найти токен и пройти как обычно."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        assert token == "community-token"
+        # Найдя по короткому адресу, звоним в VK каноническим числовым id,
+        # сохранённым при привязке токена, а не тем, что было в ссылке брифа.
+        assert community_id == SENLER_COMMUNITY_ID
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> str:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    message = asyncio.run(_with_senler_db(scenario, payload=_SENLER_SHORT_ADDRESS))
+    assert "не удал" not in message.lower()
+
+
+def test_senler_check_still_finds_the_token_by_numeric_id_from_the_brief_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Регресс: `https://vk.com/club228817082` — ссылка с числовым id —
+    по-прежнему находит токен того же сообщества."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        assert token == "community-token"
+        assert community_id == SENLER_COMMUNITY_ID
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> str:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    # _SENLER_VALID уже ссылается на https://vk.com/club228817082.
+    message = asyncio.run(_with_senler_db(scenario))
+    assert "не удал" not in message.lower()
