@@ -76,11 +76,11 @@ MODERATION_MARKERS = ("moder", "pending")
 # Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» прошли боевой
 # зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True) и в боте/вебе
 # выбираются как обычная цель. «Заявка через Senler» технически работает тем же
-# пакетом VK, что и «Сообщения» (integrations.vk_surfaces.VK_SENLER), но собственный
-# боевой прогон под именем Senler ещё не проведён (Surface.verified=False) — в
-# каталоге площадок подписки она по-прежнему показывается как «скоро»
-# (services.goals.subscription_targets().available), при этом оператор уже может
-# явно выбрать её при запуске (bot.handlers.creative.GOALS), и запуск её принимает.
+# пакетом VK, что и «Сообщения» (integrations.vk_surfaces.VK_SENLER), и собственный
+# боевой прогон под именем Senler тоже проведён 2026-08-24 (Surface.verified=True) —
+# в каталоге площадок подписки она теперь показывается как доступная
+# (services.goals.subscription_targets().available), и оператор явно выбирает её
+# при запуске (bot.handlers.creative.GOALS) так же, как остальные цели.
 SUBSCRIBERS_GOAL = "subscribers"
 LEAD_FORM_GOAL = "lead_form"
 MESSAGES_GOAL = "messages"

@@ -196,24 +196,27 @@ def test_goal_surface_component_has_no_senler_special_case() -> None:
     assert "senler" not in text.lower()
 
 
-def test_senler_tab_has_no_available_surface() -> None:
+def test_senler_tab_now_has_an_available_surface() -> None:
     """Решение 2026-08-24: Senler — реализованная цель (раскладка и запуск её
     принимают, tests/test_senler_goal.py), в справочнике площадок у неё один
-    элемент. Он пока заблокирован (`verified=False` у
-    `integrations.vk_surfaces.VK_SENLER`, свой боевой прогон ещё не проведён).
+    элемент. Собственный боевой прогон под именем Senler руководитель провёл
+    в тот же день — `integrations.vk_surfaces.VK_SENLER.verified` стал `True`.
 
     По общему правилу (`isGoalTabEnabled`) это значит, что сама вкладка обязана
-    рендериться как «скоро» — не потому, что где-то в коде написано имя
-    «senler», а потому, что у цели нет доступных площадок. Поведение в
-    собранном HTML проверяет `tests/test_web_static.py`.
+    рендериться как открытая — не потому, что где-то в коде написано имя
+    «senler», а потому, что у цели теперь есть доступная площадка. Поведение в
+    собранном HTML проверяет `tests/test_web_static.py`. Такое же правило,
+    примененное к клипу ВК (площадка, которая всё ещё не прошла проверку),
+    закрепляет `test_engagement_tab_keeps_an_available_surface` ниже: у той
+    цели вкладка остаётся открытой, а недоступна только одна площадка внутри.
     """
     targets = {target.kind: target for target in subscription_targets()}
     senler_targets = [target for target in targets.values() if target.goal == "senler"]
     assert [target.kind for target in senler_targets] == ["senler"]
-    assert senler_targets[0].available is False
+    assert senler_targets[0].available is True
 
-    assert not any(target.available for target in targets_for_goal("senler")), (
-        "у цели senler не должно быть доступных площадок — иначе вкладка обязана открыться"
+    assert any(target.available for target in targets_for_goal("senler")), (
+        "у цели senler должна быть доступная площадка — иначе вкладка обязана остаться закрытой"
     )
 
 

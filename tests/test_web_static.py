@@ -265,7 +265,7 @@ def _goal_tab_buttons(body: str) -> list[str]:
     return re.findall(r'<button[^>]*role="tab"[^>]*>.*?</button>', body, re.DOTALL)
 
 
-def test_brief_forms_show_five_goal_tabs_only_senler_locked() -> None:
+def test_brief_forms_show_five_goal_tabs_all_unlocked() -> None:
     """Обе формы брифа задают вопрос вкладками: сначала цель, потом площадка внутри неё.
 
     Раньше был один вопрос «Куда привлекаем подписчиков?» на все 15 площадок сразу —
@@ -274,12 +274,16 @@ def test_brief_forms_show_five_goal_tabs_only_senler_locked() -> None:
 
     Доступность вкладки — общее правило, а не список исключений по имени цели:
     вкладка заблокирована, если ни одна площадка внутри неё ещё не прошла боевую
-    проверку (`web/lib/briefGoals.ts::isGoalTabEnabled`). У «Заявки через Senler»
-    единственная площадка пока заблокирована (`test_senler_panel_has_a_single_locked_surface`
-    ниже) — поэтому заблокирована и сама вкладка. У «Вовлечения в готовый объект»
-    заблокирован только «клип» — остальные четыре площадки доступны, поэтому вкладка
-    остаётся открытой (доказывает, что правило не ломает вкладки с частично
-    заблокированными площадками).
+    проверку (`web/lib/briefGoals.ts::isGoalTabEnabled`). До 2026-08-24 «Заявка через
+    Senler» была единственной полностью заблокированной вкладкой — её единственная
+    площадка ещё не прошла боевой прогон. Прогон проведён 2026-08-24
+    (`integrations.vk_surfaces.VK_SENLER.verified=True`), и по тому же общему
+    правилу вкладка открылась сама, без спецкейса по имени. Теперь у каждой из
+    пяти целей есть хотя бы одна доступная площадка, поэтому ни одна вкладка не
+    заблокирована — то же правило продолжает работать на уровне отдельной площадки:
+    «Вовлечение в готовый объект» держит «клип» заблокированным, но вкладка
+    остаётся открытой, потому что остальные четыре площадки доступны
+    (`test_engagement_panel_keeps_the_clip_surface_locked` ниже).
     """
     client = TestClient(create_app())
     for page in _BRIEF_PAGES.values():
@@ -298,42 +302,70 @@ def test_brief_forms_show_five_goal_tabs_only_senler_locked() -> None:
             assert label in tab, f"{page}: вкладка {label!r} не найдена по порядку"
 
         by_label = dict(zip(labels, tabs, strict=True))
-        assert "disabled" in by_label["Заявка через Senler"], (
-            f"{page}: вкладка «Заявка через Senler» обязана быть заблокирована — "
-            "у цели нет ни одной доступной площадки"
-        )
-        assert 'class="bf-choice__soon"' in by_label["Заявка через Senler"], (
-            f"{page}: заблокированная вкладка должна быть помечена «скоро»"
-        )
-
-        still_open = [
-            "Подписчики",
-            "Вовлечение в готовый объект",
-            "Сообщения сообществу",
-            "Заявки — лид-форма",
-        ]
-        for label in still_open:
+        for label in labels:
             assert "disabled" not in by_label[label], (
                 f"{page}: вкладка {label!r} не должна быть заблокирована — у цели есть "
                 "доступная площадка"
             )
+            assert 'class="bf-choice__soon"' not in by_label[label], (
+                f"{page}: открытая вкладка {label!r} не должна быть помечена «скоро»"
+            )
 
 
-def test_senler_panel_has_a_single_locked_surface() -> None:
-    """Внутри вкладки «Заявка через Senler» — одна площадка, и она заблокирована.
+def test_senler_panel_auto_selects_its_only_surface() -> None:
+    """Внутри вкладки «Заявка через Senler» — одна площадка, и теперь она доступна.
 
-    Собственный боевой прогон под именем Senler ещё не проведён
-    (`integrations.vk_surfaces.VK_SENLER.verified=False`), поэтому клиент видит
-    вариант, но выбрать его не может — так же, как «клип» внутри «Вовлечения».
+    Собственный боевой прогон под именем Senler проведён 2026-08-24
+    (`integrations.vk_surfaces.VK_SENLER.verified=True`). Панель с единственной
+    доступной площадкой не рендерит радио-выбор вовсе (`BriefGoalSurface.tsx`,
+    `soleSurface`) — площадка подставляется автоматически скрытым полем, клиенту
+    нечего выбирать. Регрессия на прежнее поведение: до прогона здесь была ровно
+    одна заблокированная радиокнопка с пометкой «скоро».
     """
     client = TestClient(create_app())
     for page in _BRIEF_PAGES.values():
         body = client.get(page).text
         panel = _goal_panel_html(body, "senler")
         radios = re.findall(r'<input type="radio"[^>]*name="target_type"[^>]*>', panel)
-        assert len(radios) == 1, f"{page}: у цели Senler должна быть ровно одна площадка"
-        assert "disabled" in radios[0], f"{page}: площадка Senler ещё не проверена боем"
+        assert radios == [], f"{page}: единственная доступная площадка не должна быть радио"
+        assert 'class="bf-choice__soon"' not in panel, (
+            f"{page}: доступная площадка Senler не должна быть помечена «скоро»"
+        )
+        hidden = re.findall(r'<input type="hidden"[^>]*name="target_type"[^>]*>', panel)
+        assert len(hidden) == 1, f"{page}: площадка Senler обязана подставляться автоматически"
+        assert "заявка через senler" in hidden[0], f"{page}: не то значение подставлено"
+        assert "Заявка через Senler" in panel, f"{page}: название площадки должно быть видно"
+
+
+def test_engagement_panel_keeps_the_clip_surface_locked() -> None:
+    """«Клип ВКонтакте» — единственная всё ещё непроверенная площадка каталога.
+
+    Внутри вкладки «Вовлечение в готовый объект» пять площадок (не одна, поэтому
+    авто-подстановка `soleSurface` здесь не срабатывает и рендерится обычный
+    список радиокнопок): клип ждёт настоящей ссылки, доступной кабинету, и
+    остаётся заблокированным, а остальные четыре — доступны. Та же проверка
+    правила «заблокирована площадка, а не вся вкладка», что раньше стояла на
+    примере Senler (`test_senler_panel_auto_selects_its_only_surface` выше),
+    здесь — на клипе, единственной площадке, которая правило всё ещё демонстрирует.
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        panel = _goal_panel_html(body, "engagement")
+        radios = re.findall(r'<input type="radio"[^>]*name="target_type"[^>]*>', panel)
+        assert len(radios) == 5, f"{page}: у цели «вовлечение» должно быть 5 площадок"
+
+        locked = [radio for radio in radios if "disabled" in radio]
+        assert len(locked) == 1, f"{page}: заблокирована должна быть ровно одна площадка"
+        assert 'value="клип"' in locked[0], f"{page}: заблокированной обязана быть площадка клипа"
         assert 'class="bf-choice__soon"' in panel, "заблокированная площадка помечена «скоро»"
+
+        # У самой вкладки «Вовлечение» правило про доступность живёт на кнопке
+        # role="tab" (test_brief_forms_show_five_goal_tabs_all_unlocked), а не на
+        # атрибутах этого <fieldset> — те переключаются активностью вкладки в UI
+        # (hidden/disabled = !isActive), не наличием доступной площадки внутри.
+        tab = next(t for t in _goal_tab_buttons(body) if "Вовлечение в готовый объект" in t)
+        assert "disabled" not in tab, f"{page}: вкладка «Вовлечение» не должна быть заблокирована"
 
 
 def _goal_panel_html(body: str, key: str) -> str:
