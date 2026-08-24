@@ -255,11 +255,16 @@ def test_start_creative_escapes_cabinet_title_end_to_end(monkeypatch: pytest.Mon
     assert "&amp; Партнёры" in text
 
 
-def test_lead_form_and_messages_goals_are_marked_available() -> None:
-    """Логика запуска лид-формы и сообщений боевая — кнопки больше не «серые»."""
+def test_all_four_goals_are_marked_available() -> None:
+    """Логика запуска всех четырёх целей боевая — ни одна кнопка не «серая».
+
+    «Заявка через Senler» технически работает тем же пакетом VK, что и
+    «Сообщения» (решение 2026-08-24, tests/test_senler_goal.py) — собственный
+    боевой прогон под именем Senler ещё не проведён, но это не блокирует явный
+    выбор цели оператором здесь.
+    """
     goals_by_code = {code: enabled for code, _, enabled in creative.GOALS}
     assert goals_by_code["lead_form"] is True
     assert goals_by_code["subscribers"] is True
     assert goals_by_code["messages"] is True
-    # Senler остаётся единственной нереализованной целью и обязана быть недоступной.
-    assert goals_by_code["senler"] is False
+    assert goals_by_code["senler"] is True

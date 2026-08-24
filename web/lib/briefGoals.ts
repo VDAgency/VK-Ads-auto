@@ -18,15 +18,18 @@
  * (`docs/superpowers/specs/2026-08-23-brief-goal-tabs-design.md`): пять вкладок,
  * а не четыре, потому что «вовлечение в готовый объект» (пост/трек/клип) — это
  * не то же самое, что «подписчики», хотя обе цели ведут через один и тот же
- * список площадок подписки в справочнике. Заявка через Senler показывается,
- * но недоступна: клиент видит замысел сервиса целиком, но выбрать её не может
- * («enabled: false» — вкладка рендерится с атрибутом `disabled`).
+ * список площадок подписки в справочнике.
+ *
+ * Вкладка «Заявка через Senler» открыта (решение 2026-08-24: технически тот же
+ * пакет VK, что у «Сообщений») — но единственная площадка внутри нее сама
+ * заблокирована (`enabled: false` в `web/lib/briefSurfaces.ts`), пока не проведён
+ * собственный боевой прогон под именем Senler. Тот же паттерн, что у «клипа»
+ * внутри вкладки «Вовлечение»: вкладка доступна, конкретный вариант — «скоро».
  */
 import { type BriefGoalKey, goalOfSurfaceValue, surfacesForGoal } from "./briefSurfaces";
 
 export type BriefGoalTab = {
-  /** Ключ цели; для «скоро»-вкладки без площадок в справочнике — `"senler"`. */
-  key: BriefGoalKey | "senler";
+  key: BriefGoalKey;
   label: string;
   /** false → вкладка заблокирована, помечена «скоро», кликнуть нельзя. */
   enabled: boolean;
@@ -80,18 +83,23 @@ export const BRIEF_GOAL_TABS: BriefGoalTab[] = [
     },
   },
   {
-    // Цели нет в справочнике вовсе (integrations/vk_surfaces.py её не заводит) —
-    // не «непроверенная площадка», а нереализованная цель целиком.
+    // Решение 2026-08-24: цель реализована (раскладка и запуск её принимают,
+    // tests/test_senler_goal.py), в справочнике площадок у неё один элемент —
+    // сам он пока заблокирован (web/lib/briefSurfaces.ts, verified=False у
+    // integrations/vk_surfaces.VK_SENLER).
     key: "senler",
     label: "Заявка через Senler",
-    enabled: false,
-    objectUrl: { label: "", hint: "", placeholder: "" },
+    enabled: true,
+    objectUrl: {
+      label: "Ссылка на сообщество, к которому подключён чат-бот Senler",
+      hint: "В сообществе должен быть подключён и настроен чат-бот Senler — иначе заявки будет некому обрабатывать",
+      placeholder: "https://vk.com/your_group",
+    },
   },
 ];
 
-/** Площадки вкладки; у «скоро»-вкладки (Senler) их в справочнике нет. */
+/** Площадки вкладки — фильтр по цели из справочника. */
 export function surfacesForTab(tab: BriefGoalTab): ReturnType<typeof surfacesForGoal> {
-  if (tab.key === "senler") return [];
   return surfacesForGoal(tab.key);
 }
 

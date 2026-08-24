@@ -110,11 +110,17 @@ def test_surface_counts_per_goal_match_spec() -> None:
         "engagement": 5,
         "leads": 1,
         "messages": 1,
+        "senler": 1,
     }
 
 
 def test_goal_tabs_order_and_labels_match_spec() -> None:
-    """Пять вкладок, порядок и подписи — из требования §1 спеки, не выдуманы."""
+    """Пять вкладок, порядок и подписи — из требования §1 спеки, не выдуманы.
+
+    Все пять вкладок открыты (решение 2026-08-24 сделало Senler реализованной
+    целью) — заблокирована не вкладка, а единственная площадка внутри неё
+    (`test_senler_tab_has_a_single_locked_surface` ниже).
+    """
     tabs = _read_tabs()
     assert [tab["key"] for tab in tabs] == [
         "subscription",
@@ -130,7 +136,7 @@ def test_goal_tabs_order_and_labels_match_spec() -> None:
         "Заявки — лид-форма",
         "Заявка через Senler",
     ]
-    assert [tab["enabled"] for tab in tabs] == ["true", "true", "true", "true", "false"]
+    assert [tab["enabled"] for tab in tabs] == ["true", "true", "true", "true", "true"]
 
 
 def test_goal_tab_keys_cover_every_catalog_goal() -> None:
@@ -144,26 +150,31 @@ def test_goal_tab_keys_cover_every_catalog_goal() -> None:
     assert catalog_goals <= tab_keys, f"вкладок не хватает для целей {catalog_goals - tab_keys}"
 
 
-def test_senler_tab_has_no_object_url_copy_and_no_surfaces() -> None:
-    """Senler — вкладка-обещание: в справочнике площадок её вообще нет.
-
-    Подсказки поля «ссылка на объект» у неё пустые: клиент не может её выбрать
-    и до этого поля не доберётся, выдумывать текст незачем.
+def test_senler_tab_has_a_single_locked_surface() -> None:
+    """Решение 2026-08-24: Senler больше не вкладка-обещание — цель реализована
+    (раскладка и запуск её принимают, tests/test_senler_goal.py), в справочнике
+    площадок у неё один элемент. Сама вкладка открыта и несёт подсказку поля
+    «ссылка на объект», но единственная площадка внутри неё пока заблокирована
+    (verified=False у `integrations.vk_surfaces.VK_SENLER`, свой боевой прогон
+    ещё не проведён) — тот же паттерн, что у «клипа» внутри «Вовлечения».
     """
     tabs = {tab["key"]: tab for tab in _read_tabs()}
-    senler = tabs["senler"]
-    assert senler["enabled"] == "false"
-    assert senler["url_label"] == ""
-    assert senler["url_hint"] == ""
-    catalog_goals = {target.goal for target in subscription_targets()}
-    assert "senler" not in catalog_goals
+    senler_tab = tabs["senler"]
+    assert senler_tab["enabled"] == "true"
+    assert senler_tab["url_label"], "у открытой вкладки должна быть подсказка «ссылка на объект»"
+    assert senler_tab["url_hint"]
+
+    targets = {target.kind: target for target in subscription_targets()}
+    senler_targets = [target for target in targets.values() if target.goal == "senler"]
+    assert [target.kind for target in senler_targets] == ["senler"]
+    assert senler_targets[0].available is False
 
 
 def test_every_enabled_tab_has_object_url_copy() -> None:
     """Требование §4 спеки: подсказка и заголовок «ссылки на объект» — для каждой цели свои."""
     tabs = _read_tabs()
     enabled_tabs = [tab for tab in tabs if tab["enabled"] == "true"]
-    assert len(enabled_tabs) == 4
+    assert len(enabled_tabs) == 5
     labels = [tab["url_label"] for tab in enabled_tabs]
     hints = [tab["url_hint"] for tab in enabled_tabs]
     for label, hint in zip(labels, hints, strict=True):

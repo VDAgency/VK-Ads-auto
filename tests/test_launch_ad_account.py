@@ -339,11 +339,17 @@ def test_supported_goal_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unimplemented_goal_is_rejected() -> None:
-    """Цель без логики запуска не должна молча превращаться в «подписчиков»."""
+    """Цель без логики запуска не должна молча превращаться в «подписчиков».
+
+    «senler» здесь больше не годится как пример: решение 2026-08-24 добавило её в
+    `services.launch_service.SUPPORTED_GOALS` (технически тот же пакет VK, что и у
+    «Сообщений», tests/test_senler_goal.py). Используем заведомо синтетическое
+    значение, которое никогда не станет настоящей целью.
+    """
 
     async def scenario(session: AsyncSession) -> None:
         with pytest.raises(UnsupportedGoalError):
-            await _launch(session, ad_account_id=None, settings=_settings(), goal="senler")
+            await _launch(session, ad_account_id=None, settings=_settings(), goal="not_a_real_goal")
 
     asyncio.run(_with_db(scenario))
 

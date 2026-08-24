@@ -265,14 +265,17 @@ def _goal_tab_buttons(body: str) -> list[str]:
     return re.findall(r'<button[^>]*role="tab"[^>]*>.*?</button>', body, re.DOTALL)
 
 
-def test_brief_forms_show_five_goal_tabs_with_senler_locked() -> None:
+def test_brief_forms_show_five_goal_tabs_none_locked() -> None:
     """Обе формы брифа задают вопрос вкладками: сначала цель, потом площадка внутри неё.
 
     Раньше был один вопрос «Куда привлекаем подписчиков?» на все 15 площадок сразу —
     половина из них (лид-форма, сообщения) подписчиков не привлекает. Пять вкладок,
     порядок и подписи — требование §1 спеки 2026-08-23-brief-goal-tabs-design.md.
-    Заблокирована ровно одна — «Заявка через Senler»: её нет в справочнике площадок
-    вовсе, а не просто «непроверена».
+
+    Решение 2026-08-24 сделало Senler реализованной целью — заблокированных вкладок
+    больше нет ни одной (см. `test_senler_panel_has_a_single_locked_surface` ниже:
+    заблокирована не вкладка, а единственная площадка внутри неё, тот же паттерн,
+    что у «клипа» внутри «Вовлечения»).
     """
     client = TestClient(create_app())
     for page in _BRIEF_PAGES.values():
@@ -291,9 +294,24 @@ def test_brief_forms_show_five_goal_tabs_with_senler_locked() -> None:
             assert label in tab, f"{page}: вкладка {label!r} не найдена по порядку"
 
         locked = [tab for tab in tabs if "disabled" in tab]
-        assert len(locked) == 1, f"{page}: заблокирована должна быть ровно одна вкладка"
-        assert "Заявка через Senler" in locked[0]
-        assert 'class="bf-choice__soon"' in locked[0], "заблокированная вкладка помечена «скоро»"
+        assert locked == [], f"{page}: заблокированных вкладок быть не должно"
+
+
+def test_senler_panel_has_a_single_locked_surface() -> None:
+    """Внутри вкладки «Заявка через Senler» — одна площадка, и она заблокирована.
+
+    Собственный боевой прогон под именем Senler ещё не проведён
+    (`integrations.vk_surfaces.VK_SENLER.verified=False`), поэтому клиент видит
+    вариант, но выбрать его не может — так же, как «клип» внутри «Вовлечения».
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        panel = _goal_panel_html(body, "senler")
+        radios = re.findall(r'<input type="radio"[^>]*name="target_type"[^>]*>', panel)
+        assert len(radios) == 1, f"{page}: у цели Senler должна быть ровно одна площадка"
+        assert "disabled" in radios[0], f"{page}: площадка Senler ещё не проверена боем"
+        assert 'class="bf-choice__soon"' in panel, "заблокированная площадка помечена «скоро»"
 
 
 def _goal_panel_html(body: str, key: str) -> str:

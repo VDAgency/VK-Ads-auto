@@ -68,15 +68,19 @@ STUB_CHANNEL = "stub"
 MODERATION_MARKERS = ("moder", "pending")
 
 
-# Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» здесь — только
-# на уровне кода: сама площадка (integrations.vk_surfaces.VK_MESSAGES) не прошла
-# боевую проверку, поэтому в боте и вебе цель всё равно показывается как «скоро»
-# и физически не выбирается (services.goals.subscription_targets().available).
-# Senler в этот список ещё не заведена вовсе.
+# Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» прошли боевой
+# зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True) и в боте/вебе
+# выбираются как обычная цель. «Заявка через Senler» технически работает тем же
+# пакетом VK, что и «Сообщения» (integrations.vk_surfaces.VK_SENLER), но собственный
+# боевой прогон под именем Senler ещё не проведён (Surface.verified=False) — в
+# каталоге площадок подписки она по-прежнему показывается как «скоро»
+# (services.goals.subscription_targets().available), при этом оператор уже может
+# явно выбрать её при запуске (bot.handlers.creative.GOALS), и запуск её принимает.
 SUBSCRIBERS_GOAL = "subscribers"
 LEAD_FORM_GOAL = "lead_form"
 MESSAGES_GOAL = "messages"
-SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL)
+SENLER_GOAL = "senler"
+SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL, SENLER_GOAL)
 
 
 class BriefNotFoundError(Exception):
@@ -348,8 +352,9 @@ async def launch_from_creative(
     `goal` — цель рекламы, которую явно выбрал оператор (кнопка в боте); неизвестное
     значение отклоняется, чтобы кампания не ушла с чужой целью. Отдельно от этого
     параметра цель может прийти из самого брифа (`ParsedBrief.goal`, площадка
-    `target_type`) — «Сообщения» реализованы в перечислении, но раскладка
-    (`services.mapping.build_campaign_spec`) их ещё не поддерживает; такой бриф
+    `target_type`) — сейчас раскладка (`services.mapping.build_campaign_spec`)
+    поддерживает все четыре цели перечисления `Goal` (подписчики, лид-форма,
+    сообщения, Senler); бриф с ещё не реализованной будущей целью по-прежнему
     отклоняется тем же `UnsupportedGoalError`, что и неизвестный параметр `goal`.
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`

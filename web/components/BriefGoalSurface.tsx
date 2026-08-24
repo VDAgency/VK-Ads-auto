@@ -85,7 +85,6 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
   const activeTab = BRIEF_GOAL_TABS.find((tab) => tab.key === activeGoal) ?? DEFAULT_GOAL_TAB;
   const targetTypeInvalid = invalid.has("target_type");
   const objectUrlInvalid = invalid.has("object_url");
-  const realTabs = BRIEF_GOAL_TABS.filter((tab) => tab.key !== "senler");
 
   return (
     <>
@@ -114,7 +113,7 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
                 role="tab"
                 id={`goal-tab-${tab.key}`}
                 aria-selected={isActive}
-                aria-controls={tab.key === "senler" ? undefined : `goal-panel-${tab.key}`}
+                aria-controls={`goal-panel-${tab.key}`}
                 tabIndex={tab.enabled ? (isActive ? 0 : -1) : undefined}
                 disabled={!tab.enabled}
                 className={isActive ? "bf-goal-tab is-active" : "bf-goal-tab"}
@@ -128,7 +127,7 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
         </div>
       </div>
 
-      {realTabs.map((tab) => {
+      {BRIEF_GOAL_TABS.map((tab) => {
         const surfaces = surfacesForTab(tab);
         // Единственная площадка цели — подставляем сама, выбирать не из чего
         // (требование §4 спеки). Если единственная площадка ещё не проверена в

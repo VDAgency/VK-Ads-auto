@@ -1,27 +1,22 @@
-"""Отказ для неподдержанной цели «Senler» — честный 422, а не 500 (code review).
+"""Отказ для неподдержанной цели — честный 422, а не 500 (code review).
 
-Раньше этот файл проверял цель «Сообщения»: она была заведена в перечисление
-(`services.brief_parser.Goal`), но площадка `integrations.vk_surfaces.VK_MESSAGES`
-не прошла боевую проверку, и раскладка (`services.mapping.build_campaign_spec`)
-отклоняла её `UnsupportedBriefGoalError`. Боевой зонд 2026-08-23 подтвердил пакет
-3127/objective/10 из 13 шаблонов (`tests/test_messages_goal.py`), площадка получила
-`verified=True`, и `Goal.MESSAGES` добавлена в `services.mapping._SUPPORTED_GOALS` —
-«Сообщения» теперь проходят раскладку наравне с подписчиками и лид-формой.
+История этого файла: он проверял сначала цель «Сообщения» (пока площадка
+`integrations.vk_surfaces.VK_MESSAGES` не прошла боевую проверку), потом —
+«Заявка через Senler» (пока у неё не было ни `Goal`, ни `TargetType`). Обе цели с
+тех пор реализованы: «Сообщения» — боевой зонд 2026-08-23, «Заявка через Senler» —
+решение 2026-08-24 (технически тот же пакет VK 3127, что и «Сообщения»; собственный
+боевой прогон под именем Senler ещё не проведён, но раскладка и запуск её уже
+принимают, `tests/test_senler_goal.py`). Обе входят в `services.launch_service.
+SUPPORTED_GOALS` и `services.mapping._SUPPORTED_GOALS` наравне с подписчиками и
+лид-формой — отклонять здесь больше нечего.
 
-Единственная оставшаяся нереализованная цель — Senler (CLAUDE.md §1.4, платная
-доработка вне MVP). У неё нет ни `Goal`, ни `TargetType`: оператор выбирает её
-только явным параметром `goal="senler"` при запуске (кнопка в боте, `bot.handlers.
-creative.GOALS`, и JSON-поле `goal` в теле `/creative`), бриф её вообще не разбирает.
-Поэтому путь отказа здесь другой, чем был у «Сообщений»: guard срабатывает раньше
-брифа — `services.launch_service._validate_goal` отклоняет параметр `goal` ДО того,
-как код успевает прочитать бриф или разобрать площадку (`services.launch_service.
-SUPPORTED_GOALS` — "subscribers"/"lead_form"/"messages", "senler" туда не входит).
-
-Из-за этого пропадает часть прежнего покрытия: эндпоинт `/api/v1/briefs/{id}/launch`
-(`LaunchIn`) параметра `goal` вообще не принимает — для него неподдержанную цель
-получить неоткуда (единственный источник цели там — сам бриф, а Senler бриф не
-разбирает). Эквивалентный «безкреативный» путь здесь проверен на уровне сервиса
-(`launch_without_creative(goal="senler")`), а не HTTP.
+Реальных нереализованных целей в системе сейчас не осталось: все четыре значения
+перечисления `services.brief_parser.Goal` работают end-to-end. Guard в
+`services.launch_service._validate_goal` при этом остаётся — он должен продолжать
+защищать код от ЛЮБОГО значения `goal`, которого нет в `SUPPORTED_GOALS`, в том
+числе от будущих неизвестных целей и от опечаток. Здесь этот guard проверяется на
+заведомо синтетическом значении `NOT_A_REAL_GOAL`, которое никогда не станет
+настоящей целью, — чтобы тест не протух снова при добавлении следующей цели.
 """
 
 from __future__ import annotations
@@ -60,10 +55,13 @@ IDENTITY = VkIdentity("10000001", "a1b2c3d4e5@agency_client", "Кабинет «
 
 _IMAGE_B64 = base64.b64encode(b"\xff\xd8\xff\x00" * 100).decode("ascii")
 
-# Бриф, самый обычный (площадка «подписчики»): Senler не заведена ни в `Goal`, ни в
-# `TargetType`, поэтому её нельзя выразить полем брифа — только явным параметром
-# `goal` при запуске. Какой именно бриф лежит под ним, значения не имеет: guard
-# срабатывает раньше, чем код успевает его прочитать.
+# Синтетическое значение `goal`, которое никогда не станет настоящей целью — не
+# спутать с ещё не реализованной, но правдоподобной будущей целью.
+NOT_A_REAL_GOAL = "not_a_real_goal"
+
+# Бриф, самый обычный (площадка «подписчики»): guard по параметру `goal` срабатывает
+# раньше, чем код успевает прочитать бриф, поэтому какой именно бриф лежит под ним —
+# не важно.
 SUBSCRIBERS_PAYLOAD = {
     "full_name": "Вячеслав",
     "object_url": "https://vk.com/community1",
@@ -170,10 +168,10 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
     return result
 
 
-def test_launch_from_creative_rejects_senler_goal_without_reaching_the_adapter() -> None:
-    """`goal="senler"` — типизированный `UnsupportedGoalError`, площадка VK ни разу
-    не вызывается (`RecordingAdapter.last_spec` остаётся `None`). Guard срабатывает
-    в `services.launch_service._validate_goal`, раньше чтения брифа."""
+def test_launch_from_creative_rejects_an_unknown_goal_without_reaching_the_adapter() -> None:
+    """Синтетический `goal` — типизированный `UnsupportedGoalError`, площадка VK ни
+    разу не вызывается (`RecordingAdapter.last_spec` остаётся `None`). Guard
+    срабатывает в `services.launch_service._validate_goal`, раньше чтения брифа."""
     RecordingAdapter.last_spec = None
 
     async def scenario(session: AsyncSession) -> None:
@@ -191,18 +189,15 @@ def test_launch_from_creative_rejects_senler_goal_without_reaching_the_adapter()
                 "Текст",
                 settings=_settings(),
                 ad_account_id=cabinet_view.id,
-                goal="senler",
+                goal=NOT_A_REAL_GOAL,
             )
 
     asyncio.run(_with_db(scenario))
     assert RecordingAdapter.last_spec is None
 
 
-def test_launch_without_creative_also_rejects_senler_goal() -> None:
-    """Тот же guard и для «безкреативного» пути (продвижение готового поста): HTTP
-    `/launch` параметра `goal` не принимает вовсе (`LaunchIn` его не объявляет —
-    Senler бриф не разбирает, отклонять там нечего), поэтому этот путь проверяем на
-    уровне сервиса, куда параметр `goal` всё же можно передать напрямую."""
+def test_launch_without_creative_also_rejects_an_unknown_goal() -> None:
+    """Тот же guard и для «безкреативного» пути (продвижение готового поста)."""
 
     async def scenario(session: AsyncSession) -> BaseException:
         cabinet_view = await add_account(session, 1, TOKEN, settings=_settings())
@@ -214,7 +209,7 @@ def test_launch_without_creative_also_rejects_senler_goal() -> None:
                 500,
                 settings=_settings(),
                 ad_account_id=cabinet_view.id,
-                goal="senler",
+                goal=NOT_A_REAL_GOAL,
             )
         except Exception as exc:  # noqa: BLE001 — тест ловит ровно то, что бросил сервис
             return exc
@@ -275,9 +270,9 @@ async def _with_client(
     return result
 
 
-def test_public_creative_upload_for_senler_goal_is_422_not_500() -> None:
+def test_public_creative_upload_for_an_unknown_goal_is_422_not_500() -> None:
     """`/api/v1/briefs/{id}/creative` принимает `goal` JSON-полем (`CreativeIn.goal`) —
-    ровно тот канал, которым оператор мог бы прислать `goal=senler` в обход бота."""
+    ровно тот канал, которым можно было бы прислать неизвестный `goal` в обход бота."""
 
     async def scenario(client: AsyncClient) -> tuple[int, Any]:
         resp = await client.post(
@@ -289,7 +284,7 @@ def test_public_creative_upload_for_senler_goal_is_422_not_500() -> None:
                 "height": 800,
                 "title": "Заголовок",
                 "body": "Текст",
-                "goal": "senler",
+                "goal": NOT_A_REAL_GOAL,
             },
         )
         return resp.status_code, resp.json()
@@ -299,7 +294,7 @@ def test_public_creative_upload_for_senler_goal_is_422_not_500() -> None:
     assert body["detail"] == "goal_not_supported"
 
 
-def test_admin_creative_upload_for_senler_goal_is_422_not_500() -> None:
+def test_admin_creative_upload_for_an_unknown_goal_is_422_not_500() -> None:
     async def scenario(client: AsyncClient) -> tuple[int, Any]:
         resp = await client.post(
             "/api/v1/admin/briefs/1/creative",
@@ -310,7 +305,7 @@ def test_admin_creative_upload_for_senler_goal_is_422_not_500() -> None:
                 "height": 800,
                 "title": "Заголовок",
                 "body": "Текст",
-                "goal": "senler",
+                "goal": NOT_A_REAL_GOAL,
             },
         )
         return resp.status_code, resp.json()

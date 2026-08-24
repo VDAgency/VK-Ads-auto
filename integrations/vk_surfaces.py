@@ -105,6 +105,7 @@ GOAL_SUBSCRIPTION = "subscription"
 GOAL_ENGAGEMENT = "engagement"
 GOAL_LEADS = "leads"
 GOAL_MESSAGES = "messages"
+GOAL_SENLER = "senler"
 
 _DURATION_RE = re.compile(r"_(\d+)s$")
 
@@ -564,6 +565,27 @@ LEAD_FORMS = Surface(
 # ⚠️ `default_cta="message"` — ДОГАДКА по аналогии с `VK_COMMUNITY.default_cta`
 # ("signUp"), зондом НЕ подтверждена: VK проверяет шаблоны раньше кнопки, дешёвым
 # зондом до неё не добраться. Подтвердится только полным боевым созданием баннера.
+#
+# Набор шаблонов вынесен в модульную константу: его же переиспользует `VK_SENLER`
+# ниже — тот же объект рекламирования (сообщество), только другой смысл для клиента.
+# Копировать словарь нельзя: два экземпляра разъедутся при первой же правке.
+_MESSAGES_PATTERNS = _patterns(
+    CTA_COMMUNITY,
+    TEXT_LONG,
+    {
+        529: "image_600x600",
+        400: "image_1080x607",
+        525: "image_607x1080",
+        339: "image_4_5",
+        530: "video_square_300s",
+        401: "video_landscape_300s",
+        527: "video_portrait_9_16_180s",
+        145: "video_portrait_9_16_30s",
+        338: "video_portrait_4_5_180s",
+        150: "video_portrait_4_5_30s",
+    },
+)
+
 VK_MESSAGES = Surface(
     kind="messages",
     title="Сообщения сообществу ВКонтакте",
@@ -574,22 +596,30 @@ VK_MESSAGES = Surface(
     default_cta="message",
     verified=True,
     goal=GOAL_MESSAGES,
-    patterns=_patterns(
-        CTA_COMMUNITY,
-        TEXT_LONG,
-        {
-            529: "image_600x600",
-            400: "image_1080x607",
-            525: "image_607x1080",
-            339: "image_4_5",
-            530: "video_square_300s",
-            401: "video_landscape_300s",
-            527: "video_portrait_9_16_180s",
-            145: "video_portrait_9_16_30s",
-            338: "video_portrait_4_5_180s",
-            150: "video_portrait_4_5_30s",
-        },
-    ),
+    patterns=_MESSAGES_PATTERNS,
+)
+
+# --- Заявка через Senler (тот же пакет 3127) ----------------------------------------
+# Решение 2026-08-24: технически это уже работающая цель «Сообщения» — боевая
+# кампания 28694299, прочитанная напрямую из VK, подтвердила `{"objective":
+# "socialengagement", "package_id": 3127}`. Отличие от VK_MESSAGES только смысловое:
+# своё название, своя подсказка клиенту и свой префикс имени кампании
+# (`services/mapping.py::_GOAL_NAME_PREFIX`) — объект рекламирования тот же самый
+# (сообщество), поэтому и набор шаблонов переиспользуется буквально.
+# ⚠️ `verified=False`: отдельный боевой прогон именно под именем Senler (создание
+# кампании, проверка, что она заведена с пакетом 3127, немедленная остановка)
+# выполняет руководитель отдельно — до этого честно показываем площадку как «скоро»
+# (тот же паттерн, что уже проверенный `VK_CLIP`), не выдавая непроверенное за
+# проверенное. Раскладка и запуск при этом уже полностью реализованы в коде.
+VK_SENLER = Surface(
+    kind="senler",
+    title="Заявка через Senler",
+    hint="ссылка на сообщество, к которому подключён чат-бот Senler",
+    package_id=3127,
+    objective="socialengagement",
+    default_cta="message",
+    goal=GOAL_SENLER,
+    patterns=_MESSAGES_PATTERNS,
 )
 
 SURFACES: tuple[Surface, ...] = (
@@ -608,6 +638,7 @@ SURFACES: tuple[Surface, ...] = (
     VK_CLIP,
     LEAD_FORMS,
     VK_MESSAGES,
+    VK_SENLER,
 )
 
 _BY_KIND: dict[str, Surface] = {surface.kind: surface for surface in SURFACES}

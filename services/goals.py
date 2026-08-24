@@ -1,9 +1,10 @@
 """Профили целей кампании и площадок подписки.
 
-Запускаются три цели — подписчики (`socialengagement`), заявки через лид-форму и
+Запускаются четыре цели — подписчики (`socialengagement`), заявки через лид-форму,
 сообщения сообществу (`integrations.vk_surfaces.VK_MESSAGES`, боевой зонд 2026-08-23,
-`verified=True`). Заявка через Senler в справочник площадок вообще не заведена
-(см. docs/ROADMAP.md, границы скоупа).
+`verified=True`) и заявка через Senler (`integrations.vk_surfaces.VK_SENLER`, тот же
+пакет VK, что и у «Сообщений», но собственный боевой прогон под именем Senler ещё не
+проведён — `verified=False`, площадка показывается как «скоро»).
 
 Зато сама цель «подписчики» ведёт не в одно место: подписаться можно на сообщество,
 личную страницу, рассылку, канал VK, канал MAX и на два объекта в Одноклассниках.
@@ -19,6 +20,7 @@ from integrations.vk_surfaces import (
     GOAL_ENGAGEMENT,
     GOAL_LEADS,
     GOAL_MESSAGES,
+    GOAL_SENLER,
     GOAL_SUBSCRIPTION,
     SURFACES,
 )
@@ -31,15 +33,19 @@ def goal_for_target_type(target_type: TargetType) -> Goal:
 
     Площадка «лид-форма» ведёт к сбору заявок, «сообщения» — к `Goal.MESSAGES`
     (площадка прошла боевую проверку, `subscription_targets().available` для неё
-    истинно); все остальные площадки (включая смежные цели вовлечения — пост,
-    музыка, клип) работают через цель «подписчики». `services.brief_parser.parse_brief`
-    вызывает эту функцию вместо того, чтобы решать самому: правило не должно
-    размазываться по модулям.
+    истинно), «заявка через Senler» — к `Goal.SENLER` (раскладка и запуск реализованы,
+    но `subscription_targets().available` для неё пока ложно — свой боевой прогон
+    ещё не проведён); все остальные площадки (включая смежные цели вовлечения —
+    пост, музыка, клип) работают через цель «подписчики». `services.brief_parser.
+    parse_brief` вызывает эту функцию вместо того, чтобы решать самому: правило не
+    должно размазываться по модулям.
     """
     if target_type is TargetType.LEAD_FORM:
         return Goal.LEAD_FORM
     if target_type is TargetType.MESSAGES:
         return Goal.MESSAGES
+    if target_type is TargetType.SENLER:
+        return Goal.SENLER
     return Goal.SUBSCRIBERS
 
 
@@ -94,6 +100,7 @@ def goal_titles() -> dict[str, str]:
         GOAL_ENGAGEMENT: "Вовлечение в готовый объект",
         GOAL_LEADS: "Заявки через лид-форму",
         GOAL_MESSAGES: "Сообщения сообществу",
+        GOAL_SENLER: "Заявка через Senler",
     }
 
 

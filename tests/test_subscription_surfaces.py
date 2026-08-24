@@ -25,8 +25,18 @@ _URL_OBJECT = 128898271
 
 
 def test_every_surface_has_a_distinct_package() -> None:
-    packages = [surface.package_id for surface in SURFACES]
-    assert len(packages) == len(set(packages)), "пакеты площадок обязаны различаться"
+    """Пакеты площадок обязаны различаться — с одним сознательным исключением.
+
+    «Заявка через Senler» (`kind="senler"`) намеренно делит пакет 3127 с
+    «Сообщениями» (`kind="messages"`): это тот же объект рекламирования
+    (сообщество), решение 2026-08-24 — см. `tests/test_senler_goal.py::
+    test_senler_surface_reuses_the_verified_messages_package`.
+    """
+    by_package: dict[int, list[str]] = {}
+    for surface in SURFACES:
+        by_package.setdefault(surface.package_id, []).append(surface.kind)
+    duplicates = {package: kinds for package, kinds in by_package.items() if len(kinds) > 1}
+    assert duplicates == {3127: ["messages", "senler"]}, duplicates
 
 
 def test_every_surface_kind_is_a_brief_target_type() -> None:
@@ -68,8 +78,11 @@ def test_subscription_targets_expose_all_surfaces_to_interfaces() -> None:
     assert len(targets) == len(SURFACES)
     # Непроверенные показываем, но выбрать не даём — список остаётся честным.
     # «Сообщения» прошли боевой зонд 2026-08-23 и больше не в этом списке.
+    # «Заявка через Senler» (2026-08-24) технически работает тем же пакетом, что
+    # и «Сообщения», но собственный боевой прогон под именем Senler ещё не проведён —
+    # второй (после vk_clip) непроверенный элемент каталога, tests/test_senler_goal.py.
     unverified = [t.kind for t in targets if not t.available]
-    assert unverified == ["vk_clip"], unverified
+    assert unverified == ["vk_clip", "senler"], unverified
     assert target_title("newsletter") == "Рассылка ВКонтакте"
     assert target_title("нет такой") == "нет такой"
 
@@ -270,10 +283,13 @@ def test_lead_form_sends_every_required_text(tmp_path) -> None:  # type: ignore[
     assert len(textblocks["title_30_additional"]["text"]) <= 30
 
 
-def test_only_the_clip_is_unverified() -> None:
-    # Всё остальное прошло боевое создание/зонд; клип один ждёт настоящей ссылки
+def test_only_the_clip_and_senler_are_unverified() -> None:
+    # Всё остальное прошло боевое создание/зонд; клип ждёт настоящей ссылки
     # (VK отвечает «Clip not found or not available» без неё) — «сообщения» прошли
     # боевой зонд 2026-08-23 (docs/VK_API_REFERENCE.md) и больше не в списке.
+    # «Заявка через Senler» (2026-08-24) технически работает тем же пакетом, что и
+    # «Сообщения», но собственный боевой прогон под именем Senler ещё не проведён —
+    # см. tests/test_senler_goal.py.
     from integrations.vk_surfaces import SURFACES
 
-    assert [s.kind for s in SURFACES if not s.verified] == ["vk_clip"]
+    assert [s.kind for s in SURFACES if not s.verified] == ["vk_clip", "senler"]
