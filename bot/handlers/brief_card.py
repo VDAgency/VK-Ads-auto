@@ -16,13 +16,15 @@ from services.edit_parser import parse_edits
 from bot import api_client
 from bot.access import OperatorOnly
 from bot.api_client import (
+    AdAccountItem,
     BriefCard,
     BriefNotFound,
     CabinetChoiceRequired,
     CoreUnavailable,
     CreativeRejected,
 )
-from bot.keyboards import ad_account_pick_keyboard, brief_card_keyboard
+from bot.handlers.creative import GOAL_LABELS, render_launch_confirmation
+from bot.keyboards import ad_account_pick_keyboard, brief_card_keyboard, launch_confirm_keyboard
 from bot.states import EditBrief
 
 router = Router(name="brief_card")
@@ -95,21 +97,53 @@ async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int
         text = _NO_CABINETS if exc.reason == "no_ad_account" else _ASK_CABINET
         await message.answer(text)
     except CreativeRejected as exc:
-        await message.answer(f"Запустить не вышло: {exc}")
+        # Тот же вид отказа, что в сценарии с креативом (`bot/handlers/creative.py:
+        # send_creative`, ревью операторского опыта §2.3) — единый стиль тревожных
+        # сообщений бота, а не два разных текста для одной и той же причины.
+        await message.answer(f"⚠️ {exc.reason}")
     except CoreUnavailable:
         await message.answer(_UNAVAILABLE)
     else:
         await message.answer(result.message)
 
 
+# Продвижение готового поста, клипа или трека всегда идёт под целью «подписчики»:
+# ни одна площадка без креатива не относится к лид-форме/сообщениям/Senler
+# (services/goals.py:goal_for_target_type — этим трём целям отвечают только свои
+# явные target_type; пост/клип/музыка используют цель «подписчики» по умолчанию).
+# Бот — тонкий клиент и не разбирает бриф сам (CLAUDE.md §1.3), поэтому опирается
+# на это правило локально, а не запрашивает цель у оператора, как при загрузке
+# креатива (`bot/handlers/creative.py`).
+_NO_CREATIVE_GOAL_LABEL = GOAL_LABELS["subscribers"]
+
+
+async def _show_launch_confirmation(
+    message: Message, card: BriefCard, account: AdAccountItem
+) -> None:
+    """Показать карточку подтверждения запуска без креатива (Т3) — та же карточка,
+    что и в сценарии с креативом (`bot/handlers/creative.py:render_launch_confirmation`).
+    Запуск происходит только по нажатию кнопки на этой карточке."""
+    text = (
+        render_launch_confirmation(card, account, _NO_CREATIVE_GOAL_LABEL)
+        + "\n\nНажмите «🚀 Запустить», чтобы кампания без креатива ушла в VK."
+    )
+    await message.answer(
+        text, parse_mode="HTML", reply_markup=launch_confirm_keyboard(card.brief_id, account.id)
+    )
+
+
 @router.callback_query(F.data.startswith("launch:"))
 async def launch_without_creative(callback: CallbackQuery) -> None:
-    """Запустить кампанию для площадки, которой креатив не нужен.
+    """Показать карточку подтверждения для площадки, которой креатив не нужен.
 
     Объявлением служит сам пост, клип или трек — просить у оператора картинку,
-    которая никуда не пойдёт, было бы выдумкой. Кабинет выбираем перед запуском
-    точно так же, как при загрузке креатива (`bot/handlers/creative.py:start_creative`):
-    единственный пригодный — берём сразу, несколько — спрашиваем оператора.
+    которая никуда не пойдёт, было бы выдумкой. Кабинет выбираем перед показом
+    карточки точно так же, как при загрузке креатива
+    (`bot/handlers/creative.py:start_creative`): список запрашивается для клиента
+    этого брифа, единственный пригодный — берём сразу и показываем в карточке,
+    несколько — спрашиваем оператора. Сам запуск происходит только по нажатию
+    кнопки на карточке (Т3) — раньше этот коллбэк отправлял кампанию в ядро сразу,
+    без единого шанса передумать.
     """
     brief_id = int((callback.data or "").split(":", 1)[1])
     if not isinstance(callback.message, Message):
@@ -118,7 +152,18 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
     message = callback.message
 
     try:
-        accounts = await api_client.list_ad_accounts()
+        card = await api_client.get_brief(brief_id)
+    except BriefNotFound:
+        await message.answer(_NOT_FOUND)
+        await callback.answer()
+        return
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    try:
+        accounts = await api_client.list_ad_accounts(client_id=card.client_id)
     except CoreUnavailable:
         await message.answer(_UNAVAILABLE)
         await callback.answer()
@@ -135,8 +180,9 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
         return
 
     if len(usable) == 1:
-        # Один кабинет — выбирать не из чего, запускаем сразу.
-        await _launch_and_report(message, brief_id, usable[0].id)
+        # Один кабинет — выбирать не из чего, но карточка подтверждения делает
+        # его видимым, прежде чем что-либо уедет в ядро.
+        await _show_launch_confirmation(message, card, usable[0])
     else:
         await message.answer(
             _ASK_CABINET,
@@ -152,11 +198,59 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("adacc:nocre:"))
 async def picked_cabinet_for_launch(callback: CallbackQuery) -> None:
-    """Оператор выбрал кабинет из нескольких — запускаем в нём."""
+    """Оператор выбрал кабинет из нескольких — показываем карточку подтверждения.
+
+    Список перезапрашивается для клиента ЭТОГО брифа (`card.client_id`), а не
+    всего пула (ревью операторского опыта §2.5, выравнивание с
+    `bot/handlers/creative.py:picked_cabinet` и с самим `launch_without_creative`
+    выше) — иначе по старому или повторно нажатому колбэку в карточку можно
+    вытащить кабинет чужого клиента: денег это не стоит (ядро всё равно
+    отклонит запуск), но карточка соврёт про привязку.
+    """
     parts = (callback.data or "").split(":")
     brief_id, ad_account_id = int(parts[2]), int(parts[3])
     if isinstance(callback.message, Message):
+        try:
+            card = await api_client.get_brief(brief_id)
+        except BriefNotFound:
+            await callback.message.answer(_NOT_FOUND)
+            await callback.answer()
+            return
+        except CoreUnavailable:
+            await callback.message.answer(_UNAVAILABLE)
+            await callback.answer()
+            return
+        try:
+            accounts = await api_client.list_ad_accounts(client_id=card.client_id)
+        except CoreUnavailable:
+            await callback.message.answer(_UNAVAILABLE)
+            await callback.answer()
+            return
+        account = next((a for a in accounts if a.id == ad_account_id), None)
+        if account is None:
+            # Кабинет пропал из списка между показом клавиатуры и нажатием — редкая
+            # гонка; переспрашиваем, а не гадаем с заглушкой в карточке подтверждения.
+            await callback.message.answer(_ASK_CABINET)
+        else:
+            await _show_launch_confirmation(callback.message, card, account)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("nocre_confirm:"))
+async def confirm_launch_without_creative(callback: CallbackQuery) -> None:
+    """Оператор подтвердил карточку — только теперь запускаем кампанию без креатива."""
+    parts = (callback.data or "").split(":")
+    brief_id, ad_account_id = int(parts[1]), int(parts[2])
+    if isinstance(callback.message, Message):
         await _launch_and_report(callback.message, brief_id, ad_account_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "nocre_cancel")
+async def cancel_launch_without_creative(callback: CallbackQuery) -> None:
+    """Отменить запуск без креатива — в ядро ничего не уходит."""
+    if isinstance(callback.message, Message):
+        await callback.message.answer("Отменено.")
     await callback.answer()
 
 

@@ -67,6 +67,15 @@ class AdAccount(TenantMixin, Base):
     `advertiser_kind` — чью рекламу размещаем в кабинете: `owner` (владельца) или
     `third_party` (конечного рекламодателя, тогда заполнены `advertiser_*`).
     Признак информационный: маркировку (erid/ЕРИР) присваивает сама площадка.
+
+    `client_id` — привязка к клиенту (spec 2026-08-25 §1.1), необязательная.
+    `None` — «общий кабинет оператора», подходит любому клиенту (текущее
+    поведение, миграция 0013 добавляет колонку nullable без `server_default`,
+    так что все существующие строки остаются общими). Заполнено — кабинет
+    закреплён за клиентом и недоступен чужим брифам (`db/repositories.py::
+    list_ad_accounts_for_client`, `services/ad_accounts.py::
+    list_accounts_for_client`). Уникальность `(account_id, external_id)` не
+    трогаем: у одного клиента может быть несколько кабинетов.
     """
 
     __tablename__ = "ad_account"
@@ -94,6 +103,7 @@ class AdAccount(TenantMixin, Base):
     advertiser_kind: Mapped[str] = mapped_column(String(16), default="owner")
     advertiser_name: Mapped[str | None] = mapped_column(String(255), default=None)
     advertiser_inn: Mapped[str | None] = mapped_column(String(16), default=None)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("client.id"), index=True, default=None)
     status: Mapped[str] = mapped_column(String(16), default="active")
     health: Mapped[str] = mapped_column(String(16), default="unknown")
     health_checked_at: Mapped[datetime | None] = mapped_column(

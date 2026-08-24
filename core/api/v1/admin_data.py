@@ -16,6 +16,7 @@ from db.repositories import (
     count_campaigns,
     count_clients,
     get_client,
+    list_ad_accounts,
     list_campaigns,
     list_client_briefs,
     list_clients,
@@ -112,6 +113,11 @@ class CampaignRow(BaseModel):
     brief_id: int
     client_id: int | None
     client_name: str | None
+    # Кабинет, которым оплачена кампания (spec 2026-08-25 §3): без этого поля
+    # найти его можно было только запросом в базу задним числом. `None` — старые
+    # кампании, заведённые до появления `AdAccount` (миграция 0010).
+    ad_account_title: str | None
+    ad_account_external_id: str | None
     status: str
     objective: str
     created_at: datetime
@@ -327,9 +333,14 @@ async def send_invite(
 
 @router.get("/campaigns")
 async def campaigns(session: Annotated[AsyncSession, Depends(get_session)]) -> CampaignsOut:
-    """Список кампаний (клиент, статус, цель, дата)."""
+    """Список кампаний (клиент, кабинет-плательщик, статус, цель, дата)."""
     rows = await list_campaigns(session, DEFAULT_ACCOUNT_ID)
     names = {c.id: c.full_name for c in await list_clients(session, DEFAULT_ACCOUNT_ID)}
+    # `include_archived=True`: кабинет могли удалить уже после запуска кампании —
+    # история не должна из-за этого терять кабинет-плательщика.
+    ad_accounts = {
+        a.id: a for a in await list_ad_accounts(session, DEFAULT_ACCOUNT_ID, include_archived=True)
+    }
     return CampaignsOut(
         items=[
             CampaignRow(
@@ -337,6 +348,14 @@ async def campaigns(session: Annotated[AsyncSession, Depends(get_session)]) -> C
                 brief_id=c.brief_id,
                 client_id=c.client_id,
                 client_name=names.get(c.client_id) if c.client_id is not None else None,
+                ad_account_title=(
+                    ad_accounts[c.ad_account_id].title if c.ad_account_id in ad_accounts else None
+                ),
+                ad_account_external_id=(
+                    ad_accounts[c.ad_account_id].external_id
+                    if c.ad_account_id in ad_accounts
+                    else None
+                ),
                 status=c.status,
                 objective=c.objective,
                 created_at=c.created_at,

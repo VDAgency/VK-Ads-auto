@@ -16,7 +16,7 @@ from config.settings import Settings, get_settings
 from core.app import create_app
 from cryptography.fernet import Fernet
 from db.base import Base
-from db.models import Account
+from db.models import Account, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
@@ -67,6 +67,8 @@ async def _with_api(scenario: Callable[[AsyncClient], Awaitable[T]], *, authed: 
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:
         session.add(Account(id=1, name="default"))
+        session.add(Client(id=100, account_id=1, full_name="Клиент 1"))
+        session.add(Client(id=200, account_id=1, full_name="Клиент 2"))
         await session.commit()
 
     async def _override() -> Any:
@@ -249,6 +251,105 @@ def test_delete_removes_from_list() -> None:
 def test_delete_missing_returns_404() -> None:
     async def scenario(client: AsyncClient) -> None:
         assert (await client.delete("/api/v1/ad-accounts/999")).status_code == 404
+
+    asyncio.run(_with_api(scenario))
+
+
+# --- привязка к клиенту (spec 2026-08-25 §1.1) --------------------------------
+
+
+def test_post_without_client_is_common() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts", json=_body())
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["client_id"] is None
+        assert data["client_name"] is None
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_with_client_binds_and_names_it() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts", json=_body({"client_id": 100}))
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["client_id"] == 100
+        assert data["client_name"] == "Клиент 1"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_unknown_client_returns_422() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts", json=_body({"client_id": 999}))
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "client_not_found"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_list_with_client_id_narrows_to_common_and_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario(client: AsyncClient) -> None:
+        await client.post("/api/v1/ad-accounts", json=_body())  # общий
+
+        async def other_identity(token: str, **_: object) -> VkIdentity:
+            return VkIdentity("222", "b", "Клиентский", "active")
+
+        # Второй кабинет — с другим external_id, чтобы не словить duplicate_account.
+        monkeypatch.setattr(ad_accounts, "fetch_identity", other_identity)
+        bound = await client.post(
+            "/api/v1/ad-accounts", json=_body({"client_id": 100, "token": "another-token"})
+        )
+        assert bound.status_code == 201, bound.text
+
+        for_owner = await client.get("/api/v1/ad-accounts", params={"client_id": 100})
+        assert {a["external_id"] for a in for_owner.json()["items"]} == {"10000001", "222"}
+
+        for_other = await client.get("/api/v1/ad-accounts", params={"client_id": 200})
+        assert {a["external_id"] for a in for_other.json()["items"]} == {"10000001"}
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_patch_client_binds_existing_account() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        created = await client.post("/api/v1/ad-accounts", json=_body())
+        account_id = created.json()["id"]
+
+        resp = await client.patch(
+            f"/api/v1/ad-accounts/{account_id}/client", json={"client_id": 100}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["client_id"] == 100
+        assert resp.json()["client_name"] == "Клиент 1"
+
+        freed = await client.patch(
+            f"/api/v1/ad-accounts/{account_id}/client", json={"client_id": None}
+        )
+        assert freed.json()["client_id"] is None
+        assert freed.json()["client_name"] is None
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_patch_client_missing_account_returns_404() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.patch("/api/v1/ad-accounts/999/client", json={"client_id": 100})
+        assert resp.status_code == 404
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_patch_client_unknown_client_returns_422() -> None:
+    async def scenario(client: AsyncClient) -> None:
+        created = await client.post("/api/v1/ad-accounts", json=_body())
+        account_id = created.json()["id"]
+        resp = await client.patch(
+            f"/api/v1/ad-accounts/{account_id}/client", json={"client_id": 999}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "client_not_found"
 
     asyncio.run(_with_api(scenario))
 

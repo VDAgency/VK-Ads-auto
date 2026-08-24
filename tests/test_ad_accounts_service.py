@@ -15,7 +15,7 @@ import services.ad_accounts as ad_accounts
 from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
-from db.models import Account, AdAccount
+from db.models import Account, AdAccount, Client
 from db.repositories import get_ad_account
 from pydantic import SecretStr
 from services.ad_accounts import (
@@ -24,15 +24,18 @@ from services.ad_accounts import (
     HEALTH_HEALTHY,
     HEALTH_UNAUTHORIZED,
     AccountNotFoundError,
+    ClientNotFoundError,
     DuplicateAccountError,
     TokenUnavailableError,
     add_account,
     check_health,
     delete_account,
     list_accounts,
+    list_accounts_for_client,
     mark_unauthorized,
     resolve_token,
     seed_from_env,
+    set_account_client,
 )
 from services.secret_box import NotConfiguredError
 from services.vk_identity import InvalidTokenError, VkIdentity, VkUnreachableError
@@ -71,6 +74,8 @@ async def _with_db(scenario: Callable[[AsyncSession], Awaitable[T]]) -> T:
     async with maker() as session:
         session.add(Account(id=1, name="tenant-one"))
         session.add(Account(id=2, name="tenant-two"))
+        session.add(Client(id=100, account_id=1, full_name="Клиент 1"))
+        session.add(Client(id=101, account_id=1, full_name=None))
         await session.commit()
         result = await scenario(session)
     await engine.dispose()
@@ -469,6 +474,135 @@ def test_delete_missing_account_raises() -> None:
     async def scenario(session: AsyncSession) -> None:
         with pytest.raises(AccountNotFoundError):
             await delete_account(session, 1, 999)
+
+    asyncio.run(_with_db(scenario))
+
+
+# --- привязка к клиенту (spec 2026-08-25 §1.1) --------------------------------
+
+
+def test_new_account_is_common_by_default() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        view = await add_account(session, 1, TOKEN, settings=_settings())
+        assert view.client_id is None
+        assert view.client_name is None
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_add_account_with_client_binds_and_names_it() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        view = await add_account(session, 1, TOKEN, client_id=100, settings=_settings())
+        assert view.client_id == 100
+        assert view.client_name == "Клиент 1"
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_add_account_rejects_client_from_another_tenant() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(ClientNotFoundError):
+            await add_account(session, 2, TOKEN, client_id=100, settings=_settings())
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_add_account_rejects_client_without_writing_row() -> None:
+    """Отказ по клиенту не должен оставить в базе кабинет — как и отказ VK."""
+
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(ClientNotFoundError):
+            await add_account(session, 1, TOKEN, client_id=999, settings=_settings())
+        assert await list_accounts(session, 1, refresh_stale=False) == []
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_client_with_blank_full_name_shows_as_blank() -> None:
+    """`Client.full_name=None` остаётся `None` — заглушку придумывает интерфейс."""
+
+    async def scenario(session: AsyncSession) -> None:
+        view = await add_account(session, 1, TOKEN, client_id=101, settings=_settings())
+        assert view.client_name is None
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_account_client_updates_binding() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+        view = await add_account(session, 1, TOKEN, settings=cfg)
+        bound = await set_account_client(session, 1, view.id, 100, settings=cfg)
+        assert bound.client_id == 100
+        assert bound.client_name == "Клиент 1"
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_account_client_to_none_frees_it() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+        view = await add_account(session, 1, TOKEN, client_id=100, settings=cfg)
+        freed = await set_account_client(session, 1, view.id, None, settings=cfg)
+        assert freed.client_id is None
+        assert freed.client_name is None
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_account_client_rejects_unknown_client() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+        view = await add_account(session, 1, TOKEN, settings=cfg)
+        with pytest.raises(ClientNotFoundError):
+            await set_account_client(session, 1, view.id, 999, settings=cfg)
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_set_account_client_missing_account_raises() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(AccountNotFoundError):
+            await set_account_client(session, 1, 999, 100, settings=_settings())
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_list_accounts_for_client_reflects_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+
+        async def identity_a(token: str, **_: object) -> VkIdentity:
+            return VkIdentity("111", "a", "Общий", "active")
+
+        monkeypatch.setattr(ad_accounts, "fetch_identity", identity_a)
+        common = await add_account(session, 1, TOKEN, settings=cfg)
+
+        async def identity_b(token: str, **_: object) -> VkIdentity:
+            return VkIdentity("222", "b", "Клиентский", "active")
+
+        monkeypatch.setattr(ad_accounts, "fetch_identity", identity_b)
+        bound = await add_account(session, 1, "another-token", client_id=100, settings=cfg)
+
+        for_owner = {
+            v.external_id for v in await list_accounts_for_client(session, 1, 100, settings=cfg)
+        }
+        assert for_owner == {common.external_id, bound.external_id}
+
+        for_other = {
+            v.external_id for v in await list_accounts_for_client(session, 1, 999, settings=cfg)
+        }
+        assert for_other == {common.external_id}
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_view_never_exposes_token_alongside_client_fields() -> None:
+    """Расширение представления клиентскими полями не задевает главный инвариант."""
+
+    async def scenario(session: AsyncSession) -> None:
+        view = await add_account(session, 1, TOKEN, client_id=100, settings=_settings())
+        assert TOKEN not in repr(view)
 
     asyncio.run(_with_db(scenario))
 

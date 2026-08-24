@@ -14,17 +14,20 @@ from datetime import datetime
 from typing import Annotated
 
 from db.session import get_session
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from services.ad_accounts import (
     ADVERTISER_OWNER,
     AccountNotFoundError,
     AdAccountView,
+    ClientNotFoundError,
     DuplicateAccountError,
     add_account,
     check_health,
     delete_account,
     list_accounts,
+    list_accounts_for_client,
+    set_account_client,
 )
 from services.secret_box import NotConfiguredError
 from services.vk_identity import InvalidTokenError, VkUnreachableError
@@ -47,6 +50,8 @@ class AdAccountOut(BaseModel):
     advertiser_kind: str
     advertiser_name: str | None
     advertiser_inn: str | None
+    client_id: int | None
+    client_name: str | None
     status: str
     health: str
     health_checked_at: datetime | None
@@ -68,6 +73,13 @@ class AdAccountIn(BaseModel):
     advertiser_kind: str = ADVERTISER_OWNER
     advertiser_name: str | None = Field(default=None, max_length=255)
     advertiser_inn: str | None = Field(default=None, max_length=16)
+    client_id: int | None = None
+
+
+class AdAccountClientIn(BaseModel):
+    """Новая привязка кабинета к клиенту. `client_id=None` делает кабинет снова общим."""
+
+    client_id: int | None = None
 
 
 def to_out(view: AdAccountView) -> AdAccountOut:
@@ -81,6 +93,8 @@ def to_out(view: AdAccountView) -> AdAccountOut:
         advertiser_kind=view.advertiser_kind,
         advertiser_name=view.advertiser_name,
         advertiser_inn=view.advertiser_inn,
+        client_id=view.client_id,
+        client_name=view.client_name,
         status=view.status,
         health=view.health,
         health_checked_at=view.health_checked_at,
@@ -90,9 +104,18 @@ def to_out(view: AdAccountView) -> AdAccountOut:
     )
 
 
-async def list_ad_accounts_response(session: AsyncSession) -> AdAccountsOut:
-    """Список кабинетов (устаревшие health-check освежаются по пути)."""
-    views = await list_accounts(session, DEFAULT_ACCOUNT_ID)
+async def list_ad_accounts_response(
+    session: AsyncSession, client_id: int | None = None
+) -> AdAccountsOut:
+    """Список кабинетов (устаревшие health-check освежаются по пути).
+
+    `client_id` сужает список до кабинетов, пригодных этому клиенту (Т2/Т3):
+    общие плюс закреплённые за ним.
+    """
+    if client_id is None:
+        views = await list_accounts(session, DEFAULT_ACCOUNT_ID)
+    else:
+        views = await list_accounts_for_client(session, DEFAULT_ACCOUNT_ID, client_id)
     await session.commit()
     return AdAccountsOut(items=[to_out(v) for v in views])
 
@@ -101,8 +124,9 @@ async def create_ad_account_response(session: AsyncSession, payload: AdAccountIn
     """Добавить кабинет: токен проверяется у VK ДО записи в базу.
 
     Коды ответов разведены по причинам, чтобы оператор понимал, что делать:
-    400 — токен не годится, 409 — кабинет уже добавлен, 503 — VK недоступен
-    (про токен ничего не известно, стоит повторить), 500 — не настроен ключ.
+    400 — токен не годится, 409 — кабинет уже добавлен, 422 — указанного
+    клиента нет у тенанта, 503 — VK недоступен (про токен ничего не известно,
+    стоит повторить), 500 — не настроен ключ.
     """
     try:
         view = await add_account(
@@ -114,6 +138,7 @@ async def create_ad_account_response(session: AsyncSession, payload: AdAccountIn
             advertiser_kind=payload.advertiser_kind,
             advertiser_name=payload.advertiser_name,
             advertiser_inn=payload.advertiser_inn,
+            client_id=payload.client_id,
         )
     except InvalidTokenError:
         raise HTTPException(status_code=400, detail="invalid_token") from None
@@ -123,6 +148,24 @@ async def create_ad_account_response(session: AsyncSession, payload: AdAccountIn
         raise HTTPException(status_code=503, detail="vk_unreachable") from None
     except NotConfiguredError:
         raise HTTPException(status_code=500, detail="encryption_key_missing") from None
+    except ClientNotFoundError:
+        raise HTTPException(status_code=422, detail="client_not_found") from None
+    await session.commit()
+    return to_out(view)
+
+
+async def set_ad_account_client_response(
+    session: AsyncSession, ad_account_id: int, payload: AdAccountClientIn
+) -> AdAccountOut:
+    """Привязать кабинет к клиенту, переназначить или снять привязку (`client_id=None`)."""
+    try:
+        view = await set_account_client(
+            session, DEFAULT_ACCOUNT_ID, ad_account_id, payload.client_id
+        )
+    except AccountNotFoundError:
+        raise HTTPException(status_code=404, detail="not_found") from None
+    except ClientNotFoundError:
+        raise HTTPException(status_code=422, detail="client_not_found") from None
     await session.commit()
     return to_out(view)
 
@@ -149,9 +192,10 @@ async def delete_ad_account_response(session: AsyncSession, ad_account_id: int) 
 @router.get("")
 async def get_ad_accounts(
     session: Annotated[AsyncSession, Depends(get_session)],
+    client_id: Annotated[int | None, Query()] = None,
 ) -> AdAccountsOut:
-    """Список рекламных кабинетов оператора."""
-    return await list_ad_accounts_response(session)
+    """Список рекламных кабинетов оператора; `client_id` сужает до пригодных клиенту."""
+    return await list_ad_accounts_response(session, client_id)
 
 
 @router.post("", status_code=201)
@@ -170,6 +214,16 @@ async def post_ad_account_check(
 ) -> AdAccountOut:
     """Проверить, жив ли токен кабинета, прямо сейчас."""
     return await check_ad_account_response(session, ad_account_id)
+
+
+@router.patch("/{ad_account_id}/client")
+async def patch_ad_account_client(
+    ad_account_id: int,
+    payload: AdAccountClientIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AdAccountOut:
+    """Изменить привязку кабинета к клиенту (пусто в теле — снова общий)."""
+    return await set_ad_account_client_response(session, ad_account_id, payload)
 
 
 @router.delete("/{ad_account_id}", status_code=status.HTTP_204_NO_CONTENT)

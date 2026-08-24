@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 
 import httpx
 from config.settings import get_settings
+from services.admin_auth import generate_admin_session
 
 _TIMEOUT = httpx.Timeout(10.0)
 # Операции юзербота, которые реально ходят в Telegram: перебор точек на сервере
@@ -147,6 +148,12 @@ class BriefCard:
     # Распознанная площадка подписки — приходит из ядра готовой строкой.
     surface_title: str = ""
     surface_needs_creative: bool = True
+    # Числовой `Client.id` брифа (spec 2026-08-25 §Т3) — сузить список кабинетов
+    # до пригодных этому клиенту (`list_ad_accounts(client_id=...)`). `None` — у
+    # брифа нет привязанного клиента (не должно случаться в норме, сервис всегда
+    # привязывает клиента при приёме брифа, но карточка не должна падать, если
+    # вдруг случится).
+    client_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +233,11 @@ class AdAccountItem:
     health_error: str | None
     balance_rub: str | None
     is_usable: bool
+    # Привязка к клиенту (spec 2026-08-25 §1.1) — добавлена позже остальных
+    # полей и вынесена в хвост с дефолтом `None`, чтобы не ломать существующие
+    # прямые конструкторы `AdAccountItem(...)` в тестах хендлеров бота.
+    client_id: int | None = None
+    client_name: str | None = None
 
 
 class AdAccountRejected(RuntimeError):
@@ -289,6 +301,7 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         campaign_status=payload.get("campaign_status"),
         surface_title=str(payload.get("surface_title") or ""),
         surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
+        client_id=client.get("id"),
     )
 
 
@@ -348,6 +361,30 @@ def _creative_reject_reason(detail: Any) -> str:
     return "Креатив не принят. Проверьте файл и текст."
 
 
+def _cabinet_reject_reason(detail: str) -> str:
+    """Человекочитаемая причина отказа по 409-детали ядра: кабинет выбран, но не годится.
+
+    Три известных причины (spec 2026-08-25-cabinet-client-binding-design §1.2-1.3):
+    кабинет закреплён за другим клиентом, ИНН конечного рекламодателя кабинета не
+    совпал с ИНН брифа, либо токен кабинета сейчас недоступен (удалён/сменился ключ).
+    Незнакомая деталь — тот же текст, что был здесь единственным до сверки с брифом.
+    """
+    if detail == "ad_account_client_mismatch":
+        return (
+            "Этот кабинет закреплён за другим клиентом — деньги спишутся не с того "
+            "счёта. Выберите кабинет, закреплённый за клиентом брифа, либо общий."
+        )
+    if detail == "advertiser_mismatch":
+        return (
+            "Конечный рекламодатель кабинета не совпадает с клиентом брифа "
+            "(разошёлся ИНН). Выберите другой кабинет либо проверьте бриф."
+        )
+    return (
+        "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
+        "Выберите другой кабинет или добавьте его заново через /cabinets."
+    )
+
+
 async def upload_creative(
     brief_id: int,
     media_b64: str,
@@ -391,11 +428,11 @@ async def upload_creative(
             detail = response.json().get("detail")
         raise CreativeRejected(_creative_reject_reason(detail))
     if response.status_code == 409:
-        # Кабинет выбран, но токеном воспользоваться нельзя (удалён, сменился ключ).
-        raise CreativeRejected(
-            "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. "
-            "Выберите другой кабинет или добавьте его заново через /cabinets."
-        )
+        # Кабинет выбран, но не годится: токен недоступен либо не соответствует брифу.
+        detail_409 = ""
+        with contextlib.suppress(ValueError):
+            detail_409 = str(response.json().get("detail", ""))
+        raise CreativeRejected(_cabinet_reject_reason(detail_409))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()
@@ -414,7 +451,9 @@ async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> Creat
     `bot/handlers/brief_card.py`); без него ядро пробует кабинет по умолчанию.
 
     404 → `BriefNotFound`; 422 → `CreativeRejected`; 409 → `CabinetChoiceRequired`
-    (ядро не смогло само выбрать кабинет); сеть/5xx → `CoreUnavailable`.
+    (ядро не смогло само выбрать кабинет — кабинетов нет либо их несколько) либо
+    `CreativeRejected` (кабинет выбран, но не годится — токен, привязка к клиенту
+    или ИНН конечного рекламодателя); сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
     try:
@@ -433,7 +472,9 @@ async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> Creat
         detail = ""
         with contextlib.suppress(ValueError):
             detail = str(response.json().get("detail", ""))
-        raise CabinetChoiceRequired(detail)
+        if detail in ("no_ad_account", "ambiguous_ad_account"):
+            raise CabinetChoiceRequired(detail)
+        raise CreativeRejected(_cabinet_reject_reason(detail))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     data = response.json()
@@ -824,6 +865,8 @@ def _to_ad_account(payload: dict[str, Any]) -> AdAccountItem:
         advertiser_kind=str(payload.get("advertiser_kind", "owner")),
         advertiser_name=payload.get("advertiser_name"),
         advertiser_inn=payload.get("advertiser_inn"),
+        client_id=payload.get("client_id"),
+        client_name=payload.get("client_name"),
         status=str(payload.get("status", "active")),
         health=str(payload.get("health", "unknown")),
         health_checked_at=payload.get("health_checked_at"),
@@ -833,9 +876,15 @@ def _to_ad_account(payload: dict[str, Any]) -> AdAccountItem:
     )
 
 
-async def list_ad_accounts() -> list[AdAccountItem]:
-    """`GET /ad-accounts`: рекламные кабинеты оператора (без токенов)."""
-    payload = await _get("/ad-accounts")
+async def list_ad_accounts(client_id: int | None = None) -> list[AdAccountItem]:
+    """`GET /ad-accounts`: рекламные кабинеты оператора (без токенов).
+
+    `client_id` сужает список до кабинетов, пригодных этому клиенту (Т3):
+    общие (без привязки) плюс закреплённые за ним — та же выборка, что ядро
+    будет сверять при запуске.
+    """
+    params = {"client_id": client_id} if client_id is not None else None
+    payload = await _get("/ad-accounts", params)
     return [_to_ad_account(item) for item in payload.get("items", [])]
 
 
@@ -847,6 +896,7 @@ _AD_ACCOUNT_ERRORS = {
         "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
         "без него токен негде хранить. Нужна помощь администратора."
     ),
+    "client_not_found": "Такого клиента нет — обновите список и попробуйте снова.",
 }
 
 
@@ -857,11 +907,14 @@ async def add_ad_account(
     advertiser_kind: str = "owner",
     advertiser_name: str | None = None,
     advertiser_inn: str | None = None,
+    client_id: int | None = None,
 ) -> AdAccountItem:
     """`POST /ad-accounts`: добавить кабинет по токену.
 
-    Токен уходит только сюда и обратно не возвращается. Понятные отказы ядра
-    (битый токен, дубль, VK лежит) превращаются в `AdAccountRejected`.
+    Токен уходит только сюда и обратно не возвращается. `client_id` — привязка
+    к клиенту (необязательная, spec 2026-08-25 §1.1). Понятные отказы ядра
+    (битый токен, дубль, неизвестный клиент, VK лежит) превращаются в
+    `AdAccountRejected`.
     """
     url = f"{_base_url()}/api/v1/ad-accounts"
     payload: dict[str, Any] = {
@@ -870,6 +923,7 @@ async def add_ad_account(
         "advertiser_kind": advertiser_kind,
         "advertiser_name": advertiser_name,
         "advertiser_inn": advertiser_inn,
+        "client_id": client_id,
     }
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -882,6 +936,31 @@ async def add_ad_account(
             detail = str(response.json().get("detail", ""))
         raise AdAccountRejected(
             _AD_ACCOUNT_ERRORS.get(detail, "Не получилось добавить кабинет, проверьте токен.")
+        )
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    return _to_ad_account(response.json())
+
+
+async def set_ad_account_client(ad_account_id: int, client_id: int | None) -> AdAccountItem:
+    """`PATCH /ad-accounts/{id}/client`: привязать кабинет к клиенту или снять привязку.
+
+    `client_id=None` делает кабинет снова общим.
+    """
+    url = f"{_base_url()}/api/v1/ad-accounts/{ad_account_id}/client"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.patch(url, json={"client_id": client_id})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise AdAccountNotFound(str(ad_account_id))
+    if response.status_code == 422:
+        detail = ""
+        with contextlib.suppress(ValueError):
+            detail = str(response.json().get("detail", ""))
+        raise AdAccountRejected(
+            _AD_ACCOUNT_ERRORS.get(detail, "Не получилось изменить привязку кабинета.")
         )
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
@@ -1018,3 +1097,59 @@ async def delete_community_token(reference: str) -> None:
         raise CommunityTokenNotFound(reference)
     if response.status_code >= 400:
         raise CoreUnavailable(f"core {response.status_code}")
+
+
+# --- клиенты: список для привязки кабинета (spec 2026-08-25 §1.1) ------------
+
+
+@dataclass(frozen=True, slots=True)
+class ClientItem:
+    """Клиент оператора для выбора при привязке кабинета (зеркало `ClientRow` ядра)."""
+
+    id: int
+    full_name: str | None
+    email: str | None
+    phone: str | None
+    telegram: str | None
+    brief_count: int
+
+
+def _admin_auth_cookies(operator_telegram_id: int) -> dict[str, str]:
+    """Подписать одноразовый admin-session токен для служебного вызова `/admin/*`.
+
+    `GET /admin/clients` защищён `require_admin` (веб-сессия по cookie) — у бота
+    своей веб-сессии нет, но у него есть секрет, общий с ядром. Тот же приём, что
+    `bot/handlers/admin.py:generate_admin_link` уже использует, чтобы выпустить
+    оператору magic-link входа в веб-админку: чистая HMAC-подпись, сеть не
+    участвует, секрет наружу не уходит. `operator_telegram_id` — тот же Telegram
+    ID, которым `OperatorOnly` уже опознаёт оператора.
+    """
+    token = generate_admin_session(
+        operator_telegram_id, get_settings().secret_key.get_secret_value()
+    )
+    return {"admin_session": token}
+
+
+async def list_clients(operator_telegram_id: int) -> list[ClientItem]:
+    """`GET /admin/clients`: клиенты оператора — для выбора при привязке кабинета."""
+    url = f"{_base_url()}/api/v1/admin/clients"
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, cookies=_admin_auth_cookies(operator_telegram_id)
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    payload: dict[str, Any] = response.json()
+    return [
+        ClientItem(
+            id=int(item["id"]),
+            full_name=item.get("full_name"),
+            email=item.get("email"),
+            phone=item.get("phone"),
+            telegram=item.get("telegram"),
+            brief_count=int(item.get("brief_count", 0)),
+        )
+        for item in payload.get("items", [])
+    ]

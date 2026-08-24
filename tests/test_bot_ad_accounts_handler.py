@@ -12,7 +12,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from bot.api_client import AdAccountItem, AdAccountNotFound, AdAccountRejected, CoreUnavailable
+from bot.api_client import (
+    AdAccountItem,
+    AdAccountNotFound,
+    AdAccountRejected,
+    ClientItem,
+    CoreUnavailable,
+)
 from bot.handlers import ad_accounts
 from bot.states import AddAdAccount
 
@@ -94,11 +100,31 @@ def _item(**over: Any) -> AdAccountItem:
     return AdAccountItem(**base)
 
 
+def _client(**over: Any) -> ClientItem:
+    base: dict[str, Any] = {
+        "id": 1,
+        "full_name": "Клиент",
+        "email": None,
+        "phone": None,
+        "telegram": None,
+        "brief_count": 0,
+    }
+    base.update(over)
+    return ClientItem(**base)
+
+
 def _stub_list(monkeypatch: pytest.MonkeyPatch, items: list[AdAccountItem]) -> None:
     async def fake() -> list[AdAccountItem]:
         return items
 
     monkeypatch.setattr("bot.api_client.list_ad_accounts", fake)
+
+
+def _stub_clients(monkeypatch: pytest.MonkeyPatch, items: list[ClientItem]) -> None:
+    async def fake(operator_telegram_id: int) -> list[ClientItem]:
+        return items
+
+    monkeypatch.setattr("bot.api_client.list_clients", fake)
 
 
 # --- список -------------------------------------------------------------------
@@ -122,6 +148,33 @@ def test_list_shows_health_and_masked_token(monkeypatch: pytest.MonkeyPatch) -> 
     assert "…0000" in text
     assert "✅ жив" in text
     assert TOKEN not in text
+
+
+def test_list_shows_general_cabinet_mark_when_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кабинет без привязки — общий, это должно быть видно, а не молчать (spec §1.4)."""
+    _stub_list(monkeypatch, [_item(client_id=None, client_name=None)])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    assert "доступен любому клиенту" in message.answers[0].lower()
+
+
+def test_list_shows_bound_client_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_list(monkeypatch, [_item(client_id=7, client_name="Иванов Иван")])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    text = message.answers[0]
+    assert "закреплён" in text.lower()
+    assert "Иванов Иван" in text
+
+
+def test_list_shows_bound_client_without_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`Client.full_name` необязательное — привязка есть, а имени может не быть."""
+    _stub_list(monkeypatch, [_item(client_id=7, client_name=None)])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    text = message.answers[0]
+    assert "закреплён" in text.lower()
+    assert "None" not in text
 
 
 def test_list_shows_third_party_advertiser(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,11 +239,15 @@ def test_add_flow_asks_kind_first() -> None:
     assert "Чью рекламу" in callback.message.answers[0]
 
 
-def test_owner_kind_skips_advertiser_question() -> None:
+def test_owner_kind_skips_advertiser_question_and_asks_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Реклама владельца — сразу к выбору клиента, минуя вопрос о рекламодателе."""
+    _stub_clients(monkeypatch, [])
     callback, state = _FakeCallback("adacckind:owner"), _FakeState()
     asyncio.run(ad_accounts.got_kind(callback, state))
-    assert state.state == AddAdAccount.entering_token
-    assert "access_token" in callback.message.answers[0]
+    assert state.state == AddAdAccount.choosing_client
+    assert "клиент" in callback.message.answers[0].lower()
 
 
 def test_third_party_kind_asks_advertiser() -> None:
@@ -199,19 +256,80 @@ def test_third_party_kind_asks_advertiser() -> None:
     assert state.state == AddAdAccount.entering_advertiser
 
 
-def test_advertiser_line_splits_name_and_inn() -> None:
+def test_advertiser_line_splits_name_and_inn(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_clients(monkeypatch, [])
     message, state = _FakeMessage("ООО «Ромашка», 7701234567"), _FakeState()
     asyncio.run(ad_accounts.got_advertiser(message, state))
     assert state.data["advertiser_name"] == "ООО «Ромашка»"
     assert state.data["advertiser_inn"] == "7701234567"
-    assert state.state == AddAdAccount.entering_token
+    assert state.state == AddAdAccount.choosing_client
 
 
-def test_advertiser_line_without_inn_is_kept_as_name() -> None:
+def test_advertiser_line_without_inn_is_kept_as_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_clients(monkeypatch, [])
     message, state = _FakeMessage("ИП Иванов"), _FakeState()
     asyncio.run(ad_accounts.got_advertiser(message, state))
     assert state.data["advertiser_name"] == "ИП Иванов"
     assert state.data["advertiser_inn"] is None
+    assert state.state == AddAdAccount.choosing_client
+
+
+# --- выбор клиента (привязка при добавлении) -----------------------------------
+
+
+def test_client_choice_offers_clients_and_general_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_clients(
+        monkeypatch,
+        [_client(id=7, full_name="Иван Петров", brief_count=2)],
+    )
+    callback, state = _FakeCallback("adacckind:owner"), _FakeState()
+    asyncio.run(ad_accounts.got_kind(callback, state))
+    keyboard = callback.message.answer_kwargs[0]["reply_markup"]
+    datas = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "addclient:none" in datas
+    assert "addclient:7" in datas
+
+
+def test_client_choice_unavailable_core_bails_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def broken(operator_telegram_id: int) -> list[ClientItem]:
+        raise CoreUnavailable("down")
+
+    monkeypatch.setattr("bot.api_client.list_clients", broken)
+    callback, state = _FakeCallback("adacckind:owner"), _FakeState()
+    asyncio.run(ad_accounts.got_kind(callback, state))
+    assert "недоступен" in callback.message.answers[0]
+    assert state.state is None
+
+
+def test_picking_general_moves_to_token_with_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оператор может оставить кабинет общим — доступным любому клиенту."""
+    callback, state = _FakeCallback("addclient:none"), _FakeState()
+    state.state = AddAdAccount.choosing_client
+    asyncio.run(ad_accounts.got_client(callback, state))
+    assert state.state == AddAdAccount.entering_token
+    assert state.data["client_id"] is None
+    assert "access_token" in callback.message.answers[0]
+
+
+def test_picking_a_client_stores_its_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оператор может закрепить кабинет за конкретным клиентом."""
+    callback, state = _FakeCallback("addclient:7"), _FakeState()
+    state.state = AddAdAccount.choosing_client
+    asyncio.run(ad_accounts.got_client(callback, state))
+    assert state.state == AddAdAccount.entering_token
+    assert state.data["client_id"] == 7
+
+
+def test_client_choice_pagination_shows_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    items = [_client(id=i, full_name=f"Клиент {i}") for i in range(1, 10)]
+    _stub_clients(monkeypatch, items)
+    callback, state = _FakeCallback("addclient:pg:1"), _FakeState()
+    state.state = AddAdAccount.choosing_client
+    asyncio.run(ad_accounts.got_client(callback, state))
+    assert state.state == AddAdAccount.choosing_client  # остаёмся на этом же шаге
+    keyboard = callback.message.answer_kwargs[-1]["reply_markup"]
+    datas = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "addclient:9" in datas
 
 
 def test_token_message_is_deleted_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,6 +406,116 @@ def test_empty_token_message_asks_again(monkeypatch: pytest.MonkeyPatch) -> None
     message, state = _FakeMessage("   "), _FakeState()
     asyncio.run(ad_accounts.got_token(message, state))
     assert any("Пустое сообщение" in answer for answer in message.answers)
+
+
+def test_token_submission_binds_the_chosen_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_add(token: str, **kwargs: Any) -> AdAccountItem:
+        captured.update(kwargs)
+        return _item(client_id=7, client_name="Иван Петров")
+
+    monkeypatch.setattr("bot.api_client.add_ad_account", fake_add)
+    _stub_list(monkeypatch, [_item()])
+    message, state = _FakeMessage(TOKEN), _FakeState()
+    state.data = {"client_id": 7}
+    asyncio.run(ad_accounts.got_token(message, state))
+    assert captured["client_id"] == 7
+    assert any("Иван Петров" in answer for answer in message.answers)
+
+
+def test_token_submission_without_client_choice_stays_general(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_add(token: str, **kwargs: Any) -> AdAccountItem:
+        captured.update(kwargs)
+        return _item(client_id=None, client_name=None)
+
+    monkeypatch.setattr("bot.api_client.add_ad_account", fake_add)
+    _stub_list(monkeypatch, [_item()])
+    message, state = _FakeMessage(TOKEN), _FakeState()
+    state.data = {"client_id": None}
+    asyncio.run(ad_accounts.got_token(message, state))
+    assert captured["client_id"] is None
+
+
+# --- перепривязка существующего кабинета ---------------------------------------
+
+
+def test_rebind_start_lists_cabinets_to_pick_from(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_list(monkeypatch, [_item(id=3, title="Кабинет А")])
+    callback = _FakeCallback("adacc:client")
+    asyncio.run(ad_accounts.start_rebind(callback))
+    keyboard = callback.message.answer_kwargs[0]["reply_markup"]
+    datas = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "adacc:clientpick:3" in datas
+
+
+def test_rebind_pick_cabinet_then_asks_for_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_clients(
+        monkeypatch,
+        [_client(id=9, full_name="Мария", brief_count=1)],
+    )
+    callback = _FakeCallback("adacc:clientpick:3")
+    asyncio.run(ad_accounts.pick_client_for_rebind(callback))
+    keyboard = callback.message.answer_kwargs[0]["reply_markup"]
+    datas = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "adaccbind:3:none" in datas
+    assert "adaccbind:3:9" in datas
+
+
+def test_rebind_to_a_client_reaches_the_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оператор может закрепить уже заведённый кабинет за клиентом."""
+    captured: dict[str, Any] = {}
+
+    async def fake_set(account_id: int, client_id: int | None) -> AdAccountItem:
+        captured["account_id"] = account_id
+        captured["client_id"] = client_id
+        return _item(client_id=9, client_name="Мария")
+
+    monkeypatch.setattr("bot.api_client.set_ad_account_client", fake_set)
+    _stub_list(monkeypatch, [_item()])
+    callback = _FakeCallback("adaccbind:3:9")
+    asyncio.run(ad_accounts.rebind_client(callback))
+    assert captured == {"account_id": 3, "client_id": 9}
+    assert any("Мария" in answer for answer in callback.message.answers)
+
+
+def test_rebind_to_general_reaches_the_core_with_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оператор может снять привязку — снова сделать кабинет общим."""
+    captured: dict[str, Any] = {}
+
+    async def fake_set(account_id: int, client_id: int | None) -> AdAccountItem:
+        captured["client_id"] = client_id
+        return _item(client_id=None, client_name=None)
+
+    monkeypatch.setattr("bot.api_client.set_ad_account_client", fake_set)
+    _stub_list(monkeypatch, [_item()])
+    callback = _FakeCallback("adaccbind:3:none")
+    asyncio.run(ad_accounts.rebind_client(callback))
+    assert captured["client_id"] is None
+
+
+def test_rebind_pagination_shows_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    items = [_client(id=i, full_name=f"Клиент {i}") for i in range(1, 10)]
+    _stub_clients(monkeypatch, items)
+    callback = _FakeCallback("adaccbind:3:pg:1")
+    asyncio.run(ad_accounts.rebind_client(callback))
+    keyboard = callback.message.answer_kwargs[-1]["reply_markup"]
+    datas = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert "adaccbind:3:9" in datas
+
+
+def test_rebind_missing_cabinet_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_set(account_id: int, client_id: int | None) -> AdAccountItem:
+        raise AdAccountNotFound(str(account_id))
+
+    monkeypatch.setattr("bot.api_client.set_ad_account_client", fake_set)
+    callback = _FakeCallback("adaccbind:3:none")
+    asyncio.run(ad_accounts.rebind_client(callback))
+    assert any("удалён" in alert for alert in callback.alerts)
 
 
 # --- проверка и удаление ------------------------------------------------------

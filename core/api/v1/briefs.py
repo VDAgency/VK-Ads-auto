@@ -28,6 +28,8 @@ from services.creative_intake import (
     launch_without_creative,
 )
 from services.launch_service import (
+    AdAccountClientMismatchError,
+    AdvertiserMismatchError,
     BriefNotFoundError,
     SenlerNotConnectedError,
     UnsupportedGoalError,
@@ -70,12 +72,20 @@ _CABINET_LINK_TTL = 24 * 3600
 
 
 class BriefClientOut(BaseModel):
-    """Контакты клиента в карточке брифа (операторский просмотр)."""
+    """Контакты клиента в карточке брифа (операторский просмотр).
+
+    `id` — числовой `Client.id` брифа (spec 2026-08-25-cabinet-client-binding-design
+    §Т3): бот использует его, чтобы запросить у `GET /ad-accounts` кабинеты,
+    пригодные именно этому клиенту (`?client_id=`), а не весь пул. В хвосте, с
+    дефолтом `None`, — тот же приём, что `AdAccountOut.client_id` в Т1, чтобы не
+    задеть остальные конструкторы `BriefClientOut`.
+    """
 
     full_name: str | None
     email: str | None
     phone: str | None
     telegram: str | None
+    id: int | None = None
 
 
 class BriefFieldOut(BaseModel):
@@ -171,6 +181,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
             email=view.client_email,
             phone=view.client_phone,
             telegram=view.client_telegram,
+            id=view.client_id,
         ),
         fields=[BriefFieldOut(n=f.number, label=f.label, value=f.value) for f in view.fields],
         has_creative=view.has_creative,
@@ -273,6 +284,10 @@ async def launch_brief(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
@@ -320,6 +335,10 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
