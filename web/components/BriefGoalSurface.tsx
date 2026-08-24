@@ -6,6 +6,7 @@ import { readDraft } from "@/lib/briefDraft";
 import {
   BRIEF_GOAL_TABS,
   DEFAULT_GOAL_TAB,
+  isGoalTabEnabled,
   surfacesForTab,
   tabForSurfaceValue,
 } from "@/lib/briefGoals";
@@ -61,13 +62,13 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
     const draftValue = readDraft(variant).target_type;
     if (!draftValue) return;
     const tab = tabForSurfaceValue(draftValue);
-    if (!tab || !tab.enabled) return;
+    if (!tab || !isGoalTabEnabled(tab)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- см. комментарий выше
     setActiveGoal(tab.key);
   }, [variant]);
 
   function handleTabsKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const enabled = BRIEF_GOAL_TABS.filter((tab) => tab.enabled);
+    const enabled = BRIEF_GOAL_TABS.filter((tab) => isGoalTabEnabled(tab));
     const currentIndex = enabled.findIndex((tab) => tab.key === activeGoal);
     let nextIndex: number | null = null;
     if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % enabled.length;
@@ -103,6 +104,7 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
         >
           {BRIEF_GOAL_TABS.map((tab) => {
             const isActive = tab.key === activeGoal;
+            const tabEnabled = isGoalTabEnabled(tab);
             return (
               <button
                 key={tab.key}
@@ -114,13 +116,13 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
                 id={`goal-tab-${tab.key}`}
                 aria-selected={isActive}
                 aria-controls={`goal-panel-${tab.key}`}
-                tabIndex={tab.enabled ? (isActive ? 0 : -1) : undefined}
-                disabled={!tab.enabled}
+                tabIndex={tabEnabled ? (isActive ? 0 : -1) : undefined}
+                disabled={!tabEnabled}
                 className={isActive ? "bf-goal-tab is-active" : "bf-goal-tab"}
                 onClick={() => setActiveGoal(tab.key)}
               >
                 {tab.label}
-                {!tab.enabled ? <span className="bf-choice__soon">скоро</span> : null}
+                {!tabEnabled ? <span className="bf-choice__soon">скоро</span> : null}
               </button>
             );
           })}
