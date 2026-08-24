@@ -113,6 +113,45 @@ class SenlerNotConnectedError(Exception):
         self.community_id = community_id
 
 
+class AdAccountClientMismatchError(Exception):
+    """Кабинет закреплён за другим клиентом — этому брифу он недоступен.
+
+    Жёсткий отказ (spec 2026-08-25-cabinet-client-binding-design §1.2): деньги
+    списались бы с чужого бюджета, а реклама ушла бы от чужого имени. Общий
+    кабинет (`ad_account.client_id is None`) сюда не попадает — он подходит
+    любому брифу (обратная совместимость).
+    """
+
+    def __init__(
+        self, ad_account_id: int, ad_account_client_id: int, brief_client_id: int | None
+    ) -> None:
+        super().__init__(
+            f"ad account {ad_account_id} is bound to client {ad_account_client_id}, "
+            f"brief belongs to client {brief_client_id!r}"
+        )
+        self.ad_account_id = ad_account_id
+        self.ad_account_client_id = ad_account_client_id
+        self.brief_client_id = brief_client_id
+
+
+class AdvertiserMismatchError(Exception):
+    """ИНН конечного рекламодателя кабинета и брифа различаются.
+
+    Жёсткий отказ (spec §1.3): именно это просил не допускать заказчик —
+    «конечный рекламодатель должен соответствовать брифу». Срабатывает только
+    когда ИНН известен с обеих сторон; отсутствие ИНН — не признак ошибки.
+    """
+
+    def __init__(self, ad_account_id: int, ad_account_inn: str, brief_tax_id: str) -> None:
+        super().__init__(
+            f"ad account {ad_account_id} advertiser INN {ad_account_inn!r} "
+            f"!= brief tax_id {brief_tax_id!r}"
+        )
+        self.ad_account_id = ad_account_id
+        self.ad_account_inn = ad_account_inn
+        self.brief_tax_id = brief_tax_id
+
+
 class CampaignStopError(Exception):
     """Площадка не смогла остановить кампанию (сеть/недоступный канал)."""
 
@@ -218,6 +257,38 @@ def _validate_goal(goal: str | None) -> None:
     """
     if goal is not None and goal not in SUPPORTED_GOALS:
         raise UnsupportedGoalError(goal)
+
+
+def _digits_only(value: str) -> str:
+    """ИНН без пробелов и прочих разделителей — оператор мог ввести его как удобно."""
+    return re.sub(r"\D+", "", value)
+
+
+def _check_ad_account_matches_brief(
+    ad_account: AdAccountView, brief_client_id: int | None, brief_tax_id: str | None
+) -> None:
+    """Сверить выбранный кабинет с брифом (spec 2026-08-25 §1.2-1.3). Два жёстких правила:
+
+    1. у кабинета указан клиент, и он не совпадает с клиентом брифа — отказ
+       (`AdAccountClientMismatchError`), в том числе если у брифа клиента нет вовсе;
+    2. у кабинета и у брифа известен ИНН конечного рекламодателя, и они различаются
+       по цифрам — отказ (`AdvertiserMismatchError`).
+
+    Отсутствие данных — не повод отказывать: общий кабинет (`client_id is None`)
+    подходит любому брифу, а ИНН неизвестен хотя бы с одной стороны у большинства
+    брифов физлиц. Молчаливое сравнение по имени рекламодателя НЕ делаем — там
+    опечатки и сокращения, ложный отказ гарантирован.
+    """
+    if ad_account.client_id is not None and ad_account.client_id != brief_client_id:
+        raise AdAccountClientMismatchError(ad_account.id, ad_account.client_id, brief_client_id)
+
+    account_inn = ad_account.advertiser_inn
+    if not account_inn or not brief_tax_id:
+        return
+    account_digits = _digits_only(account_inn)
+    brief_digits = _digits_only(brief_tax_id)
+    if account_digits and brief_digits and account_digits != brief_digits:
+        raise AdvertiserMismatchError(ad_account.id, account_inn, brief_tax_id)
 
 
 def _is_unauthorized(exc: BaseException) -> bool:
@@ -452,9 +523,12 @@ async def launch_from_creative(
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
     (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
-    ИЛИ неподдержанная цель самого брифа) и ошибки выбора кабинета
+    ИЛИ неподдержанная цель самого брифа), ошибки выбора кабинета
     (`AccountNotFoundError`, `TokenUnavailableError`, `NoAdAccountError`,
-    `AmbiguousAdAccountError`).
+    `AmbiguousAdAccountError`) и сверки кабинета с брифом (`AdAccountClientMismatchError`,
+    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3) —
+    все они срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения
+    к площадке (см. `_check_ad_account_matches_brief`).
     """
     cfg = settings or get_settings()
     _validate_goal(goal)
@@ -467,6 +541,11 @@ async def launch_from_creative(
     ad_account, vk_token = await _resolve_ad_account(session, account_id, ad_account_id, cfg)
 
     parsed = parse_brief(brief.payload, BriefVariant(brief.variant))
+
+    # Сверка ДО любых побочных эффектов (Creative/Cabinet/кампания на площадке):
+    # чужой кабинет или несовпавший ИНН обязаны прервать запуск начисто (spec §1.2-1.3).
+    _check_ad_account_matches_brief(ad_account, brief.client_id, parsed.tax_id)
+
     try:
         spec = build_campaign_spec(parsed)
     except UnsupportedBriefGoalError as exc:

@@ -28,6 +28,8 @@ from services.creative_intake import (
     launch_without_creative,
 )
 from services.launch_service import (
+    AdAccountClientMismatchError,
+    AdvertiserMismatchError,
     BriefNotFoundError,
     SenlerNotConnectedError,
     UnsupportedGoalError,
@@ -273,6 +275,10 @@ async def launch_brief(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
@@ -320,6 +326,10 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
