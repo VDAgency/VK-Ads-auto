@@ -89,6 +89,20 @@ async def _delete_secret(message: Message) -> None:
         logger.debug("ad_accounts: message.delete() failed, continuing")
 
 
+def _client_binding_label(item: AdAccountItem) -> str:
+    """Кому доступен кабинет (spec 2026-08-25 §1.4): общий или закреплённый за клиентом.
+
+    Привязка (`client_id`) может стоять, а имя клиента (`Client.full_name`) — быть
+    пустым, поэтому пустую строку посреди сообщения не выводим, а честно говорим,
+    что имя не указано.
+    """
+    if item.client_id is None:
+        return "общий кабинет — доступен любому клиенту"
+    if item.client_name:
+        return f"закреплён за клиентом: {item.client_name}"
+    return "закреплён за клиентом (имя не указано)"
+
+
 def _account_line(item: AdAccountItem, index: int) -> str:
     """Одна карточка кабинета в списке."""
     health = _HEALTH_LABEL.get(item.health, item.health)
@@ -99,6 +113,7 @@ def _account_line(item: AdAccountItem, index: int) -> str:
     ]
     if item.health_error:
         lines.append(f"    {item.health_error}")
+    lines.append(f"    {_client_binding_label(item)}")
     if item.advertiser_kind == "third_party":
         advertiser = item.advertiser_name or "не указан"
         inn = f", ИНН {item.advertiser_inn}" if item.advertiser_inn else ""

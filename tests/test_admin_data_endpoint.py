@@ -11,12 +11,13 @@ import pytest
 from config.settings import Settings, get_settings
 from core.app import create_app
 from db.base import Base
-from db.models import Account, Brief, Campaign, Client
+from db.models import Account, AdAccount, Brief, Campaign, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from services.ad_accounts import AmbiguousAdAccountError, NoAdAccountError
 from services.admin_auth import generate_admin_session
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 T = TypeVar("T")
@@ -33,7 +34,12 @@ def _unconfigured_channels(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-async def _with_admin(scenario: Callable[[AsyncClient], Awaitable[T]], *, authed: bool = True) -> T:
+async def _with_admin(
+    scenario: Callable[[AsyncClient], Awaitable[T]],
+    *,
+    authed: bool = True,
+    extra_setup: Callable[[AsyncSession], Awaitable[None]] | None = None,
+) -> T:
     engine = create_async_engine(
         "sqlite+aiosqlite://",
         poolclass=StaticPool,
@@ -74,6 +80,8 @@ async def _with_admin(scenario: Callable[[AsyncClient], Awaitable[T]], *, authed
                 spec_json={},
             )
         )
+        if extra_setup is not None:
+            await extra_setup(session)
         await session.commit()
 
     async def _override() -> Any:
@@ -171,6 +179,50 @@ def test_campaigns_list() -> None:
     assert len(data["items"]) == 1
     assert data["items"][0]["status"] == "prepared"
     assert data["items"][0]["client_name"] == "Вячеслав"
+
+
+def test_campaigns_list_shows_funding_ad_account() -> None:
+    """Кампания несёт кабинет, которым запущена — без этого расследовать ошибку задним
+
+    числом можно только запросом в базу (spec 2026-08-25 §3)."""
+
+    async def extra_setup(session: AsyncSession) -> None:
+        session.add(
+            AdAccount(
+                id=1,
+                account_id=1,
+                title="Кабинет Долматова",
+                external_id="10000042",
+                token_tail="abcd",
+            )
+        )
+        await session.execute(update(Campaign).where(Campaign.id == 1).values(ad_account_id=1))
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/campaigns")
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario, extra_setup=extra_setup))
+    row = data["items"][0]
+    assert row["ad_account_title"] == "Кабинет Долматова"
+    assert row["ad_account_external_id"] == "10000042"
+
+
+def test_campaigns_list_without_ad_account_is_null() -> None:
+    """Старые кампании (до миграции 0010) без кабинета — поля пустые, не 500."""
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/campaigns")
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    row = data["items"][0]
+    assert row["ad_account_title"] is None
+    assert row["ad_account_external_id"] is None
 
 
 def test_admin_endpoints_require_session() -> None:

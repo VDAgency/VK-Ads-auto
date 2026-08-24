@@ -180,15 +180,24 @@ export function CampaignList() {
 
   return (
     <div className="adm-list">
-      {items.map((campaign) => (
-        <Row
-          key={campaign.id}
-          title={`Кампания №${campaign.id} · ${campaign.client_name || "—"}`}
-          subtitle={`бриф №${campaign.brief_id} · ${campaign.objective}`}
-          badge={STATUS_RU[campaign.status] ?? campaign.status}
-          badgeKind={campaign.status === "launched" ? "accent" : undefined}
-        />
-      ))}
+      {items.map((campaign) => {
+        // Кабинет, которым оплачена кампания (spec 2026-08-25 §3) — без него
+        // расследовать ошибочный запуск можно было только запросом в базу.
+        const cabinet = campaign.ad_account_title
+          ? `кабинет «${campaign.ad_account_title}»${
+              campaign.ad_account_external_id ? ` (id ${campaign.ad_account_external_id})` : ""
+            }`
+          : "кабинет не указан";
+        return (
+          <Row
+            key={campaign.id}
+            title={`Кампания №${campaign.id} · ${campaign.client_name || "—"}`}
+            subtitle={`бриф №${campaign.brief_id} · ${campaign.objective} · ${cabinet}`}
+            badge={STATUS_RU[campaign.status] ?? campaign.status}
+            badgeKind={campaign.status === "launched" ? "accent" : undefined}
+          />
+        );
+      })}
     </div>
   );
 }

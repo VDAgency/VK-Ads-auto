@@ -60,6 +60,9 @@ export type CampaignRow = {
   id: number;
   brief_id: number;
   client_name: string | null;
+  /** Кабинет, которым оплачена кампания — `null` у кампаний, заведённых до его появления. */
+  ad_account_title: string | null;
+  ad_account_external_id: string | null;
   status: string;
   objective: string;
 };

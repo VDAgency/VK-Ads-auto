@@ -124,6 +124,33 @@ def test_list_shows_health_and_masked_token(monkeypatch: pytest.MonkeyPatch) -> 
     assert TOKEN not in text
 
 
+def test_list_shows_general_cabinet_mark_when_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кабинет без привязки — общий, это должно быть видно, а не молчать (spec §1.4)."""
+    _stub_list(monkeypatch, [_item(client_id=None, client_name=None)])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    assert "общий кабинет" in message.answers[0].lower()
+
+
+def test_list_shows_bound_client_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_list(monkeypatch, [_item(client_id=7, client_name="Иванов Иван")])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    text = message.answers[0]
+    assert "закреплён" in text.lower()
+    assert "Иванов Иван" in text
+
+
+def test_list_shows_bound_client_without_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`Client.full_name` необязательное — привязка есть, а имени может не быть."""
+    _stub_list(monkeypatch, [_item(client_id=7, client_name=None)])
+    message, state = _FakeMessage(), _FakeState()
+    asyncio.run(ad_accounts.cabinets_command(message, state))
+    text = message.answers[0]
+    assert "закреплён" in text.lower()
+    assert "None" not in text
+
+
 def test_list_shows_third_party_advertiser(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_list(
         monkeypatch,
