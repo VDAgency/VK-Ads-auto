@@ -54,13 +54,18 @@ def _stats(cid: str, is_mock: bool, period: str = "all") -> CabinetStats:
     )
 
 
-def _stub_sync(monkeypatch: pytest.MonkeyPatch, *, ok: bool = True) -> list[str]:
-    """Подменить синк кабинета перед показом; вернуть список id, которыми его вызвали."""
+def _stub_sync(monkeypatch: pytest.MonkeyPatch, *, outcome: str = "updated") -> list[str]:
+    """Подменить синк кабинета перед показом; вернуть список id, которыми его вызвали.
+
+    `outcome` — один из трёх исходов A3 (`"updated"` / `"nothing_to_update"` /
+    `"failed"`), а не булев успех/провал: хендлер решает по нему, какую пометку
+    показать (или не показывать вовсе).
+    """
     calls: list[str] = []
 
-    async def fake(cabinet_id: str) -> bool:
+    async def fake(cabinet_id: str) -> str:
         calls.append(cabinet_id)
-        return ok
+        return outcome
 
     monkeypatch.setattr("bot.api_client.sync_cabinet_stats", fake)
     return calls
@@ -205,8 +210,10 @@ def test_switch_period_also_syncs_before_reading(monkeypatch: pytest.MonkeyPatch
 def test_sync_failure_still_renders_saved_data_with_honest_note(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Синк не удался — экран всё равно показывается по данным из БД, с пометкой."""
-    _stub_sync(monkeypatch, ok=False)
+    """Синк не удался (реальный сбой площадки) — экран показывается по данным из БД,
+    с тревожной пометкой.
+    """
+    _stub_sync(monkeypatch, outcome="failed")
 
     async def fake(cabinet_id: str, period: str) -> CabinetStats:
         return _stats(cabinet_id, is_mock=False, period=period)
@@ -219,10 +226,11 @@ def test_sync_failure_still_renders_saved_data_with_honest_note(
     text, _ = callback.message.answers[0]
     assert "Показы: 1000" in text  # данные из БД всё равно показаны
     assert "не удалось обновить" in text.lower()
+    assert "⚠️" in text
 
 
 def test_sync_success_has_no_honest_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_sync(monkeypatch, ok=True)
+    _stub_sync(monkeypatch, outcome="updated")
 
     async def fake(cabinet_id: str, period: str) -> CabinetStats:
         return _stats(cabinet_id, is_mock=False, period=period)
@@ -234,6 +242,34 @@ def test_sync_success_has_no_honest_note(monkeypatch: pytest.MonkeyPatch) -> Non
 
     text, _ = callback.message.answers[0]
     assert "не удалось обновить" not in text.lower()
+    assert "не запущена" not in text.lower()
+
+
+# --- A3: «нечего обновлять» (кампания не запущена) — не сбой, пометка нейтральная --
+
+
+def test_sync_nothing_to_update_shows_neutral_note_not_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кампания `prepared`/`stopped` — синк честно вернул `nothing_to_update`, это
+    норма: оператор не должен видеть тревожное «не удалось обновить» под каждым
+    неподнятым кабинетом (баг, из-за которого A2 перелечило).
+    """
+    _stub_sync(monkeypatch, outcome="nothing_to_update")
+
+    async def fake(cabinet_id: str, period: str) -> CabinetStats:
+        return _stats(cabinet_id, is_mock=False, period=period)
+
+    monkeypatch.setattr("bot.api_client.get_cabinet_stats", fake)
+    monkeypatch.setattr(stats, "Message", _FakeMessage)
+    callback = _FakeCallback("cabinet:camp-1")
+    asyncio.run(stats.open_cabinet(callback))
+
+    text, _ = callback.message.answers[0]
+    assert "Показы: 1000" in text  # итоговые данные всё равно показаны
+    assert "не удалось обновить" not in text.lower()
+    assert "⚠️" not in text
+    assert "не запущена" in text.lower()
 
 
 # --- A2: список кабинетов показывает честный статус кампании, не только "active" ---

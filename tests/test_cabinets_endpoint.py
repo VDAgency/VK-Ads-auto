@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 import services.cabinet_stats as cabinet_stats_module
+import services.stats_sync as stats_sync_module
 from config.settings import Settings
 from core.app import create_app
 from db.base import Base
@@ -169,6 +170,13 @@ def test_stats_detail_includes_cpl() -> None:
 
 
 # --- дефект 1: явный синк по кабинету перед показом ---------------------------------
+# A2/A3: три исхода наружу — `outcome` разводит «обновлено», «нечего обновлять»
+# (кабинет есть, но кампания не активна, либо кабинета с таким id вовсе нет — оба
+# случая дают пустую сводку и это НЕ сбой) и «не удалось» (настоящая ошибка
+# площадки). `ok` остаётся для обратной совместимости, но теперь означает
+# «не было настоящего сбоя» (`outcome != "failed"`) — это и есть решение дефекта:
+# раньше `ok=False` на пустой сводке заставлял бота рисовать тревожную пометку под
+# каждым неподнятым кабинетом.
 
 
 def test_sync_cabinet_endpoint_persists_stat_for_matching_campaign() -> None:
@@ -180,15 +188,21 @@ def test_sync_cabinet_endpoint_persists_stat_for_matching_campaign() -> None:
         )
     )
     assert code == 200
-    assert data == {"ok": True, "synced": 1, "failed": 0, "results": {"1": "ok"}}
+    assert data == {
+        "ok": True,
+        "outcome": "updated",
+        "synced": 1,
+        "failed": 0,
+        "results": {"1": "ok"},
+    }
 
 
 def test_sync_cabinet_endpoint_does_not_touch_other_cabinets() -> None:
     """Синк по конкретному кабинету не должен цеплять кампании других кабинетов.
 
-    Пустая сводка (A2) — честное «нечего обновлять», а не успех: раньше `ok=True`
-    здесь ошибочно означал бы, что данные обновились, хотя синк не тронул ни одной
-    кампании.
+    Пустая сводка (A2) — честное «нечего обновлять» (`outcome="nothing_to_update"`),
+    а не «обновлено» (раньше это ошибочно засчитывалось успехом) и не «не удалось»
+    (это НЕ сбой площадки — синкать было нечего, о чём и говорит `ok=True`, A3).
     """
 
     code, data = asyncio.run(
@@ -199,4 +213,38 @@ def test_sync_cabinet_endpoint_does_not_touch_other_cabinets() -> None:
         )
     )
     assert code == 200
-    assert data == {"ok": False, "synced": 0, "failed": 0, "results": {}}
+    assert data == {
+        "ok": True,
+        "outcome": "nothing_to_update",
+        "synced": 0,
+        "failed": 0,
+        "results": {},
+    }
+
+
+def test_sync_cabinet_endpoint_reports_failed_outcome_on_platform_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Настоящий сбой площадки — вот это `ok=False`/`outcome="failed"` (A3), не пустая
+    сводка неактивной кампании.
+    """
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("platform unreachable")
+
+    monkeypatch.setattr(stats_sync_module, "fetch_campaign_stats", boom)
+    code, data = asyncio.run(
+        _call(
+            "/api/v1/cabinets/stub-campaign-1/stats/sync",
+            method="POST",
+            with_stub_campaign=True,
+        )
+    )
+    assert code == 200
+    assert data == {
+        "ok": False,
+        "outcome": "failed",
+        "synced": 0,
+        "failed": 1,
+        "results": {"1": "error"},
+    }

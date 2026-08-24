@@ -18,7 +18,7 @@ from db.session import get_session
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from services.cabinet_stats import cabinet_stats, list_cabinets
-from services.stats_sync import cabinet_sync_ok, sync_cabinet_stats
+from services.stats_sync import CabinetSyncOutcome, cabinet_sync_outcome, sync_cabinet_stats
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/cabinets", tags=["cabinets"])
@@ -52,9 +52,18 @@ class StatsOut(BaseModel):
 
 
 class CabinetSyncOut(BaseModel):
-    """Итог синка метрик ОДНОГО кабинета: успех и построчная сводка по кампаниям."""
+    """Итог синка метрик ОДНОГО кабинета: исход и построчная сводка по кампаниям.
+
+    `outcome` (A3) — честные три состояния, не два: `"updated"` (что-то реально
+    синкнулось), `"nothing_to_update"` (под кабинетом нет активных кампаний — это
+    норма, не сбой), `"failed"` (настоящая ошибка синка). `ok` оставлен для
+    обратной совместимости с уже читающими его клиентами (бот) — это
+    `outcome != "failed"`, т.е. «не было настоящего сбоя»; за различием «обновлено»
+    vs «нечего обновлять» — в `outcome`.
+    """
 
     ok: bool
+    outcome: CabinetSyncOutcome
     synced: int
     failed: int
     results: dict[int, str]
@@ -115,17 +124,24 @@ async def sync_cabinet(
 
     Синк по кампании никогда не бросает исключение наружу (см.
     `services.stats_sync`): сбой площадки попадает в `results` как `error`, а
-    `ok=False` — честная сводка вместо 5xx, чтобы бот показал сохранённые данные
-    с пометкой о сбое, а не уронил экран статистики. `ok` считается через
-    `cabinet_sync_ok` (A2): пустая сводка (под этим кабинетом нет ни одной активной
-    кампании) — тоже `ok=False`, а не тривиальный успех — иначе бот показывал бы
-    устаревшие цифры без всякой пометки.
+    `outcome="failed"` — честная сводка вместо 5xx, чтобы бот показал сохранённые
+    данные с пометкой о сбое, а не уронил экран статистики.
+
+    `outcome` считается через `cabinet_sync_outcome` (A3, доработка A2): пустая
+    сводка (под этим кабинетом нет ни одной АКТИВНОЙ кампании — она либо не
+    запущена (`prepared`/`stopped`/`failed`), либо кабинета с таким id вовсе нет)
+    — это `"nothing_to_update"`, а не тривиальный успех и не сбой площадки. Раньше
+    (A2, первая версия) такая сводка ошибочно засчитывалась `ok=False` наравне с
+    настоящей ошибкой площадки — из-за этого бот рисовал тревожную пометку под
+    каждым неподнятым кабинетом, хотя обновлять там было нечего.
     """
     results = await sync_cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id)
     await session.commit()
     failed = sum(1 for outcome in results.values() if outcome != "ok")
+    outcome = cabinet_sync_outcome(results)
     return CabinetSyncOut(
-        ok=cabinet_sync_ok(results),
+        ok=outcome != "failed",
+        outcome=outcome,
         synced=len(results) - failed,
         failed=failed,
         results=results,

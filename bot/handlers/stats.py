@@ -5,8 +5,12 @@
 
 Вход в кабинет и переключение периода (задача 2, дефект 1) сначала синкают метрики
 ИМЕННО этого кабинета (`api_client.sync_cabinet_stats`), потом читают их из БД.
-Если синк не удался — экран всё равно показывается по сохранённым данным, с честной
-пометкой, что обновить не получилось (не имитируем успех, CLAUDE.md §7).
+Экран всё равно показывается по сохранённым данным — разница только в пометке,
+которую выбираем по исходу синка (A3, три состояния, классифицирует ядро в
+`services.stats_sync.cabinet_sync_outcome`, бот только отображает готовый исход):
+`"failed"` — честная тревожная пометка, что обновить не получилось (не имитируем
+успех, CLAUDE.md §7); `"nothing_to_update"` — кампания просто не запущена, это
+норма, пометка нейтральная, без ⚠️; `"updated"` — молча, пометки нет.
 """
 
 from __future__ import annotations
@@ -27,6 +31,11 @@ router.callback_query.filter(OperatorOnly())
 _UNAVAILABLE = "Сервис временно недоступен, попробуйте позже."
 _MOCK_BANNER = "⚠️ Демо-данные. Реальные появятся после подключения VK.\n\n"
 _SYNC_FAILED_NOTE = "\n\n⚠️ Не удалось обновить данные, показаны последние сохранённые."
+# «Нечего обновлять» (A3) — кампания не запущена (`prepared`/`stopped`/`failed`),
+# синк площадку не спрашивал. Это НЕ сбой — пометка нейтральная, без ⚠️, иначе
+# оператор увидит тревогу под каждым неподнятым кабинетом (баг, из-за которого A2
+# перелечило исходную честную ошибку).
+_SYNC_NOTHING_NOTE = "\n\nКампания не запущена — показаны итоговые цифры."
 # Статус кабинета в списке — реальный статус кампании (A2, больше не захардкожен
 # "active"): показываем его по-русски, не сырым кодом площадки. Значения — по
 # `Campaign.status` (db/models.py), "active"/"paused" оставлены для обратной
@@ -84,12 +93,18 @@ async def show_stats(message: Message) -> None:
 
 
 async def _answer_cabinet(message: Message, cabinet_id: str, period: str) -> None:
-    """Обновить метрики кабинета и показать их. Сбой синка не роняет показ (дефект 1)."""
-    synced = await api_client.sync_cabinet_stats(cabinet_id)
+    """Обновить метрики кабинета и показать их. Синк не роняет показ (дефект 1).
+
+    Пометка выбирается по готовому исходу синка (A3) — сам бот не решает, был ли
+    сбой, только отображает то, что классифицировал сервисный слой.
+    """
+    outcome = await api_client.sync_cabinet_stats(cabinet_id)
     stats = await api_client.get_cabinet_stats(cabinet_id, period)
     text = _render_stats(cabinet_id, stats)
-    if not synced:
+    if outcome == "failed":
         text += _SYNC_FAILED_NOTE
+    elif outcome == "nothing_to_update":
+        text += _SYNC_NOTHING_NOTE
     await message.answer(text, reply_markup=stats_period_keyboard(cabinet_id))
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 import httpx
 from config.settings import get_settings
@@ -180,6 +180,13 @@ class CabinetItem:
     status: str
     launched_at: str
     is_mock: bool
+
+
+# Исход синка кабинета (зеркало `CabinetSyncOutcome`/`CabinetSyncOut.outcome`
+# ядра, A3): `"updated"` — что-то реально синкнулось; `"nothing_to_update"` —
+# кампания не запущена, синкать было нечего (норма, не сбой); `"failed"` —
+# настоящая ошибка синка. См. `sync_cabinet_stats` ниже.
+CabinetSyncOutcome = Literal["updated", "nothing_to_update", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,25 +477,32 @@ async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
     return CabinetStats(**payload)
 
 
-async def sync_cabinet_stats(cabinet_id: str) -> bool:
+async def sync_cabinet_stats(cabinet_id: str) -> CabinetSyncOutcome:
     """`POST /cabinets/{id}/stats/sync`: обновить метрики кабинета перед показом.
 
     Не поднимает `CoreUnavailable`: синк — необязательный шаг перед чтением
     (задача 2, дефект 1). Сбой синка (сеть, ошибка площадки) не должен ронять
     весь экран статистики — хендлер сам решает, как честно об этом сказать
     оператору, а данные всё равно читаются из БД отдельным вызовом.
-    `True` — синк прошёл без ошибок ядра по всем кампаниям кабинета.
+
+    Три исхода (A3), не булев успех/провал: ретранслируем `outcome` из ответа
+    ядра (`CabinetSyncOut.outcome`). Сетевой сбой самого запроса, 4xx/5xx или
+    незнакомое/отсутствующее поле `outcome` — честно `"failed"`: не знаем, что
+    случилось с данными, имитировать успех нельзя (CLAUDE.md §7).
     """
     url = f"{_base_url()}/api/v1/cabinets/{cabinet_id}/stats/sync"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.post(url)
     except (httpx.HTTPError, httpx.TransportError):
-        return False
+        return "failed"
     if response.status_code >= 400:
-        return False
+        return "failed"
     payload: dict[str, Any] = response.json()
-    return bool(payload.get("ok", False))
+    outcome = payload.get("outcome")
+    if outcome in ("updated", "nothing_to_update", "failed"):
+        return cast("CabinetSyncOutcome", outcome)
+    return "failed"
 
 
 # Создание инвайта включает доставку (userbot до 15с / SMTP до 20с) — таймаут
