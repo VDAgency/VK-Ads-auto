@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import CursorResult, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import (
@@ -371,13 +371,47 @@ async def count_clients(session: AsyncSession, account_id: int) -> int:
     return int((await session.execute(stmt)).scalar_one())
 
 
-async def list_stat_campaign_ids(session: AsyncSession, account_id: int) -> list[str]:
-    """Уникальные `campaign_id`, по которым есть срезы `Stat` (реальные кабинеты)."""
+async def list_cabinet_campaigns(session: AsyncSession, account_id: int) -> list[Campaign]:
+    """Кампании, заведённые на площадке: они и есть «кабинеты» на экране статистики.
+
+    Раньше список строился из сохранённых срезов `Stat` (`list_stat_campaign_ids`,
+    удалена вместе с этой правкой) — из-за этого удалённая кампания оставалась
+    висеть кабинетом-призраком (срезы не удалялись вместе с ней, см.
+    `delete_campaign_row`), а свежезапущенная не показывалась вовсе, пока не пройдёт
+    первый синк. Кампания без внешнего id ещё не заведена ни на какой площадке — её
+    нечем показывать кабинетом.
+    """
     stmt = (
-        select(Stat.campaign_id)
-        .where(Stat.account_id == account_id)
-        .group_by(Stat.campaign_id)
-        .order_by(Stat.campaign_id)
+        select(Campaign)
+        .where(
+            Campaign.account_id == account_id,
+            Campaign.external_id.is_not(None),
+            Campaign.external_id != "",
+        )
+        .order_by(Campaign.id)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def list_client_campaigns(
+    session: AsyncSession, account_id: int, client_id: int
+) -> list[Campaign]:
+    """Кампании ОДНОГО клиента с непустым `external_id` — вход мини-отчёта клиента (B1).
+
+    Тот же фильтр непустого `external_id`, что и `list_cabinet_campaigns` (кампания
+    без него ещё не заведена ни на одной площадке — показывать клиенту нечего), плюс
+    скоуп по `client_id`: клиент обязан видеть только свои кампании, не кампании
+    других клиентов того же тенанта.
+    """
+    stmt = (
+        select(Campaign)
+        .where(
+            Campaign.account_id == account_id,
+            Campaign.client_id == client_id,
+            Campaign.external_id.is_not(None),
+            Campaign.external_id != "",
+        )
+        .order_by(Campaign.id)
     )
     return list((await session.execute(stmt)).scalars().all())
 
@@ -601,15 +635,27 @@ async def set_campaign_status(
 
 
 async def delete_campaign_row(session: AsyncSession, account_id: int, campaign_id: int) -> bool:
-    """Удалить строку кампании тенанта. `True` — удалена, `False` — не найдена/чужой тенант.
+    """Удалить строку кампании тенанта вместе с её срезами `Stat`.
+
+    `True` — удалена, `False` — не найдена/чужой тенант.
 
     Только строка в БД: удаление на площадке (если применимо для канала) — забота
     вызывающего сервиса (`services.campaign_cleanup`), делается ДО вызова этой
     функции. Скоуп по `account_id` — изоляция тенанта, CLAUDE.md §1.3.
+
+    Срезы удаляются по внешнему id кампании (`Stat.campaign_id` хранит именно его,
+    не локальный `Campaign.id`) — иначе они остаются сиротами и список кабинетов
+    (`list_cabinet_campaigns`) снова рискует показать призрак удалённой кампании.
     """
     campaign = await get_campaign(session, account_id, campaign_id)
     if campaign is None:
         return False
+    if campaign.external_id:
+        await session.execute(
+            delete(Stat).where(
+                Stat.account_id == account_id, Stat.campaign_id == campaign.external_id
+            )
+        )
     await session.delete(campaign)
     await session.flush()
     return True

@@ -186,6 +186,50 @@
   width: 100%;
 }
 
+/* --------------------------------------------------------------------------
+   Мини-отчёт «Как идёт реклама» (B1). Расход намеренно не выводится нигде —
+   ни в разметке, ни в данных, которые сюда приходят.
+   -------------------------------------------------------------------------- */
+.cab-report__item + .cab-report__item {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px dashed var(--line);
+}
+.cab-report__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.cab-report__goal {
+  font-weight: 600;
+}
+.cab-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin: 0;
+}
+.cab-metric {
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+.cab-metric dt {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.cab-metric dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--ink);
+}
+
 @media (max-width: 40rem) {
   .cab-main {
     padding-block: var(--space-8) var(--space-16);
@@ -205,5 +249,8 @@
   }
   .cab-contacts dd {
     text-align: left;
+  }
+  .cab-metrics {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

@@ -20,10 +20,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from config.settings import Settings, get_settings
+from db.community_tokens import find_decrypted_token
 from db.models import Campaign, Creative
 from db.repositories import (
     create_cabinet_row,
@@ -38,6 +41,7 @@ from integrations.channels import Channel, ChannelConfig, ChannelRouter, NoHealt
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
+from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,11 +56,12 @@ from services.ad_accounts import (
     resolve_default_account,
     resolve_token,
 )
-from services.brief_parser import BriefVariant, parse_brief
+from services.brief_parser import BriefVariant, Goal, parse_brief
 from services.launch import LaunchResult, daily_budget_rub, run_campaign
 from services.mapping import CampaignSpec, UnsupportedBriefGoalError, build_campaign_spec
 from services.notifier import notify_operator
 from services.secret_box import NotConfiguredError
+from services.senler import detect_senler
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +73,24 @@ STUB_CHANNEL = "stub"
 MODERATION_MARKERS = ("moder", "pending")
 
 
-# Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» здесь — только
-# на уровне кода: сама площадка (integrations.vk_surfaces.VK_MESSAGES) не прошла
-# боевую проверку, поэтому в боте и вебе цель всё равно показывается как «скоро»
-# и физически не выбирается (services.goals.subscription_targets().available).
-# Senler в этот список ещё не заведена вовсе.
+# Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» прошли боевой
+# зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True) и в боте/вебе
+# выбираются как обычная цель. «Заявка через Senler» технически работает тем же
+# пакетом VK, что и «Сообщения» (integrations.vk_surfaces.VK_SENLER), но собственный
+# боевой прогон под именем Senler ещё не проведён (Surface.verified=False) — в
+# каталоге площадок подписки она по-прежнему показывается как «скоро»
+# (services.goals.subscription_targets().available), при этом оператор уже может
+# явно выбрать её при запуске (bot.handlers.creative.GOALS), и запуск её принимает.
 SUBSCRIBERS_GOAL = "subscribers"
 LEAD_FORM_GOAL = "lead_form"
 MESSAGES_GOAL = "messages"
-SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL)
+SENLER_GOAL = "senler"
+SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL, SENLER_GOAL)
+
+# Числовой адрес сообщества внутри ссылки (`club228817082`, `public228817082`,
+# реже `event…`/`id…`) — используется ТОЛЬКО проверкой подключения Senler
+# (`_community_reference`), не связан с `integrations.vk_api._COMMUNITY_RE`.
+_COMMUNITY_SLUG_RE = re.compile(r"^(?:club|public|event|id)(\d+)$")
 
 
 class BriefNotFoundError(Exception):
@@ -85,6 +99,18 @@ class BriefNotFoundError(Exception):
 
 class UnsupportedGoalError(Exception):
     """Цель ещё не реализована — кампанию с ней не запускаем."""
+
+
+class SenlerNotConnectedError(Exception):
+    """К сообществу привязан токен, но чат-бот Senler к нему не подключён.
+
+    Кампания в этом случае НЕ создаётся: заявки уходили бы в пустоту, а
+    оператор увидел бы «запущено» и узнал правду только от клиента.
+    """
+
+    def __init__(self, community_id: str) -> None:
+        super().__init__(community_id)
+        self.community_id = community_id
 
 
 class CampaignStopError(Exception):
@@ -114,6 +140,10 @@ _CREATED_NOT_STARTED_MSG = (
 _FALLBACK_MSG = (
     "⚠️ Боевой канал недоступен — кампания подготовлена, но не запущена.\n"
     "Проверьте канал (VK API / kotbot) и повторите загрузку креатива."
+)
+_SENLER_UNVERIFIED_NOTE = (
+    "⚠️ Подключение Senler к сообществу проверить не удалось — сверьте вручную, "
+    "что чат-бот отвечает на сообщения."
 )
 
 
@@ -320,6 +350,73 @@ async def _prepare_on_platform(
     return cabinet_id, result, status
 
 
+def _community_reference(object_url: str) -> tuple[str | None, str]:
+    """Разобрать ссылку на сообщество из брифа: (числовой id или `None`, короткий адрес).
+
+    Последний сегмент пути, без учёта регистра. Клиенты почти всегда присылают
+    короткий адрес (`https://vk.ru/djbeauty` -> `djbeauty`) — числового id там
+    просто нет, и раньше проверка на этом молча сдавалась. Префиксы `club`/
+    `public`/`event`/`id` перед числом отбрасываются, остаётся сам номер;
+    остальное — короткий адрес как есть. Оба признака идут в
+    `db.community_tokens.find_decrypted_token`: она сама решает, по какому
+    совпало (домены `vk.com` и `vk.ru` — оба обычные http(s)-ссылки, второй
+    парсинг для них не нужен).
+    """
+    raw = object_url.strip()
+    if "//" not in raw:
+        raw = f"https://{raw}"
+    segments = [segment for segment in urlsplit(raw).path.split("/") if segment]
+    if not segments:
+        return None, ""
+    slug = segments[-1].lower()
+    match = _COMMUNITY_SLUG_RE.match(slug)
+    numeric_id = match.group(1) if match else None
+    return numeric_id, slug
+
+
+async def _verify_senler(
+    session: AsyncSession, account_id: int, spec: CampaignSpec, settings: Settings
+) -> str | None:
+    """Проверить подключение Senler ПЕРЕД запуском цели «Заявка через Senler».
+
+    Три исхода:
+    - Senler явно НЕ подключён (токен есть, VK это подтвердил) —
+      `SenlerNotConnectedError`, кампания не создаётся;
+    - подключён — `None`, запуск продолжается молча;
+    - проверить нечем (сообщество из ссылки не сопоставилось ни с одним
+      привязанным токеном — ни по числовому id, ни по короткому адресу, —
+      либо сходить в VK не вышло, либо сам поиск токена споткнулся об аномалию
+      БД) — возвращаем предупреждение, запуск всё равно продолжается: требовать
+      токен с каждого клиента мы не будем, но и выдавать непроверенное за
+      проверенное нельзя (CLAUDE.md §7). Проверка Senler — страховка, а не
+      критический путь: её внутренний отказ не должен ронять запуск кампании
+      (ревью 2026-08-24, дефект 1, пункт 3), поэтому ошибку поиска (в т.ч.
+      любую неучтённую аномалию данных) ловим и деградируем так же честно, как
+      уже обрабатывается недоступность VK ниже — но не молча: логируем, чтобы
+      причина не потерялась.
+    """
+    numeric_id, slug = _community_reference(spec.object_url)
+    try:
+        match = await find_decrypted_token(
+            session, account_id, community_id=numeric_id, screen_name=slug, settings=settings
+        )
+    except Exception:  # noqa: BLE001 — поиск токена не должен ронять запуск, это подстраховка
+        logger.exception(
+            "senler token lookup failed for community reference (%s, %s)", numeric_id, slug
+        )
+        return _SENLER_UNVERIFIED_NOTE
+    if match is None:
+        return _SENLER_UNVERIFIED_NOTE
+    try:
+        servers = await fetch_callback_servers(match.token, match.community_id)
+    except VkCommunityUnreachable:
+        logger.warning("senler check unreachable for community %s", match.community_id)
+        return _SENLER_UNVERIFIED_NOTE
+    if not detect_senler(servers).connected:
+        raise SenlerNotConnectedError(match.community_id)
+    return None
+
+
 async def launch_from_creative(
     session: AsyncSession,
     account_id: int,
@@ -348,8 +445,9 @@ async def launch_from_creative(
     `goal` — цель рекламы, которую явно выбрал оператор (кнопка в боте); неизвестное
     значение отклоняется, чтобы кампания не ушла с чужой целью. Отдельно от этого
     параметра цель может прийти из самого брифа (`ParsedBrief.goal`, площадка
-    `target_type`) — «Сообщения» реализованы в перечислении, но раскладка
-    (`services.mapping.build_campaign_spec`) их ещё не поддерживает; такой бриф
+    `target_type`) — сейчас раскладка (`services.mapping.build_campaign_spec`)
+    поддерживает все четыре цели перечисления `Goal` (подписчики, лид-форма,
+    сообщения, Senler); бриф с ещё не реализованной будущей целью по-прежнему
     отклоняется тем же `UnsupportedGoalError`, что и неизвестный параметр `goal`.
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
@@ -376,6 +474,12 @@ async def launch_from_creative(
         # выше): роутерам и боту достаточно ловить один `UnsupportedGoalError`, чтобы
         # честно ответить 422 вместо утечки 500 в VK.
         raise UnsupportedGoalError(exc.goal.value) from exc
+
+    senler_note: str | None = None
+    if parsed.goal is Goal.SENLER:
+        # Проверяем ДО любых побочных эффектов (Creative/Cabinet/кампания): явный
+        # отказ (`SenlerNotConnectedError`) обязан прервать запуск начисто.
+        senler_note = await _verify_senler(session, account_id, spec, cfg)
 
     # Продвижение готового поста обходится без креатива: объявлением служит сам пост,
     # и требовать от оператора картинку было бы выдумкой на пустом месте.
@@ -444,6 +548,8 @@ async def launch_from_creative(
     await session.flush()
 
     message = _outcome_message(status, is_live=is_live, fallback=fallback)
+    if senler_note:
+        message = f"{message}\n{senler_note}"
     if fallback:
         # Честная обратная связь: успех не имитируем (CLAUDE.md §7).
         await notify_operator(message)

@@ -9,7 +9,9 @@
 выбранной клиентом площадки (`target_type`) функцией `services.goals.goal_for_target_type`:
 площадка «лид-форма» ведёт к `Goal.LEAD_FORM`, площадка «сообщения» — к `Goal.MESSAGES`
 (площадка прошла боевой зонд 2026-08-23, `integrations.vk_surfaces.VK_MESSAGES.verified=True`),
-все остальные — к `Goal.SUBSCRIBERS`.
+площадка «заявка через Senler» — к `Goal.SENLER` (технически тот же пакет VK, что и у
+«Сообщений», `integrations.vk_surfaces.VK_SENLER`; свой боевой прогон под именем Senler
+ещё не проведён, поэтому `verified=False`), все остальные — к `Goal.SUBSCRIBERS`.
 """
 
 from __future__ import annotations
@@ -30,17 +32,20 @@ class BriefVariant(Enum):
 class Goal(Enum):
     """Цель кампании. Выводится из площадки брифа (`services.goals.goal_for_target_type`).
 
-    Реализованы и запускаются все три: подписчики (на любую из площадок подписки),
-    заявки через лид-форму и сообщения сообществу. `MESSAGES` прошла боевой зонд
-    2026-08-23 (`integrations.vk_surfaces.VK_MESSAGES.verified=True`) и клиенту
-    предлагается. Senler в перечисление вообще не заведена — оператор выбирает её
-    только на уровне бота/веба (параметр `goal` при запуске), до брифа она не
-    доходит и остаётся единственной нереализованной целью.
+    Реализованы и запускаются все четыре: подписчики (на любую из площадок подписки),
+    заявки через лид-форму, сообщения сообществу и заявка через Senler. `MESSAGES`
+    прошла боевой зонд 2026-08-23 (`integrations.vk_surfaces.VK_MESSAGES.verified=True`)
+    и клиенту предлагается. `SENLER` технически работает тем же пакетом VK, что и
+    «Сообщения» (боевая кампания 28694299 подтвердила пакет 3127 напрямую из VK,
+    2026-08-24), но собственный боевой прогон под именем Senler ещё не проведён
+    (`integrations.vk_surfaces.VK_SENLER.verified=False`) — площадка показывается
+    клиенту как «скоро», хотя раскладка и запуск для неё уже полностью реализованы.
     """
 
     SUBSCRIBERS = "subscribers"
     LEAD_FORM = "lead_form"
     MESSAGES = "messages"
+    SENLER = "senler"
 
 
 class Gender(Enum):
@@ -77,6 +82,9 @@ class TargetType(Enum):
     LEAD_FORM = "lead_form"
     # Прошла боевой зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True).
     MESSAGES = "messages"
+    # Тот же пакет VK, что у MESSAGES (integrations.vk_surfaces.VK_SENLER) — свой
+    # боевой прогон под именем Senler ещё не проведён, verified=False.
+    SENLER = "senler"
 
 
 class OrgType(Enum):
@@ -249,6 +257,11 @@ def parse_target_type(value: str) -> TargetType:
     """
     text = _clean(value).lower()
 
+    # Senler — самостоятельная цель (тот же пакет VK, что у «Сообщений»). Проверяем
+    # РАНЬШЕ лид-формы: естественная фраза «заявка через Senler» содержит «заявк»,
+    # и без этого порядка утекла бы в TargetType.LEAD_FORM.
+    if "senler" in text or "сенлер" in text:
+        return TargetType.SENLER
     # Смежные цели распознаём раньше подписных: «пост сообщества» — это пост, а не
     # сообщество, и «лид-форма» не имеет отношения к площадкам подписки.
     if "лид" in text or "форма" in text or "заявк" in text:

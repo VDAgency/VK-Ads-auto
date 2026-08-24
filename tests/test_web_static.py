@@ -265,14 +265,21 @@ def _goal_tab_buttons(body: str) -> list[str]:
     return re.findall(r'<button[^>]*role="tab"[^>]*>.*?</button>', body, re.DOTALL)
 
 
-def test_brief_forms_show_five_goal_tabs_with_senler_locked() -> None:
+def test_brief_forms_show_five_goal_tabs_only_senler_locked() -> None:
     """Обе формы брифа задают вопрос вкладками: сначала цель, потом площадка внутри неё.
 
     Раньше был один вопрос «Куда привлекаем подписчиков?» на все 15 площадок сразу —
     половина из них (лид-форма, сообщения) подписчиков не привлекает. Пять вкладок,
     порядок и подписи — требование §1 спеки 2026-08-23-brief-goal-tabs-design.md.
-    Заблокирована ровно одна — «Заявка через Senler»: её нет в справочнике площадок
-    вовсе, а не просто «непроверена».
+
+    Доступность вкладки — общее правило, а не список исключений по имени цели:
+    вкладка заблокирована, если ни одна площадка внутри неё ещё не прошла боевую
+    проверку (`web/lib/briefGoals.ts::isGoalTabEnabled`). У «Заявки через Senler»
+    единственная площадка пока заблокирована (`test_senler_panel_has_a_single_locked_surface`
+    ниже) — поэтому заблокирована и сама вкладка. У «Вовлечения в готовый объект»
+    заблокирован только «клип» — остальные четыре площадки доступны, поэтому вкладка
+    остаётся открытой (доказывает, что правило не ломает вкладки с частично
+    заблокированными площадками).
     """
     client = TestClient(create_app())
     for page in _BRIEF_PAGES.values():
@@ -290,10 +297,43 @@ def test_brief_forms_show_five_goal_tabs_with_senler_locked() -> None:
         for tab, label in zip(tabs, labels, strict=True):
             assert label in tab, f"{page}: вкладка {label!r} не найдена по порядку"
 
-        locked = [tab for tab in tabs if "disabled" in tab]
-        assert len(locked) == 1, f"{page}: заблокирована должна быть ровно одна вкладка"
-        assert "Заявка через Senler" in locked[0]
-        assert 'class="bf-choice__soon"' in locked[0], "заблокированная вкладка помечена «скоро»"
+        by_label = dict(zip(labels, tabs, strict=True))
+        assert "disabled" in by_label["Заявка через Senler"], (
+            f"{page}: вкладка «Заявка через Senler» обязана быть заблокирована — "
+            "у цели нет ни одной доступной площадки"
+        )
+        assert 'class="bf-choice__soon"' in by_label["Заявка через Senler"], (
+            f"{page}: заблокированная вкладка должна быть помечена «скоро»"
+        )
+
+        still_open = [
+            "Подписчики",
+            "Вовлечение в готовый объект",
+            "Сообщения сообществу",
+            "Заявки — лид-форма",
+        ]
+        for label in still_open:
+            assert "disabled" not in by_label[label], (
+                f"{page}: вкладка {label!r} не должна быть заблокирована — у цели есть "
+                "доступная площадка"
+            )
+
+
+def test_senler_panel_has_a_single_locked_surface() -> None:
+    """Внутри вкладки «Заявка через Senler» — одна площадка, и она заблокирована.
+
+    Собственный боевой прогон под именем Senler ещё не проведён
+    (`integrations.vk_surfaces.VK_SENLER.verified=False`), поэтому клиент видит
+    вариант, но выбрать его не может — так же, как «клип» внутри «Вовлечения».
+    """
+    client = TestClient(create_app())
+    for page in _BRIEF_PAGES.values():
+        body = client.get(page).text
+        panel = _goal_panel_html(body, "senler")
+        radios = re.findall(r'<input type="radio"[^>]*name="target_type"[^>]*>', panel)
+        assert len(radios) == 1, f"{page}: у цели Senler должна быть ровно одна площадка"
+        assert "disabled" in radios[0], f"{page}: площадка Senler ещё не проверена боем"
+        assert 'class="bf-choice__soon"' in panel, "заблокированная площадка помечена «скоро»"
 
 
 def _goal_panel_html(body: str, key: str) -> str:

@@ -20,7 +20,7 @@
  * бэкендом ловит `tests/test_brief_goal_tabs.py::test_brief_surfaces_ts_matches_catalog`
  * (сверяет этот список с `services.goals.subscription_targets()`).
  */
-export type BriefGoalKey = "subscription" | "engagement" | "messages" | "leads";
+export type BriefGoalKey = "subscription" | "engagement" | "messages" | "leads" | "senler";
 
 export type BriefSurfaceOption = {
   /** Значение, уходящее в payload брифа (ключ поля — `target_type`). */
@@ -91,6 +91,18 @@ export const BRIEF_SURFACES: BriefSurfaceOption[] = [
     label: "✉️ Сообщения сообществу ВКонтакте",
     enabled: true,
     goal: "messages",
+  },
+  // Решение 2026-08-24: технически тот же пакет VK 3127, что у «Сообщений» выше —
+  // боевая кампания 28694299, прочитанная напрямую из VK, подтвердила
+  // {"objective": "socialengagement", "package_id": 3127}. Собственный боевой
+  // прогон под именем Senler ещё не проведён (integrations/vk_surfaces.
+  // VK_SENLER.verified=False), поэтому площадка (единственная в этой цели)
+  // остаётся заблокированной — тот же паттерн, что и у «клипа» выше.
+  {
+    value: "заявка через senler",
+    label: "🤖 Заявка через Senler",
+    enabled: false,
+    goal: "senler",
   },
 ];
 

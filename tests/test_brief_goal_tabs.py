@@ -7,6 +7,15 @@
 полю `goal` каждой площадки (`web/lib/briefSurfaces.ts`), которое зеркалит
 `integrations/vk_surfaces.py` — точку правды.
 
+Доступность вкладки (`web/lib/briefGoals.ts::isGoalTabEnabled`) — не отдельный
+флаг в TS-источнике, а производная: вкладка открыта, если у цели есть хотя бы
+одна доступная площадка. Коммит ba87e54 захардкодил `enabled: true` для вкладки
+Senler в обход этого правила — площадка внутри осталась заблокированной, и
+клиент упирался в тупик (вкладка открыта, выбрать нечего). Тесты здесь и в
+`tests/test_web_static.py` (сборка+рендер) закрепляют, что впредь такого
+спецкейса по имени цели в коде быть не может: доступность каждой вкладки
+проверяется правилом «есть хоть одна доступная площадка», а не именем.
+
 Полной автосинхронизации фронта и бэкенда нет (TypeScript и Python — разные
 рантаймы), поэтому этот файл читает исходники `web/lib/*.ts` как текст и
 сверяет их с `services.goals.subscription_targets()` — тем же справочником,
@@ -20,9 +29,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from services.goals import subscription_targets
+from services.goals import subscription_targets, targets_for_goal
 
 _WEB_LIB = Path(__file__).resolve().parent.parent / "web" / "lib"
+_WEB_COMPONENTS = Path(__file__).resolve().parent.parent / "web" / "components"
 
 _SURFACE_ENTRY_RE = re.compile(
     r'value:\s*"(?P<value>[^"]*)"\s*,\s*'
@@ -32,20 +42,30 @@ _SURFACE_ENTRY_RE = re.compile(
     re.DOTALL,
 )
 
+# Табы больше не несут собственный флаг `enabled` — доступность вычисляется из
+# площадок (см. модульный докстринг), поэтому регулярка разбирает только
+# ключ/подпись/подсказки поля «ссылка на объект».
 _TAB_ENTRY_RE = re.compile(
     r'key:\s*"(?P<key>[^"]*)"\s*,\s*'
     r'label:\s*"(?P<label>[^"]*)"\s*,\s*'
-    r"enabled:\s*(?P<enabled>true|false)\s*,\s*"
     r'objectUrl:\s*\{\s*label:\s*"(?P<url_label>[^"]*)"\s*,\s*'
     r'hint:\s*"(?P<url_hint>[^"]*)"\s*,\s*'
     r'placeholder:\s*"(?P<url_placeholder>[^"]*)"',
     re.DOTALL,
 )
 
+_TAB_ARRAY_RE = re.compile(
+    r"export const BRIEF_GOAL_TABS: BriefGoalTab\[\] = \[(?P<body>.*?)\n\];", re.DOTALL
+)
+
 
 def _strip_emoji(label: str) -> str:
     """Убрать эмодзи-префикс площадки: TS-подпись всегда «эмодзи пробел Название»."""
     return label.split(" ", 1)[1]
+
+
+def _briefgoals_text() -> str:
+    return (_WEB_LIB / "briefGoals.ts").read_text(encoding="utf-8")
 
 
 def _read_surfaces() -> list[re.Match[str]]:
@@ -56,8 +76,7 @@ def _read_surfaces() -> list[re.Match[str]]:
 
 
 def _read_tabs() -> list[re.Match[str]]:
-    text = (_WEB_LIB / "briefGoals.ts").read_text(encoding="utf-8")
-    entries = list(_TAB_ENTRY_RE.finditer(text))
+    entries = list(_TAB_ENTRY_RE.finditer(_briefgoals_text()))
     assert entries, "не удалось разобрать web/lib/briefGoals.ts — проверьте формат записей"
     return entries
 
@@ -110,11 +129,20 @@ def test_surface_counts_per_goal_match_spec() -> None:
         "engagement": 5,
         "leads": 1,
         "messages": 1,
+        "senler": 1,
     }
 
 
 def test_goal_tabs_order_and_labels_match_spec() -> None:
-    """Пять вкладок, порядок и подписи — из требования §1 спеки, не выдуманы."""
+    """Пять вкладок, порядок и подписи — из требования §1 спеки, не выдуманы.
+
+    Доступность вкладки в исходнике больше не хранится (см. модульный
+    докстринг) — она вычисляется из площадок цели, поэтому здесь не
+    проверяется; поведение (какие вкладки реально открыты в собранном HTML)
+    закрепляют `test_senler_tab_has_no_available_surface`/
+    `test_engagement_tab_keeps_an_available_surface` ниже и
+    `tests/test_web_static.py`.
+    """
     tabs = _read_tabs()
     assert [tab["key"] for tab in tabs] == [
         "subscription",
@@ -130,45 +158,98 @@ def test_goal_tabs_order_and_labels_match_spec() -> None:
         "Заявки — лид-форма",
         "Заявка через Senler",
     ]
-    assert [tab["enabled"] for tab in tabs] == ["true", "true", "true", "true", "false"]
 
 
 def test_goal_tab_keys_cover_every_catalog_goal() -> None:
-    """Каждая цель из справочника площадок попадает в какую-то вкладку.
-
-    Обратное (вкладка без единой площадки, кроме сознательно пустой Senler)
-    проверяется тестом на количество площадок по целям.
-    """
+    """Каждая цель из справочника площадок попадает в какую-то вкладку."""
     catalog_goals = {target.goal for target in subscription_targets()}
     tab_keys = {tab["key"] for tab in _read_tabs()}
     assert catalog_goals <= tab_keys, f"вкладок не хватает для целей {catalog_goals - tab_keys}"
 
 
-def test_senler_tab_has_no_object_url_copy_and_no_surfaces() -> None:
-    """Senler — вкладка-обещание: в справочнике площадок её вообще нет.
+def test_goal_tabs_have_no_hardcoded_enabled_flag() -> None:
+    """Регрессия на коммит ba87e54: у вкладки не должно быть своего поля `enabled`.
 
-    Подсказки поля «ссылка на объект» у неё пустые: клиент не может её выбрать
-    и до этого поля не доберётся, выдумывать текст незачем.
+    Хардкод `enabled: true` для вкладки Senler в обход площадок внутри неё и был
+    причиной бага (вкладка открыта, единственная площадка внутри — заблокирована,
+    клиент упирается в тупик). Проверяем именно текст массива `BRIEF_GOAL_TABS`
+    (а не весь файл — там законно есть слово «enabled» в имени/докстринге
+    функции `isGoalTabEnabled`, вычисляющей доступность из площадок).
     """
-    tabs = {tab["key"]: tab for tab in _read_tabs()}
-    senler = tabs["senler"]
-    assert senler["enabled"] == "false"
-    assert senler["url_label"] == ""
-    assert senler["url_hint"] == ""
-    catalog_goals = {target.goal for target in subscription_targets()}
-    assert "senler" not in catalog_goals
+    match = _TAB_ARRAY_RE.search(_briefgoals_text())
+    assert match, "не удалось найти массив BRIEF_GOAL_TABS в web/lib/briefGoals.ts"
+    assert "enabled" not in match["body"], (
+        "у вкладки не должно быть собственного поля enabled — доступность обязана "
+        "вычисляться из площадок цели (см. isGoalTabEnabled), без хардкода по вкладке"
+    )
 
 
-def test_every_enabled_tab_has_object_url_copy() -> None:
-    """Требование §4 спеки: подсказка и заголовок «ссылки на объект» — для каждой цели свои."""
+def test_goal_surface_component_has_no_senler_special_case() -> None:
+    """Регрессия: в компоненте не должно быть логики, завязанной на имя «senler».
+
+    Общее правило («вкладка доступна, если доступна хоть одна её площадка»)
+    не требует знать имена целей — компонент оперирует только `enabled` полей
+    площадок. Появление строки «senler» здесь означало бы возврат
+    списка-исключения вместо общего правила.
+    """
+    text = (_WEB_COMPONENTS / "BriefGoalSurface.tsx").read_text(encoding="utf-8")
+    assert "senler" not in text.lower()
+
+
+def test_senler_tab_has_no_available_surface() -> None:
+    """Решение 2026-08-24: Senler — реализованная цель (раскладка и запуск её
+    принимают, tests/test_senler_goal.py), в справочнике площадок у неё один
+    элемент. Он пока заблокирован (`verified=False` у
+    `integrations.vk_surfaces.VK_SENLER`, свой боевой прогон ещё не проведён).
+
+    По общему правилу (`isGoalTabEnabled`) это значит, что сама вкладка обязана
+    рендериться как «скоро» — не потому, что где-то в коде написано имя
+    «senler», а потому, что у цели нет доступных площадок. Поведение в
+    собранном HTML проверяет `tests/test_web_static.py`.
+    """
+    targets = {target.kind: target for target in subscription_targets()}
+    senler_targets = [target for target in targets.values() if target.goal == "senler"]
+    assert [target.kind for target in senler_targets] == ["senler"]
+    assert senler_targets[0].available is False
+
+    assert not any(target.available for target in targets_for_goal("senler")), (
+        "у цели senler не должно быть доступных площадок — иначе вкладка обязана открыться"
+    )
+
+
+def test_engagement_tab_keeps_an_available_surface() -> None:
+    """«Вовлечение в готовый объект» не должна пострадать от общего правила.
+
+    У цели заблокирована площадка «клип» (verified=False), но остальные
+    четыре (пост сообщества, пост личной страницы, пост со ссылкой на сайт,
+    музыка) доступны — по общему правилу вкладка обязана остаться открытой.
+    """
+    engagement_targets = targets_for_goal("engagement")
+    assert len(engagement_targets) == 5
+    assert any(target.available for target in engagement_targets), (
+        "у цели engagement должна остаться хотя бы одна доступная площадка — "
+        "иначе вкладка «Вовлечение» стала бы недоступна вслед за клипом"
+    )
+    unavailable = [target.kind for target in engagement_targets if not target.available]
+    assert unavailable == ["vk_clip"], (
+        f"ожидали заблокированным только клип, получили {unavailable}"
+    )
+
+
+def test_every_goal_tab_has_object_url_copy() -> None:
+    """Требование §4 спеки: подсказка и заголовок «ссылки на объект» — для каждой цели свои.
+
+    Копия статична и не зависит от текущей доступности вкладки — заблокированная
+    сегодня вкладка обязана прийти со своими текстами уже готовой к тому дню,
+    когда её площадка пройдёт боевой прогон и вкладка откроется сама.
+    """
     tabs = _read_tabs()
-    enabled_tabs = [tab for tab in tabs if tab["enabled"] == "true"]
-    assert len(enabled_tabs) == 4
-    labels = [tab["url_label"] for tab in enabled_tabs]
-    hints = [tab["url_hint"] for tab in enabled_tabs]
+    assert len(tabs) == 5
+    labels = [tab["url_label"] for tab in tabs]
+    hints = [tab["url_hint"] for tab in tabs]
     for label, hint in zip(labels, hints, strict=True):
-        assert label, "у доступной цели должен быть заголовок поля «ссылка на объект»"
-        assert hint, "у доступной цели должна быть подсказка поля «ссылка на объект»"
+        assert label, "у цели должен быть заголовок поля «ссылка на объект»"
+        assert hint, "у цели должна быть подсказка поля «ссылка на объект»"
     # Свои, а не одна и та же фраза, скопированная для всех целей.
     assert len(set(labels)) == len(labels)
     assert len(set(hints)) == len(hints)

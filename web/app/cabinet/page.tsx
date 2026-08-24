@@ -29,6 +29,23 @@ const VARIANT_RU: Record<string, string> = {
 
 type BriefStatus = { id: number; variant: string; status: string };
 
+/**
+ * Одна кампания клиента в мини-отчёте («Как идёт реклама»). Расхода здесь нет
+ * и не будет — сознательное решение проекта, клиент платит за услугу, а не за
+ * медиабюджет, закупочную цену видеть не должен.
+ */
+type ClientCampaignItem = {
+  external_id: string;
+  goal: string;
+  status: string;
+  shows: number;
+  clicks: number;
+  results: number;
+  ctr: number;
+};
+
+type ClientReportView = { campaigns: ClientCampaignItem[] };
+
 type CabinetView = {
   client_id: number;
   full_name: string | null;
@@ -38,6 +55,7 @@ type CabinetView = {
   password_set: boolean;
   briefs: BriefStatus[];
   referral_url: string | null;
+  report: ClientReportView;
 };
 
 /** Вход — через модалку на главной; неавторизованных отправляем на неё. */
@@ -76,6 +94,58 @@ function StatusTrack({ status }: { status: string }) {
         );
       })}
     </ol>
+  );
+}
+
+/** Значок статуса кампании: подсветка только у явно хороших/плохих исходов. */
+function statusBadgeClass(status: string): string {
+  if (status === "запущена") return "badge badge--accent";
+  if (status === "ошибка запуска") return "badge badge--danger";
+  return "badge";
+}
+
+/** Целые числа показов/кликов/результатов — с разрядными пробелами, как принято в ru-RU. */
+function formatCount(value: number): string {
+  return Math.round(value).toLocaleString("ru-RU");
+}
+
+function ReportBlock({ report }: { report: ClientReportView }) {
+  return (
+    <section className="cab-card" aria-labelledby="report-title">
+      <h2 id="report-title">Как идёт реклама</h2>
+      {report.campaigns.length > 0 ? (
+        report.campaigns.map((campaign) => (
+          <div className="cab-report__item" key={campaign.external_id}>
+            <div className="cab-report__head">
+              <span className="cab-report__goal">{campaign.goal}</span>
+              <span className={statusBadgeClass(campaign.status)}>{campaign.status}</span>
+            </div>
+            <dl className="cab-metrics">
+              <div className="cab-metric">
+                <dt>Показы</dt>
+                <dd>{formatCount(campaign.shows)}</dd>
+              </div>
+              <div className="cab-metric">
+                <dt>Клики</dt>
+                <dd>{formatCount(campaign.clicks)}</dd>
+              </div>
+              <div className="cab-metric">
+                <dt>Результаты</dt>
+                <dd>{formatCount(campaign.results)}</dd>
+              </div>
+              <div className="cab-metric">
+                <dt>CTR</dt>
+                <dd>{campaign.ctr.toFixed(2)}%</dd>
+              </div>
+            </dl>
+          </div>
+        ))
+      ) : (
+        <p className="cab-card__sub">
+          Кампания ещё не запущена — здесь появятся показы и результаты.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -345,6 +415,8 @@ export default function CabinetPage() {
                 </a>
               </section>
             )}
+
+            <ReportBlock report={view.report} />
 
             {view.referral_url ? <ReferralBlock url={view.referral_url} /> : null}
 

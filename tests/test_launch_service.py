@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
@@ -15,10 +16,12 @@ import httpx
 import pytest
 import respx
 import services.ad_accounts as ad_accounts
+import services.launch_service as launch_service
 from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
-from db.models import Account, Brief, Cabinet, Client
+from db.community_tokens import ACTIVE, save_community_token
+from db.models import Account, Brief, Cabinet, Client, CommunityToken
 from db.repositories import (
     get_creative_for_brief,
     get_latest_campaign_for_brief,
@@ -28,10 +31,13 @@ from integrations.channels import Channel, ChannelConfig, ChannelRouter
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
+from integrations.vk_community import VkCommunityUnreachable
 from pydantic import SecretStr
 from services import notifier
 from services.ad_accounts import add_account
 from services.launch_service import (
+    LaunchOutcome,
+    SenlerNotConnectedError,
     _build_adapters,
     _build_router,
     _channel_config,
@@ -39,6 +45,9 @@ from services.launch_service import (
     stop_campaign,
 )
 from services.mapping import CampaignSpec
+from services.secret_box import SecretBox
+from services.senler import SenlerCheck
+from services.senler import detect_senler as _detect_senler_directly
 from services.vk_identity import VkIdentity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -655,3 +664,399 @@ def test_spec_is_passed_to_adapter_untouched() -> None:
 
     asyncio.run(_with_db(scenario))
     assert seen and seen[0].geo_raw == "Самара"
+
+
+# --- Senler: проверка подключения чат-бота перед запуском --------------------
+#
+# Решение B2 (spec 2026-08-24 §7): токен есть, Senler явно не подключён ->
+# отказ (кампания не создаётся). Токена нет ИЛИ проверка не удалась (сеть) ->
+# честное предупреждение в outcome.message, запуск всё равно продолжается -
+# требовать токен с каждого клиента не будем, но и молчать о непроверенном
+# нельзя (CLAUDE.md §7).
+
+SENLER_COMMUNITY_ID = "228817082"
+# Короткий адрес сообщества, привязанный при заводе токена (`groups.getById`,
+# `core/api/v1/senler.py`) — клиенты в брифе почти всегда присылают именно его,
+# а не числовой id, поэтому проверка обязана находить токен и по нему.
+SENLER_SCREEN_NAME = "djbeauty"
+SENLER_COMMUNITY_NAME = "DJ BEAUTY"
+_SENLER_VALID = {
+    "full_name": "Вячеслав",
+    "object_url": "https://vk.com/club228817082",
+    "email": "senler-client@example.com",
+    "phone": "+79990000001",
+    "audience_description": "молодёжь Самары",
+    "geo": "Самара",
+    "budget": "30000",
+    "term": "1 месяц",
+    "target_type": "заявка через senler",
+}
+# Тот же бриф, но ссылка — короткий адрес без числового id (главный сценарий
+# брифа на практике).
+_SENLER_SHORT_ADDRESS = {**_SENLER_VALID, "object_url": "https://vk.ru/djbeauty"}
+
+
+async def _with_senler_db(
+    scenario: Callable[[AsyncSession], Awaitable[T]], *, payload: dict[str, str] | None = None
+) -> T:
+    """Тот же стенд, что `_with_db`, но с брифом на цель Senler."""
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        session.add(Account(id=1, name="default"))
+        session.add(Client(id=1, account_id=1, full_name="Вячеслав", email="v@example.com"))
+        session.add(
+            Brief(
+                id=2,
+                account_id=1,
+                client_id=1,
+                variant="individual",
+                payload=dict(payload or _SENLER_VALID),
+            )
+        )
+        await session.commit()
+        await add_account(session, 1, TOKEN, settings=_settings())
+        await session.commit()
+        result = await scenario(session)
+    await engine.dispose()
+    return result
+
+
+async def _save_senler_token(
+    session: AsyncSession,
+    token: str,
+    *,
+    community_id: str = SENLER_COMMUNITY_ID,
+    screen_name: str = SENLER_SCREEN_NAME,
+) -> None:
+    await save_community_token(
+        session,
+        1,
+        community_id,
+        token,
+        screen_name=screen_name,
+        community_name=SENLER_COMMUNITY_NAME,
+        settings=_settings(),
+    )
+
+
+def _launch_senler(session: AsyncSession) -> Awaitable[LaunchOutcome]:
+    return launch_from_creative(
+        session,
+        1,
+        2,
+        "photo",
+        "/data/creatives/2/x.jpg",
+        "Заголовок",
+        "Текст",
+        settings=_settings(),
+    )
+
+
+def test_senler_launch_is_blocked_when_chatbot_not_connected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Токен привязан, VK подтверждает, что Senler НЕ подключён - запуск отклоняется."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        return []  # groups.getCallbackServers без callback-сервера Senler
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> None:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        with pytest.raises(SenlerNotConnectedError):
+            await _launch_senler(session)
+
+    asyncio.run(_with_senler_db(scenario))
+
+
+def test_senler_launch_blocked_leaves_no_campaign_behind(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> object:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        with pytest.raises(SenlerNotConnectedError):
+            await _launch_senler(session)
+        return await get_latest_campaign_for_brief(session, 1, 2)
+
+    assert asyncio.run(_with_senler_db(scenario)) is None
+
+
+def test_senler_launch_proceeds_silently_when_chatbot_connected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Токен привязан, Senler подключён - запуск идёт как обычно, без предупреждений."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        assert token == "community-token"
+        assert community_id == SENLER_COMMUNITY_ID
+        return [
+            {
+                "title": "Senler",
+                "url": "https://callback.senler.ru/webhook/vk/1",
+                "status": "ok",
+            }
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> str:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    message = asyncio.run(_with_senler_db(scenario))
+    assert "не удал" not in message.lower()
+
+
+def test_senler_launch_warns_operator_when_token_is_missing() -> None:
+    """Токена для этого сообщества нет - запуск продолжается, но с честным предупреждением."""
+
+    async def scenario(session: AsyncSession) -> str:
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    message = asyncio.run(_with_senler_db(scenario))
+    assert "senler" in message.lower() or "подключ" in message.lower()
+
+
+def test_senler_launch_does_not_block_on_missing_token() -> None:
+    """Регресс: отсутствие токена - не повод отказывать в запуске (кампания создаётся)."""
+
+    async def scenario(session: AsyncSession) -> object:
+        await _launch_senler(session)
+        await session.commit()
+        return await get_latest_campaign_for_brief(session, 1, 2)
+
+    assert asyncio.run(_with_senler_db(scenario)) is not None
+
+
+def test_senler_launch_warns_when_vk_check_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Токен есть, но сходить в VK не вышло - предупреждаем, а не блокируем запуск."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        raise VkCommunityUnreachable("boom")
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> tuple[str, object]:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        await session.commit()
+        campaign = await get_latest_campaign_for_brief(session, 1, 2)
+        return outcome.message, campaign
+
+    message, campaign = asyncio.run(_with_senler_db(scenario))
+    assert campaign is not None
+    assert "не удал" in message.lower()
+
+
+def test_non_senler_launch_never_calls_the_senler_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Регресс: цели, отличные от Senler, вообще не трогают проверку подключения."""
+
+    def fail_if_called(*_a: object, **_k: object) -> None:
+        raise AssertionError("fetch_callback_servers must not be called for non-Senler goals")
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fail_if_called)
+
+    async def scenario(session: AsyncSession) -> None:
+        await launch_from_creative(
+            session,
+            1,
+            1,
+            "photo",
+            "/data/creatives/1/x.jpg",
+            "Заголовок",
+            "Текст",
+            settings=_settings(),
+        )
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_detect_senler_is_reused_by_launch_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Сшивка действительно передаёт ответ VK через services.senler.detect_senler,
+    а не изобретает свой разбор внутри launch_service."""
+    seen: list[list[dict[str, object]]] = []
+
+    def spy(servers: list[dict[str, object]]) -> SenlerCheck:
+        seen.append(servers)
+        return _detect_senler_directly(servers)
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+    monkeypatch.setattr(launch_service, "detect_senler", spy)
+
+    async def scenario(session: AsyncSession) -> None:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        await _launch_senler(session)
+
+    asyncio.run(_with_senler_db(scenario))
+    assert seen and seen[0][0]["title"] == "Senler"
+
+
+# --- главный сценарий доработки: сообщество из брифа опознаётся по короткому
+# адресу, а не только по числовому id ------------------------------------------
+
+
+def test_senler_check_finds_the_token_by_short_address_from_the_brief_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Клиенты в брифе почти всегда присылают короткий адрес (`vk.ru/djbeauty`),
+    а не числовой id — раньше проверка на этом молча сдавалась (`url_object_id`
+    для такой ссылки не извлекается). Токен привязан к сообществу с коротким
+    адресом `djbeauty`; бриф ссылается на `https://vk.ru/djbeauty` — без
+    числового id вовсе. Проверка обязана найти токен и пройти как обычно."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        assert token == "community-token"
+        # Найдя по короткому адресу, звоним в VK каноническим числовым id,
+        # сохранённым при привязке токена, а не тем, что было в ссылке брифа.
+        assert community_id == SENLER_COMMUNITY_ID
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> str:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    message = asyncio.run(_with_senler_db(scenario, payload=_SENLER_SHORT_ADDRESS))
+    assert "не удал" not in message.lower()
+
+
+def test_senler_check_still_finds_the_token_by_numeric_id_from_the_brief_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Регресс: `https://vk.com/club228817082` — ссылка с числовым id —
+    по-прежнему находит токен того же сообщества."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        assert token == "community-token"
+        assert community_id == SENLER_COMMUNITY_ID
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> str:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        outcome = await _launch_senler(session)
+        return outcome.message
+
+    # _SENLER_VALID уже ссылается на https://vk.com/club228817082.
+    message = asyncio.run(_with_senler_db(scenario))
+    assert "не удал" not in message.lower()
+
+
+# --- дефект 1 (ревью 2026-08-24, воспроизведён вживую): аномалия данных не
+# должна ронять запуск -----------------------------------------------------------
+
+
+def test_senler_launch_survives_two_active_tokens_sharing_the_same_short_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Обязательный тест ревью: сообщество сменило короткий адрес, `djbeauty`
+    достался другому сообществу — в базе (историческая аномалия, заведена в
+    обход приложения, `save_community_token` теперь такого не допускает для
+    новых сохранений) остались две активные строки с одним адресом. Раньше
+    `find_decrypted_token` падал необработанным `MultipleResultsFound` и ронял
+    `launch_from_creative` целиком (оператор получал 500 вместо честного
+    предупреждения). Теперь поиск детерминирован — запуск не падает."""
+
+    async def fake_fetch(token: str, community_id: str, **_: object) -> list[dict[str, object]]:
+        return [
+            {"title": "Senler", "url": "https://callback.senler.ru/webhook/vk/1", "status": "ok"}
+        ]
+
+    monkeypatch.setattr(launch_service, "fetch_callback_servers", fake_fetch)
+
+    async def scenario(session: AsyncSession) -> tuple[str, object]:
+        box = SecretBox(_KEY)
+        session.add(
+            CommunityToken(
+                account_id=1,
+                community_id="111111",  # старый держатель адреса, аномалия
+                screen_name=SENLER_SCREEN_NAME,
+                community_name=SENLER_COMMUNITY_NAME,
+                token_encrypted=box.encrypt("old-community-token"),
+                status=ACTIVE,
+            )
+        )
+        session.add(
+            CommunityToken(
+                account_id=1,
+                community_id=SENLER_COMMUNITY_ID,  # новый держатель адреса
+                screen_name=SENLER_SCREEN_NAME,
+                community_name=SENLER_COMMUNITY_NAME,
+                token_encrypted=box.encrypt("community-token"),
+                status=ACTIVE,
+            )
+        )
+        await session.commit()
+        outcome = await _launch_senler(session)
+        await session.commit()
+        campaign = await get_latest_campaign_for_brief(session, 1, 2)
+        return outcome.message, campaign
+
+    # Короткий адрес без числового id — тот же сценарий, что у главного дефекта.
+    message, campaign = asyncio.run(_with_senler_db(scenario, payload=_SENLER_SHORT_ADDRESS))
+    assert campaign is not None
+    assert "не удал" not in message.lower()
+
+
+def test_senler_launch_degrades_gracefully_on_unexpected_lookup_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Пункт 3 фикса дефекта 1: проверка подключения Senler — страховка, а не
+    критический путь запуска. Любая другая (не только неоднозначность БД)
+    внутренняя ошибка поиска токена обязана деградировать в честное «проверить
+    не удалось», а не ронять запуск целиком — так же, как уже обрабатывается
+    недоступность VK (`VkCommunityUnreachable`). Ошибка при этом обязана
+    попасть в лог, а не потеряться молча."""
+
+    async def broken_find(*_a: object, **_k: object) -> None:
+        raise RuntimeError("boom: simulated db anomaly")
+
+    monkeypatch.setattr(launch_service, "find_decrypted_token", broken_find)
+
+    async def scenario(session: AsyncSession) -> tuple[str, object]:
+        await _save_senler_token(session, "community-token")
+        await session.commit()
+        with caplog.at_level(logging.WARNING, logger="services.launch_service"):
+            outcome = await _launch_senler(session)
+        await session.commit()
+        campaign = await get_latest_campaign_for_brief(session, 1, 2)
+        return outcome.message, campaign
+
+    message, campaign = asyncio.run(_with_senler_db(scenario))
+    assert campaign is not None
+    assert "не удал" in message.lower()
+    # Ошибка не должна потеряться молча: причина обязана попасть в лог целиком
+    # (в т.ч. трассировка исключения — `logger.exception`), а не раствориться.
+    assert "boom" in caplog.text

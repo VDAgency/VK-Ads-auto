@@ -154,24 +154,26 @@ def test_picking_cabinet_moves_to_goal(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Второй" in callback.message.answers[0]
 
 
-def test_goal_keyboard_offers_only_implemented_goals(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Нереализованные цели видны, но не выбираются — молчаливой подмены нет.
+def test_goal_keyboard_offers_all_four_implemented_goals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Все четыре цели реализованы — молчаливой подмены нет ни у одной из них.
 
-    Реализованы «подписчики», «сообщения» и «лид-форма» (см. `services.launch_service.
-    SUPPORTED_GOALS`); Senler остаётся единственной заблокированной целью.
+    Реализованы «подписчики», «сообщения», «лид-форма» (см. `services.launch_service.
+    SUPPORTED_GOALS`) и «заявка через Senler» (решение 2026-08-24, технически тот же
+    пакет VK, что и у «Сообщений», tests/test_senler_goal.py) — ни одна кнопка
+    больше не ведёт на «goal:soon».
     """
     _stub_list(monkeypatch, [_item()])
     callback, state = _FakeCallback("creative:5"), _FakeState()
     asyncio.run(creative.start_creative(callback, state))
     keyboard = callback.message.answer_kwargs[-1]["reply_markup"]
     buttons = [b for row in keyboard.inline_keyboard for b in row]
-    enabled = [b for b in buttons if b.callback_data != "goal:soon"]
-    assert [b.callback_data for b in enabled] == [
+    assert [b.callback_data for b in buttons] == [
         "goal:subscribers:5",
         "goal:messages:5",
         "goal:lead_form:5",
+        "goal:senler:5",
     ]
-    assert any("скоро" in b.text for b in buttons)
+    assert not any("скоро" in b.text for b in buttons)
 
 
 def test_unimplemented_goal_explains_itself() -> None:

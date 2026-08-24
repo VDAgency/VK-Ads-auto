@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 import httpx
 from config.settings import get_settings
@@ -182,6 +182,13 @@ class CabinetItem:
     is_mock: bool
 
 
+# Исход синка кабинета (зеркало `CabinetSyncOutcome`/`CabinetSyncOut.outcome`
+# ядра, A3): `"updated"` — что-то реально синкнулось; `"nothing_to_update"` —
+# кампания не запущена, синкать было нечего (норма, не сбой); `"failed"` —
+# настоящая ошибка синка. См. `sync_cabinet_stats` ниже.
+CabinetSyncOutcome = Literal["updated", "nothing_to_update", "failed"]
+
+
 @dataclass(frozen=True, slots=True)
 class CabinetStats:
     """Метрики кабинета за период (зеркало `StatsOut` ядра)."""
@@ -333,6 +340,11 @@ def _creative_reject_reason(detail: Any) -> str:
             )
     if detail == "goal_not_supported":
         return "Эта цель рекламы ещё не реализована. Доступны «Подписчики» и «Заявки — лид-форма»."
+    if detail == "senler_not_connected":
+        return (
+            "К сообществу не подключён чат-бот Senler — заявки будет некому обрабатывать. "
+            "Проверьте подключение и повторите запуск."
+        )
     return "Креатив не принят. Проверьте файл и текст."
 
 
@@ -470,25 +482,32 @@ async def get_cabinet_stats(cabinet_id: str, period: str) -> CabinetStats:
     return CabinetStats(**payload)
 
 
-async def sync_cabinet_stats(cabinet_id: str) -> bool:
+async def sync_cabinet_stats(cabinet_id: str) -> CabinetSyncOutcome:
     """`POST /cabinets/{id}/stats/sync`: обновить метрики кабинета перед показом.
 
     Не поднимает `CoreUnavailable`: синк — необязательный шаг перед чтением
     (задача 2, дефект 1). Сбой синка (сеть, ошибка площадки) не должен ронять
     весь экран статистики — хендлер сам решает, как честно об этом сказать
     оператору, а данные всё равно читаются из БД отдельным вызовом.
-    `True` — синк прошёл без ошибок ядра по всем кампаниям кабинета.
+
+    Три исхода (A3), не булев успех/провал: ретранслируем `outcome` из ответа
+    ядра (`CabinetSyncOut.outcome`). Сетевой сбой самого запроса, 4xx/5xx или
+    незнакомое/отсутствующее поле `outcome` — честно `"failed"`: не знаем, что
+    случилось с данными, имитировать успех нельзя (CLAUDE.md §7).
     """
     url = f"{_base_url()}/api/v1/cabinets/{cabinet_id}/stats/sync"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.post(url)
     except (httpx.HTTPError, httpx.TransportError):
-        return False
+        return "failed"
     if response.status_code >= 400:
-        return False
+        return "failed"
     payload: dict[str, Any] = response.json()
-    return bool(payload.get("ok", False))
+    outcome = payload.get("outcome")
+    if outcome in ("updated", "nothing_to_update", "failed"):
+        return cast("CabinetSyncOutcome", outcome)
+    return "failed"
 
 
 # Создание инвайта включает доставку (userbot до 15с / SMTP до 20с) — таймаут
@@ -895,4 +914,107 @@ async def delete_ad_account(ad_account_id: int) -> None:
     if response.status_code == 404:
         raise AdAccountNotFound(str(ad_account_id))
     if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+
+
+# --- Senler: токен сообщества для проверки подключения чат-бота (B2) --------------
+
+
+@dataclass(frozen=True, slots=True)
+class CommunityTokenResult:
+    """Итог привязки токена сообщества: без токена — id, название, факт подключения."""
+
+    community_id: str
+    community_name: str
+    connected: bool
+    reason: str
+
+
+class CommunityTokenRejected(RuntimeError):
+    """Ядро отказалось сохранить токен сообщества — причина уже пригодна для показа."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class CommunityTokenNotFound(RuntimeError):
+    """Активной привязки для указанного сообщества не было (нечего отвязывать)."""
+
+
+# Узнанные причины отказа 500 — точный текст. Неузнанная (в т.ч. отсутствие
+# `detail` вовсе — типовой ответ FastAPI на необработанное исключение) не
+# должна выдаваться за конкретный диагноз (ревью 2026-08-24, дефект 2: раньше
+# ЛЮБОЙ 500 объявлялся отсутствием ключа шифрования, даже когда причина была
+# совсем другой) — тот же приём, что `_AD_ACCOUNT_ERRORS`/`add_ad_account`.
+_COMMUNITY_TOKEN_ERRORS = {
+    "encryption_key_missing": (
+        "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — "
+        "без него токен негде хранить. Нужна помощь администратора."
+    ),
+}
+
+
+async def add_community_token(token: str) -> CommunityTokenResult:
+    """`POST /senler/community-token`: привязать токен сообщества и проверить Senler.
+
+    Id сообщества передавать не нужно — ядро само опознаёт его по токену
+    (`groups.getById`). Токен уходит только сюда и обратно не возвращается.
+    """
+    url = f"{_base_url()}/api/v1/senler/community-token"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(url, json={"token": token})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 500:
+        error_detail = ""
+        with contextlib.suppress(ValueError):
+            error_detail = str(response.json().get("detail", ""))
+        raise CommunityTokenRejected(
+            _COMMUNITY_TOKEN_ERRORS.get(
+                error_detail, "Внутренняя ошибка сервера, попробуйте ещё раз позже."
+            )
+        )
+    if response.status_code == 422:
+        detail = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        if detail == "community_unreachable":
+            raise CommunityTokenRejected(
+                "VK не подтвердил токен — проверьте, что он не истёк и выпущен "
+                "именно для сообщества клиента, и попробуйте ещё раз."
+            )
+        raise CommunityTokenRejected("Проверьте токен и попробуйте ещё раз.")
+    if response.status_code >= 500:
+        raise CoreUnavailable(f"core {response.status_code}")
+    data = response.json()
+    return CommunityTokenResult(
+        community_id=str(data["community_id"]),
+        community_name=str(data.get("community_name", "")),
+        connected=bool(data["connected"]),
+        reason=str(data.get("reason", "")),
+    )
+
+
+async def delete_community_token(reference: str) -> None:
+    """`DELETE /senler/community-token`: отвязать токен сообщества.
+
+    `reference` — короткий адрес сообщества или его числовой id (то же, что
+    принимает поиск токена под запуск, `db.community_tokens.find_decrypted_token`
+    через `services.launch_service`). Ядро само решает, по какому признаку
+    сопоставить (CLAUDE.md §1.3 — вся логика на стороне ядра).
+
+    `CommunityTokenNotFound` — активной привязки не было. Любой другой отказ —
+    `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/senler/community-token"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.delete(url, params={"reference": reference})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 404:
+        raise CommunityTokenNotFound(reference)
+    if response.status_code >= 400:
         raise CoreUnavailable(f"core {response.status_code}")

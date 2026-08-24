@@ -1,8 +1,10 @@
 """Клиентский мини-кабинет: magic-link, установка пароля, вход email+паролем, просмотр.
 
-Мини-отчёт сознательно БЕЗ расхода (не светим маржу, PROJECT.md §4.2.2): клиент
-видит свои брифы и их статус; метрики кампаний (без расхода) добавятся, когда
-кампании привязаны. Тонкий роутер — логика в сервисах/репозиториях.
+Мини-отчёт (B1, ТЗ 4.2 / критерий приёмки Блока 2) сознательно БЕЗ расхода — не
+светим маржу, клиент платит за услугу, а не за медиабюджет (PROJECT.md §4.2.2):
+клиент видит свои брифы и их статус, а также свои кампании с показами, кликами,
+результатами и CTR — расхода в отдаваемых типах нет вовсе. Тонкий роутер — логика
+в сервисах/репозиториях (`services.client_report.build_client_report`).
 
 Первый вход — по magic-link (`?token=`) → обязательная установка пароля. Возвратный
 вход — email + пароль. Сессия — подписанный токен в HttpOnly-cookie (spec §5).
@@ -25,6 +27,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from services.auth_magiclink import generate_token, verify_token
 from services.cabinet_email import send_login_link
+from services.client_report import build_client_report
 from services.password import hash_password, verify_password
 from services.referral import generate_ref_code
 from services.session_token import DEFAULT_TTL_SECONDS, generate_session, verify_session
@@ -73,6 +76,24 @@ class BriefStatus(BaseModel):
     status: str
 
 
+class ClientCampaignItem(BaseModel):
+    """Одна кампания клиента в мини-отчёте. Поля расхода здесь нет и не будет (B1)."""
+
+    external_id: str
+    goal: str
+    status: str
+    shows: float
+    clicks: float
+    results: float
+    ctr: float
+
+
+class ClientReportView(BaseModel):
+    """Мини-отчёт клиента: его кампании с метриками, без расхода."""
+
+    campaigns: list[ClientCampaignItem]
+
+
 class CabinetView(BaseModel):
     client_id: int
     full_name: str | None
@@ -82,6 +103,7 @@ class CabinetView(BaseModel):
     password_set: bool
     briefs: list[BriefStatus]
     referral_url: str
+    report: ClientReportView
 
 
 def _set_session_cookie(response: Response, client_id: int) -> None:
@@ -186,6 +208,9 @@ async def view_cabinet(
     if client is None:
         raise HTTPException(status_code=404, detail="Клиент не найден")
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
+    # Скоуп строго по client_id из сессии/токена, никогда из параметра запроса —
+    # иначе один клиент мог бы подставить чужой id и увидеть чужую статистику.
+    report = await build_client_report(session, DEFAULT_ACCOUNT_ID, client_id)
     settings = get_settings()
     ref_code = generate_ref_code(client.id, settings.secret_key.get_secret_value())
     return CabinetView(
@@ -197,4 +222,18 @@ async def view_cabinet(
         password_set=client.password_hash is not None,
         briefs=[BriefStatus(id=b.id, variant=b.variant, status=b.status) for b in briefs],
         referral_url=f"{settings.public_base_url}/?ref={ref_code}",
+        report=ClientReportView(
+            campaigns=[
+                ClientCampaignItem(
+                    external_id=row.external_id,
+                    goal=row.goal,
+                    status=row.status,
+                    shows=row.shows,
+                    clicks=row.clicks,
+                    results=row.results,
+                    ctr=row.ctr,
+                )
+                for row in report.campaigns
+            ]
+        ),
     )

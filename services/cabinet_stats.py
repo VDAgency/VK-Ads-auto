@@ -16,7 +16,7 @@ from config.settings import get_settings
 from db.repositories import (
     aggregate_cabinet_stats,
     count_clients,
-    list_stat_campaign_ids,
+    list_cabinet_campaigns,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,15 +114,28 @@ async def list_cabinets(
     *,
     now: datetime | None = None,
 ) -> list[CabinetView]:
-    """Список кабинетов: реальные (из `Stat`) или демо, пока открыт мок-гейт."""
+    """Список кабинетов: реальные (из кампаний) или демо, пока открыт мок-гейт.
+
+    Источник — заведённые кампании (`list_cabinet_campaigns`), а не история срезов
+    `Stat`: срез появляется только после первого синка и переживает удаление
+    кампании (см. `db.repositories.delete_campaign_row`), из-за чего кабинет по
+    срезам то не показывался сразу после запуска, то продолжал висеть призраком
+    после удаления.
+    """
     now = now or datetime.now(UTC)
-    campaign_ids = await list_stat_campaign_ids(session, account_id)
-    if campaign_ids:
+    campaigns = await list_cabinet_campaigns(session, account_id)
+    if campaigns:
         return [
-            CabinetView(id=cid, name=cid, status="active", launched_at=now, is_mock=False)
-            for cid in campaign_ids
+            CabinetView(
+                id=campaign.external_id or "",
+                name=campaign.external_id or "",
+                status=campaign.status,
+                launched_at=campaign.launched_at or campaign.created_at,
+                is_mock=False,
+            )
+            for campaign in campaigns
         ]
-    if not await _gate_open(session, account_id, real_count=len(campaign_ids), now=now):
+    if not await _gate_open(session, account_id, real_count=len(campaigns), now=now):
         return []
     return [
         CabinetView(
@@ -152,8 +165,8 @@ async def cabinet_stats(
     if has_real:
         return StatsView(cabinet_id=cabinet_id, period=period, is_mock=False, **agg)
 
-    campaign_ids = await list_stat_campaign_ids(session, account_id)
-    if await _gate_open(session, account_id, real_count=len(campaign_ids), now=now):
+    campaigns = await list_cabinet_campaigns(session, account_id)
+    if await _gate_open(session, account_id, real_count=len(campaigns), now=now):
         return StatsView(
             cabinet_id=cabinet_id, period=period, is_mock=True, **_mock_metrics(cabinet_id, period)
         )

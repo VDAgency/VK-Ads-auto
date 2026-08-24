@@ -24,7 +24,7 @@ from db.models import Account, Brief, Cabinet, Campaign, Client, Stat
 from integrations.adapter import PlatformAdapter
 from pydantic import SecretStr
 from services.ad_accounts import add_account
-from services.stats_sync import sync_cabinet_stats, sync_campaign_stats
+from services.stats_sync import cabinet_sync_outcome, sync_cabinet_stats, sync_campaign_stats
 from services.vk_identity import VkIdentity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -604,3 +604,70 @@ def test_sync_cabinet_stats_error_is_reported_not_raised() -> None:
         )
 
     assert asyncio.run(_with_db(scenario)) == {1: "error"}
+
+
+# --- A2/A3: три исхода синка кабинета, не два ---------------------------------------
+#
+# A2 научил роутер не путать пустую сводку с успехом. Но эта же правка перелечила:
+# кабинет с кампанией в `prepared`/`stopped` тоже даёт пустую сводку (в неё не
+# запущено ничего активного — `list_active_campaigns` её и не отбирает), и это
+# НОРМА, а не сбой площадки. Бот не должен пугать оператора «не удалось обновить»
+# под каждым неподнятым кабинетом. Нужны три исхода:
+# `updated` (что-то реально совпало и синкнулось без ошибок), `nothing_to_update`
+# (под кабинетом нет активных кампаний — синкать нечего, это ожидаемо),
+# `failed` (были настоящие ошибки площадки/адаптера — вот тут пометка обязана
+# остаться).
+
+
+def test_cabinet_sync_outcome_is_nothing_to_update_when_empty() -> None:
+    """Пустая сводка (кампаний под этим кабинетом нет вовсе, либо ни одна не активна)
+    — это «нечего обновлять», а не успех и не сбой.
+    """
+    assert cabinet_sync_outcome({}) == "nothing_to_update"
+
+
+def test_cabinet_sync_outcome_is_updated_when_matched_campaign_synced() -> None:
+    assert cabinet_sync_outcome({1: "ok"}) == "updated"
+
+
+def test_cabinet_sync_outcome_is_failed_on_any_error_or_skip() -> None:
+    assert cabinet_sync_outcome({1: "error"}) == "failed"
+    assert cabinet_sync_outcome({1: "skipped"}) == "failed"
+    assert cabinet_sync_outcome({1: "ok", 2: "error"}) == "failed"
+
+
+def test_sync_cabinet_stats_for_unmatched_cabinet_is_nothing_to_update_not_failed() -> None:
+    """Синк кабинета, для которого нет активных кампаний, — это «нечего обновлять»
+    (не тривиальный успех из старого дефекта, но и не ложный сигнал сбоя площадки).
+    """
+    adapter = _FakeAdapter()
+
+    async def scenario(session: AsyncSession) -> dict[int, str]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1))
+        await session.commit()
+        return await sync_cabinet_stats(
+            session, 1, "does-not-exist", settings=_settings(), adapters={"vk_api": adapter}
+        )
+
+    results = asyncio.run(_with_db(scenario))
+    assert cabinet_sync_outcome(results) == "nothing_to_update"
+
+
+def test_sync_cabinet_stats_for_unlaunched_campaign_is_nothing_to_update() -> None:
+    """Кампания есть, но она `prepared`/`stopped` — ей нечего синкать, это не сбой
+    (сценарий, из-за которого A2 стало перелечивать: боевой кабинет с двумя
+    кампаниями, `prepared` и `stopped`, не должен показывать предупреждение).
+    """
+    adapter = _FakeAdapter()
+
+    async def scenario(session: AsyncSession) -> dict[int, str]:
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1, status="prepared"))
+        await session.commit()
+        return await sync_cabinet_stats(
+            session, 1, "vk-1", settings=_settings(), adapters={"vk_api": adapter}
+        )
+
+    results = asyncio.run(_with_db(scenario))
+    assert results == {}
+    assert cabinet_sync_outcome(results) == "nothing_to_update"
+    assert adapter.stats_calls == []

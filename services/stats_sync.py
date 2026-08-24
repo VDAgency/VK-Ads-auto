@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from config.settings import Settings, get_settings
 from db.models import Campaign
@@ -191,12 +192,16 @@ async def sync_cabinet_stats(
     """Синхронизировать метрики и статус кампаний ОДНОГО кабинета (задача 2, дефект 1).
 
     «Кабинет» здесь — то же, чем оперирует `services.cabinet_stats`: внешний id
-    кампании (`Campaign.external_id`, см. `db.repositories.list_stat_campaign_ids`).
+    кампании (`Campaign.external_id`, см. `db.repositories.list_cabinet_campaigns`).
     Используется входом оператора в кабинет в боте — обновить метрики ИМЕННО этого
     кабинета перед показом, не трогая остальные активные кампании тенанта.
 
     Возвращает пустую сводку, если среди активных кампаний нет ни одной с таким
-    `external_id` — честно нечего синкать, это не ошибка.
+    `external_id` — честно нечего синкать, это не ошибка сама по себе (кампания
+    вне `launched`/`moderation`: ещё не запущена — `prepared`/`failed`, — либо
+    уже остановлена оператором — `stopped`). Вызывающий определяет итоговый исход
+    через `cabinet_sync_outcome` — пустая сводка это `"nothing_to_update"`, а не
+    `"updated"` и не `"failed"`.
     """
     cfg = settings or get_settings()
     overrides = dict(adapters or {})
@@ -204,3 +209,40 @@ async def sync_cabinet_stats(
         c for c in await list_active_campaigns(session, account_id) if c.external_id == cabinet_id
     ]
     return await _sync_campaigns(session, account_id, campaigns, cfg, overrides)
+
+
+CabinetSyncOutcome = Literal["updated", "nothing_to_update", "failed"]
+
+
+def cabinet_sync_outcome(results: Mapping[int, str]) -> CabinetSyncOutcome:
+    """Трёхзначная честная оценка синка ОДНОГО кабинета (A2, доработка того же дефекта).
+
+    `cabinet_sync_ok` (первая версия A2) сводила оценку к двум состояниям: пустая
+    сводка — под этим `external_id` нет ни одной активной кампании (кабинет не
+    найден или ничего не запущено) — раньше на уровне `core/api/v1/cabinets.py`
+    ошибочно засчитывалась успехом (`failed == sum(... != "ok")` тривиально равен
+    нулю на пустом словаре), и это было честно исправлено на «не успех». Но
+    «не успех» бот тогда рисовал как сбой площадки (⚠️ «не удалось обновить») —
+    а пустая сводка по кампании в статусе `prepared`/`stopped`/`failed` (см.
+    `db.repositories.list_active_campaigns` — в неё отбираются только `launched`/
+    `moderation`) получается КАЖДЫЙ раз, когда кампания вне этих двух статусов:
+    ещё не запущена (`prepared`), упала при запуске (`failed`) — или уже
+    остановлена оператором (`stopped`, см. `launch_service.stop_campaign`) ПОСЛЕ
+    того, как реально откручивалась и набрала статистику. Это норма, а не сбой:
+    цифры по такой кампании окончательные, обновлять нечего.
+
+    Три исхода вместо двух:
+    - `"updated"` — сводка не пуста и по всем кампаниям кабинета `"ok"`: что-то
+      реально совпало и синкнулось без ошибок;
+    - `"nothing_to_update"` — сводка пуста: под кабинетом нет ни одной активной
+      кампании (не запущена или не найдена) — синкать было нечего, это ожидаемо;
+    - `"failed"` — сводка не пуста, но есть хотя бы один `"error"`/`"skipped"`:
+      были настоящие проблемы синка (площадка не ответила, адаптер не собрался) —
+      вот здесь тревожная пометка в боте обязана остаться (не имитируем успех,
+      CLAUDE.md §7).
+    """
+    if not results:
+        return "nothing_to_update"
+    if all(outcome == "ok" for outcome in results.values()):
+        return "updated"
+    return "failed"
