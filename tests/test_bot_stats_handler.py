@@ -242,18 +242,25 @@ def test_sync_success_has_no_honest_note(monkeypatch: pytest.MonkeyPatch) -> Non
 
     text, _ = callback.message.answers[0]
     assert "не удалось обновить" not in text.lower()
-    assert "не запущена" not in text.lower()
+    assert stats._SYNC_NOTHING_NOTE not in text
 
 
-# --- A3: «нечего обновлять» (кампания не запущена) — не сбой, пометка нейтральная --
+# --- A3: «нечего обновлять» (вне launched/moderation) — не сбой, пометка нейтральная --
 
 
 def test_sync_nothing_to_update_shows_neutral_note_not_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Кампания `prepared`/`stopped` — синк честно вернул `nothing_to_update`, это
-    норма: оператор не должен видеть тревожное «не удалось обновить» под каждым
+    """Кампания вне `launched`/`moderation` — синк честно вернул `nothing_to_update`,
+    это норма: оператор не должен видеть тревожное «не удалось обновить» под каждым
     неподнятым кабинетом (баг, из-за которого A2 перелечило).
+
+    `nothing_to_update` покрывает не только `prepared`/`failed`, но и `stopped` —
+    кампанию, которую оператор САМ остановил ПОСЛЕ того, как она откручивалась и
+    набрала статистику (`launch_service.stop_campaign`). Формулировка обязана быть
+    верной сразу для всех этих случаев: без тревоги (⚠️) и без «не запущена» — для
+    `stopped` это была бы прямой ложью и противоречило бы честному «остановлен» из
+    списка кабинетов (замечание ревьюера к 66199cb).
     """
     _stub_sync(monkeypatch, outcome="nothing_to_update")
 
@@ -269,7 +276,8 @@ def test_sync_nothing_to_update_shows_neutral_note_not_warning(
     assert "Показы: 1000" in text  # итоговые данные всё равно показаны
     assert "не удалось обновить" not in text.lower()
     assert "⚠️" not in text
-    assert "не запущена" in text.lower()
+    assert "не запущена" not in text.lower()  # была бы ложью для `stopped`
+    assert stats._SYNC_NOTHING_NOTE in text  # нейтральная пометка присутствует
 
 
 # --- A2: список кабинетов показывает честный статус кампании, не только "active" ---
