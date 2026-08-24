@@ -301,3 +301,42 @@ class Discount(TenantMixin, Base):
     month: Mapped[str] = mapped_column(String(7))  # YYYY-MM
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | applied
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CommunityToken(TenantMixin, Base):
+    """Токен сообщества VK для проверки подключения Senler (B2, spec 2026-08-24 §7).
+
+    НЕ путать с `AdAccount`: тот — доступ к рекламному кабинету (Ads API), этот —
+    доступ к самому сообществу (classic VK API), нужен только чтобы спросить
+    `groups.getCallbackServers` и убедиться, что к сообществу подключён чат-бот
+    Senler, прежде чем запускать кампанию с этой целью
+    (`services/launch_service.py`). Ключ API Senler здесь не участвует вовсе.
+
+    Токен заводит оператор вручную командой бота (выпускает администратор
+    сообщества, привязан к одному сообществу) — отдельный сценарий, не связан с
+    `AdAccount`. Шифрование — Fernet (`services.secret_box`), тем же ключом, что
+    и токены кабинетов; наружу расшифрованный токен не отдаётся никогда, кроме
+    внутренней проверки перед запуском (`db/community_tokens.py::get_decrypted_token`).
+
+    `status`: `active` | `archived`. Второй токен того же сообщества не
+    дублирует строку, а архивирует прежнюю: индекс `uq_community_token_active` —
+    частичный, один активный токен на сообщество внутри тенанта.
+    """
+
+    __tablename__ = "community_token"
+    __table_args__ = (
+        Index(
+            "uq_community_token_active",
+            "account_id",
+            "community_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    community_id: Mapped[str] = mapped_column(String(32))
+    token_encrypted: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

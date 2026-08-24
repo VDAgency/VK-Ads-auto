@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from config.settings import Settings, get_settings
+from db.community_tokens import get_decrypted_token
 from db.models import Campaign, Creative
 from db.repositories import (
     create_cabinet_row,
@@ -37,7 +38,8 @@ from integrations.adapter import PlatformAdapter
 from integrations.channels import Channel, ChannelConfig, ChannelRouter, NoHealthyChannelError
 from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
-from integrations.vk_api import VkApiAdapter
+from integrations.vk_api import VkApiAdapter, resolve_ad_object
+from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,11 +54,12 @@ from services.ad_accounts import (
     resolve_default_account,
     resolve_token,
 )
-from services.brief_parser import BriefVariant, parse_brief
+from services.brief_parser import BriefVariant, Goal, parse_brief
 from services.launch import LaunchResult, daily_budget_rub, run_campaign
 from services.mapping import CampaignSpec, UnsupportedBriefGoalError, build_campaign_spec
 from services.notifier import notify_operator
 from services.secret_box import NotConfiguredError
+from services.senler import detect_senler
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,18 @@ class UnsupportedGoalError(Exception):
     """Цель ещё не реализована — кампанию с ней не запускаем."""
 
 
+class SenlerNotConnectedError(Exception):
+    """К сообществу привязан токен, но чат-бот Senler к нему не подключён.
+
+    Кампания в этом случае НЕ создаётся: заявки уходили бы в пустоту, а
+    оператор увидел бы «запущено» и узнал правду только от клиента.
+    """
+
+    def __init__(self, community_id: str) -> None:
+        super().__init__(community_id)
+        self.community_id = community_id
+
+
 class CampaignStopError(Exception):
     """Площадка не смогла остановить кампанию (сеть/недоступный канал)."""
 
@@ -118,6 +133,10 @@ _CREATED_NOT_STARTED_MSG = (
 _FALLBACK_MSG = (
     "⚠️ Боевой канал недоступен — кампания подготовлена, но не запущена.\n"
     "Проверьте канал (VK API / kotbot) и повторите загрузку креатива."
+)
+_SENLER_UNVERIFIED_NOTE = (
+    "⚠️ Подключение Senler к сообществу проверить не удалось — сверьте вручную, "
+    "что чат-бот отвечает на сообщения."
 )
 
 
@@ -324,6 +343,36 @@ async def _prepare_on_platform(
     return cabinet_id, result, status
 
 
+async def _verify_senler(
+    session: AsyncSession, account_id: int, spec: CampaignSpec, settings: Settings
+) -> str | None:
+    """Проверить подключение Senler ПЕРЕД запуском цели «Заявка через Senler».
+
+    Три исхода:
+    - Senler явно НЕ подключён (токен есть, VK это подтвердил) —
+      `SenlerNotConnectedError`, кампания не создаётся;
+    - подключён — `None`, запуск продолжается молча;
+    - проверить нечем (нет числового id сообщества в ссылке, токена для него не
+      привязали, либо сходить в VK не вышло) — возвращаем предупреждение,
+      запуск всё равно продолжается: требовать токен с каждого клиента мы не
+      будем, но и выдавать непроверенное за проверенное нельзя (CLAUDE.md §7).
+    """
+    community_id = resolve_ad_object(spec.object_url, spec.object_kind).url_object_id
+    if community_id is None:
+        return _SENLER_UNVERIFIED_NOTE
+    token = await get_decrypted_token(session, account_id, community_id, settings=settings)
+    if token is None:
+        return _SENLER_UNVERIFIED_NOTE
+    try:
+        servers = await fetch_callback_servers(token, community_id)
+    except VkCommunityUnreachable:
+        logger.warning("senler check unreachable for community %s", community_id)
+        return _SENLER_UNVERIFIED_NOTE
+    if not detect_senler(servers).connected:
+        raise SenlerNotConnectedError(community_id)
+    return None
+
+
 async def launch_from_creative(
     session: AsyncSession,
     account_id: int,
@@ -381,6 +430,12 @@ async def launch_from_creative(
         # выше): роутерам и боту достаточно ловить один `UnsupportedGoalError`, чтобы
         # честно ответить 422 вместо утечки 500 в VK.
         raise UnsupportedGoalError(exc.goal.value) from exc
+
+    senler_note: str | None = None
+    if parsed.goal is Goal.SENLER:
+        # Проверяем ДО любых побочных эффектов (Creative/Cabinet/кампания): явный
+        # отказ (`SenlerNotConnectedError`) обязан прервать запуск начисто.
+        senler_note = await _verify_senler(session, account_id, spec, cfg)
 
     # Продвижение готового поста обходится без креатива: объявлением служит сам пост,
     # и требовать от оператора картинку было бы выдумкой на пустом месте.
@@ -449,6 +504,8 @@ async def launch_from_creative(
     await session.flush()
 
     message = _outcome_message(status, is_live=is_live, fallback=fallback)
+    if senler_note:
+        message = f"{message}\n{senler_note}"
     if fallback:
         # Честная обратная связь: успех не имитируем (CLAUDE.md §7).
         await notify_operator(message)

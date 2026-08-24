@@ -27,7 +27,11 @@ from services.creative_intake import (
     intake_creative,
     launch_without_creative,
 )
-from services.launch_service import BriefNotFoundError, UnsupportedGoalError
+from services.launch_service import (
+    BriefNotFoundError,
+    SenlerNotConnectedError,
+    UnsupportedGoalError,
+)
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -267,6 +271,8 @@ async def launch_brief(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except SenlerNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail="senler_not_connected") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
@@ -312,6 +318,8 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except SenlerNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail="senler_not_connected") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

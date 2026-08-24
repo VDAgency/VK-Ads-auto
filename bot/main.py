@@ -21,6 +21,7 @@ from bot.handlers import (
     link_userbot,
     pending,
     send_brief,
+    senler,
     start,
     stats,
     stop_campaign,
@@ -56,6 +57,7 @@ def routers() -> list[Router]:
         link_userbot.router,
         link_kotbot.router,
         ad_accounts.router,
+        senler.router,
         surfaces.router,
         userbot_status.router,
         # Визитка для чужих — последней: ловит только не-операторские апдейты.

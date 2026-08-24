@@ -57,6 +57,17 @@ class AddAdAccount(StatesGroup):
     entering_token = State()  # ввод токена (сообщение сразу удаляется)
 
 
+class AddCommunityToken(StatesGroup):
+    """Сценарий «привязать токен сообщества для проверки Senler» (B2, spec 2026-08-24 §7).
+
+    Токен приходит сообщением, которое удаляется сразу после приёма — тот же
+    приём, что у `AddAdAccount.entering_token`.
+    """
+
+    entering_community_id = State()  # ввод числового id сообщества VK
+    entering_token = State()  # ввод токена сообщества (сообщение сразу удаляется)
+
+
 class LaunchCampaign(StatesGroup):
     """Сценарий запуска: кабинет → цель → креатив (spec 2026-07-27 §9).
 

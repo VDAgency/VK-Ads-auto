@@ -18,6 +18,7 @@ from core.api.v1 import (
     cabinets,
     campaigns,
     invites,
+    senler,
     stats,
 )
 
@@ -31,6 +32,7 @@ router.include_router(cabinet.router)
 router.include_router(cabinets.router)
 router.include_router(campaigns.router)
 router.include_router(invites.router)
+router.include_router(senler.router)
 router.include_router(stats.router)
 
 

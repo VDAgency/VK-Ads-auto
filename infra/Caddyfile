@@ -13,7 +13,9 @@ vk-ads-auto.ru, www.vk-ads-auto.ru {
 	# `/api/v1/ad-accounts*` здесь особенно важен: через него добавляются и
 	# удаляются токены доступа к рекламным кабинетам. Веб управляет ими через
 	# `/api/v1/admin/ad-accounts` — там своя авторизация (`require_admin`).
-	@operator_only path /api/v1/briefs/* /api/v1/invites /api/v1/cabinets /api/v1/cabinets/* /api/v1/campaigns/* /api/v1/stats/* /api/v1/ad-accounts /api/v1/ad-accounts/*
+	# `/api/v1/senler*` (B2) — тем же токеном обходится ad-accounts: сюда
+	# уходит токен доступа к сообществу.
+	@operator_only path /api/v1/briefs/* /api/v1/invites /api/v1/cabinets /api/v1/cabinets/* /api/v1/campaigns/* /api/v1/stats/* /api/v1/ad-accounts /api/v1/ad-accounts/* /api/v1/senler /api/v1/senler/*
 	handle @operator_only {
 		respond 404
 	}
