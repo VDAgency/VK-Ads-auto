@@ -60,6 +60,19 @@ export type BriefListItem = {
   brief_id: number | null;
 };
 
+/** Строка полного списка брифов (`status=all`) — включая пришедшие без
+ * приглашения (реферальная ссылка клиента или холодный трафик с лендинга),
+ * которых `pending`/`recent` не видят вовсе. */
+export type BriefAllItem = {
+  brief_id: number;
+  variant: string;
+  status: string;
+  source: string;
+  created_at: string;
+  client_id: number | null;
+  client_name: string | null;
+};
+
 export type CampaignRow = {
   id: number;
   brief_id: number;

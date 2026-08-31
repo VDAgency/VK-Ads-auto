@@ -2,18 +2,19 @@
 
 import { useState } from "react";
 
-import { VARIANT_RU, type BriefListItem, type Flash } from "@/lib/adminApi";
+import { VARIANT_RU, type BriefAllItem, type BriefListItem, type Flash } from "@/lib/adminApi";
+import { humanDate } from "@/lib/humanDate";
 import { useAdminResource } from "@/lib/useAdminResource";
 
 import { BriefCardView } from "../BriefCardView";
-import { Badge } from "../ui/Badge";
+import { Badge, StatusBadge } from "../ui/Badge";
 import { EmptyState } from "../ui/EmptyState";
 import { ErrorState } from "../ui/ErrorState";
 import { Row } from "../ui/Row";
 import { Segmented } from "../ui/Segmented";
 import { SkeletonRows } from "../ui/Skeleton";
 
-type BriefStatus = "pending" | "recent";
+type BriefStatus = "pending" | "recent" | "all";
 
 /** «3 дня» / «11 дней» — падеж важен, оператор читает это десятки раз в день. */
 function daysLabel(days: number): string {
@@ -72,6 +73,37 @@ function BriefList({
   );
 }
 
+function AllBriefList({ onOpenBrief }: { onOpenBrief: (id: number) => void }) {
+  const [state, retry] = useAdminResource<{ items: BriefAllItem[] }>("/briefs?status=all");
+
+  if (state.status === "loading") return <SkeletonRows />;
+  if (state.status === "error") return <ErrorState onRetry={retry} />;
+
+  const items = state.data.items;
+  if (!items.length) {
+    return (
+      <EmptyState
+        title="Брифов ещё не было."
+        description="Как только клиент заполнит анкету — по приглашению, по своей ссылке или с сайта — она появится здесь."
+      />
+    );
+  }
+
+  return (
+    <div className="adm-list">
+      {items.map((item) => (
+        <Row
+          key={item.brief_id}
+          title={item.client_name || "Без имени"}
+          subtitle={`${VARIANT_RU[item.variant] ?? item.variant} · ${humanDate(item.created_at)}`}
+          badge={<StatusBadge status={item.status} />}
+          onClick={() => onOpenBrief(item.brief_id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function BriefsScreen({
   briefId,
   onOpenBrief,
@@ -85,7 +117,12 @@ export function BriefsScreen({
   flash: Flash;
   onFlash: (flash: Flash) => void;
 }) {
-  const [status, setStatus] = useState<BriefStatus>("pending");
+  // По умолчанию — «Все»: раздел открывают, чтобы увидеть работу, а не пустой
+  // экран. «Ждём»/«Пришли» строятся из приглашений и часто пусты (ничего не
+  // просрочено или неделя тихая) — именно это и было дефектом: брифы по
+  // реферальной ссылке и с холодного трафика не попадали ни туда, ни туда, и
+  // оператор их попросту не видел. «Все» показывает всю ленту сразу.
+  const [status, setStatus] = useState<BriefStatus>("all");
 
   return (
     <>
@@ -98,12 +135,17 @@ export function BriefsScreen({
             onChange={setStatus}
             ariaLabel="Какие брифы показать"
             options={[
+              { value: "all", label: "Все" },
               { value: "pending", label: "Ждём" },
               { value: "recent", label: "Пришли" },
             ]}
           />
           <div style={{ marginTop: "1rem" }}>
-            <BriefList key={status} status={status} onOpenBrief={onOpenBrief} />
+            {status === "all" ? (
+              <AllBriefList onOpenBrief={onOpenBrief} />
+            ) : (
+              <BriefList key={status} status={status} onOpenBrief={onOpenBrief} />
+            )}
           </div>
         </>
       )}
