@@ -3,9 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api";
-import { adminFetch, STATUS_RU, VARIANT_RU, type BriefCard, type Flash } from "@/lib/adminApi";
+import { adminFetch, VARIANT_RU, type BriefCard, type Flash } from "@/lib/adminApi";
+import { useAdminResource } from "@/lib/useAdminResource";
 
-import { BackLink } from "./Lists";
+import { StatusBadge } from "./ui/Badge";
+import { BackLink } from "./ui/BackLink";
+import { ErrorState } from "./ui/ErrorState";
+import { SkeletonCard } from "./ui/Skeleton";
 
 /** Разбор правок формата `номер.значение`, по одной на строку. */
 function parseEdits(text: string): Record<string, string> {
@@ -50,6 +54,7 @@ export function BriefCardView({
   onBack: () => void;
   onFlash: (flash: Flash) => void;
 }) {
+  const [resource, retryResource] = useAdminResource<BriefCard>(`/briefs/${id}`, [id]);
   const [card, setCard] = useState<BriefCard | null>(null);
   const [showEdits, setShowEdits] = useState(false);
   const [showCreative, setShowCreative] = useState(false);
@@ -58,11 +63,13 @@ export function BriefCardView({
   const [body, setBody] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Держим карточку отдельным состоянием: после правок/загрузки креатива её
+  // обновляет ответ мутации напрямую, не дожидаясь нового GET через хук.
   useEffect(() => {
-    void adminFetch<BriefCard>(`/briefs/${id}`)
-      .then(setCard)
-      .catch(() => setCard(null));
-  }, [id]);
+    if (resource.status !== "ready") return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCard(resource.data);
+  }, [resource]);
 
   async function applyEdits() {
     const parsed = parseEdits(edits);
@@ -95,7 +102,8 @@ export function BriefCardView({
         method: "POST",
         body: JSON.stringify({}),
       });
-      onFlash({ text: data.message, ok: true });
+      // Запуск необратим — подтверждение остаётся на экране, не исчезает само.
+      onFlash({ text: data.message, ok: true, persistent: true });
       setCard(await adminFetch<BriefCard>(`/briefs/${id}`));
     } catch (error) {
       let reason = "Запустить не вышло.";
@@ -130,7 +138,8 @@ export function BriefCardView({
           body,
         }),
       });
-      onFlash({ text: data.message, ok: true });
+      // Отправка креатива запускает кампанию — необратимо, подтверждение остаётся.
+      onFlash({ text: data.message, ok: true, persistent: true });
       const fresh = await adminFetch<BriefCard>(`/briefs/${id}`);
       setCard(fresh);
     } catch (error) {
@@ -144,7 +153,23 @@ export function BriefCardView({
     }
   }
 
-  if (!card) return null;
+  if (resource.status === "loading" || !card) {
+    return (
+      <>
+        <BackLink label="← к брифам" onClick={onBack} />
+        <SkeletonCard />
+      </>
+    );
+  }
+
+  if (resource.status === "error") {
+    return (
+      <>
+        <BackLink label="← к брифам" onClick={onBack} />
+        <ErrorState message="Не удалось открыть бриф." onRetry={retryResource} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -155,17 +180,9 @@ export function BriefCardView({
           <h2>
             Бриф <span className="adm-mono">№{card.brief_id}</span>
           </h2>
-          <span className="adm-badge">{VARIANT_RU[card.variant] ?? card.variant}</span>
-          <span
-            className={card.status === "launched" ? "adm-badge adm-badge--accent" : "adm-badge"}
-          >
-            {STATUS_RU[card.status] ?? card.status}
-          </span>
-          <span
-            className={
-              card.has_creative ? "adm-badge adm-badge--accent" : "adm-badge--wait adm-badge"
-            }
-          >
+          <span className="badge">{VARIANT_RU[card.variant] ?? card.variant}</span>
+          <StatusBadge status={card.status} />
+          <span className={card.has_creative ? "badge badge--accent" : "badge badge--warn"}>
             {card.has_creative ? "креатив загружен" : "креатива нет"}
           </span>
         </div>
