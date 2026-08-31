@@ -30,6 +30,8 @@ from services.ad_accounts import (
     NoAdAccountError,
     TokenUnavailableError,
 )
+from services.brief_list import BriefListItem
+from services.brief_list import list_all as list_all_briefs
 from services.brief_parser import BriefValidationError, BriefVariant
 from services.brief_view import apply_brief_edits, get_brief_card
 from services.contact import ContactParseError, detect_contact
@@ -108,6 +110,23 @@ class AdminBriefsOut(BaseModel):
     items: list[AdminBriefItem]
 
 
+class AdminBriefAllItem(BaseModel):
+    """Строка полного списка брифов тенанта (`status=all`) — включая пришедшие
+    без приглашения (реферальная ссылка клиента или холодный трафик с лендинга)."""
+
+    brief_id: int
+    variant: str
+    status: str
+    source: str  # web | bot
+    created_at: datetime
+    client_id: int | None
+    client_name: str | None
+
+
+class AdminBriefsAllOut(BaseModel):
+    items: list[AdminBriefAllItem]
+
+
 class CampaignRow(BaseModel):
     id: int
     brief_id: int
@@ -154,6 +173,18 @@ def _brief_item(view: InviteView) -> AdminBriefItem:
         received_at=view.received_at,
         waiting_days=view.waiting_days,
         brief_id=view.brief_id,
+    )
+
+
+def _brief_all_item(item: BriefListItem) -> AdminBriefAllItem:
+    return AdminBriefAllItem(
+        brief_id=item.brief_id,
+        variant=item.variant,
+        status=item.status,
+        source=item.source,
+        created_at=item.created_at,
+        client_id=item.client_id,
+        client_name=item.client_name,
     )
 
 
@@ -213,13 +244,18 @@ async def client_detail(
 @router.get("/briefs")
 async def briefs(
     session: Annotated[AsyncSession, Depends(get_session)],
-    status: Annotated[Literal["pending", "recent"], Query()] = "recent",
-) -> AdminBriefsOut:
-    """Трекинг брифов: кого ждём (`pending`) или кто прислал за неделю (`recent`)."""
+    status: Annotated[Literal["pending", "recent", "all"], Query()] = "recent",
+) -> AdminBriefsOut | AdminBriefsAllOut:
+    """Трекинг брифов: кого ждём (`pending`), кто прислал за неделю (`recent`) —
+    оба варианта строятся из `BriefInvite` и не видят брифы без приглашения — или
+    все брифы тенанта (`all`, включая пришедшие по реферальной ссылке/с лендинга)."""
     if status == "pending":
         views = await list_pending(session, DEFAULT_ACCOUNT_ID)
-    else:
-        views = await list_recent(session, DEFAULT_ACCOUNT_ID)
+        return AdminBriefsOut(items=[_brief_item(v) for v in views])
+    if status == "all":
+        items = await list_all_briefs(session, DEFAULT_ACCOUNT_ID)
+        return AdminBriefsAllOut(items=[_brief_all_item(i) for i in items])
+    views = await list_recent(session, DEFAULT_ACCOUNT_ID)
     return AdminBriefsOut(items=[_brief_item(v) for v in views])
 
 

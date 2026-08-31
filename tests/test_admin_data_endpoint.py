@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import core.api.v1.admin_data as admin_data_module
@@ -11,7 +12,7 @@ import pytest
 from config.settings import Settings, get_settings
 from core.app import create_app
 from db.base import Base
-from db.models import Account, AdAccount, Brief, Campaign, Client
+from db.models import Account, AdAccount, Brief, BriefInvite, Campaign, Client, Operator
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from services.ad_accounts import AmbiguousAdAccountError, NoAdAccountError
@@ -310,3 +311,146 @@ def test_admin_creative_ambiguous_ad_account_is_409(monkeypatch: pytest.MonkeyPa
     code, body = asyncio.run(_with_admin(scenario))
     assert code == 409
     assert body["detail"] == "ambiguous_ad_account"
+
+
+def test_admin_briefs_all_includes_brief_without_invite() -> None:
+    """Найденный дефект: бриф без приглашения (реферальная ссылка/лендинг, PRODUCT.md)
+    не виден в pending/recent (источник там — `BriefInvite`), но должен попасть в
+    `status=all`. Базовый бриф id=1 из фикстуры уже без `invite_id` — используем его
+    и добавляем второй, чтобы явно проверить оба поля клиента."""
+
+    async def extra_setup(session: AsyncSession) -> None:
+        session.add(
+            Brief(
+                id=2,
+                account_id=1,
+                client_id=None,
+                variant="individual",
+                status="received",
+                source="web",
+                payload={},
+            )
+        )
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/briefs", params={"status": "all"})
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario, extra_setup=extra_setup))
+    ids = {item["brief_id"] for item in data["items"]}
+    assert {1, 2} <= ids
+    item2 = next(i for i in data["items"] if i["brief_id"] == 2)
+    assert item2["client_id"] is None
+    assert item2["client_name"] is None
+    assert item2["source"] == "web"
+    assert item2["status"] == "received"
+
+
+def test_admin_briefs_all_includes_invited_brief_without_duplication() -> None:
+    """Бриф, пришедший ПО приглашению, тоже виден в `all` — и ровно один раз."""
+
+    async def extra_setup(session: AsyncSession) -> None:
+        session.add(Operator(id=10, account_id=1, telegram_id=777, full_name="Оператор"))
+        session.add(
+            BriefInvite(
+                id=1,
+                account_id=1,
+                token="tok-invited",
+                variant="individual",
+                contact_type="email",
+                contact_value="c@example.com",
+                channel="email",
+                status="received",
+                operator_id=10,
+            )
+        )
+        session.add(
+            Brief(
+                id=3,
+                account_id=1,
+                client_id=None,
+                variant="individual",
+                status="received",
+                source="web",
+                payload={},
+                invite_id=1,
+            )
+        )
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/briefs", params={"status": "all"})
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario, extra_setup=extra_setup))
+    ids = [item["brief_id"] for item in data["items"]]
+    assert ids.count(3) == 1
+
+
+def test_admin_briefs_pending_and_recent_unaffected() -> None:
+    """Существующая семантика `pending`/`recent` не сломана расширением `status`."""
+
+    async def extra_setup(session: AsyncSession) -> None:
+        session.add(Operator(id=10, account_id=1, telegram_id=777, full_name="Оператор"))
+        session.add(
+            BriefInvite(
+                id=1,
+                account_id=1,
+                token="tok-pending",
+                variant="individual",
+                contact_type="email",
+                contact_value="pending@example.com",
+                channel="email",
+                status="sent",
+                operator_id=10,
+                delivered_at=datetime.now(UTC),
+            )
+        )
+
+    async def scenario(client: AsyncClient) -> tuple[dict[str, Any], dict[str, Any]]:
+        pending_resp = await client.get("/api/v1/admin/briefs", params={"status": "pending"})
+        recent_resp = await client.get("/api/v1/admin/briefs", params={"status": "recent"})
+        assert pending_resp.status_code == 200, pending_resp.text
+        assert recent_resp.status_code == 200, recent_resp.text
+        return pending_resp.json(), recent_resp.json()
+
+    pending, recent = asyncio.run(_with_admin(scenario, extra_setup=extra_setup))
+    assert len(pending["items"]) == 1
+    assert pending["items"][0]["contact"] == "pending@example.com"
+    # Бриф id=1 из базовой фикстуры без invite_id — в recent (источник BriefInvite) не виден.
+    assert recent["items"] == []
+
+
+def test_admin_briefs_all_requires_session() -> None:
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.get("/api/v1/admin/briefs", params={"status": "all"})
+        return resp.status_code
+
+    assert asyncio.run(_with_admin(scenario, authed=False)) == 401
+
+
+def test_admin_briefs_all_orders_newest_first() -> None:
+    async def extra_setup(session: AsyncSession) -> None:
+        session.add(
+            Brief(
+                id=2,
+                account_id=1,
+                client_id=None,
+                variant="community",
+                status="received",
+                source="bot",
+                payload={},
+            )
+        )
+
+    async def scenario(client: AsyncClient) -> list[int]:
+        resp = await client.get("/api/v1/admin/briefs", params={"status": "all"})
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return [item["brief_id"] for item in body["items"]]
+
+    ids = asyncio.run(_with_admin(scenario, extra_setup=extra_setup))
+    assert ids == [2, 1]

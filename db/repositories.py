@@ -99,6 +99,31 @@ async def count_briefs_by_client(session: AsyncSession, account_id: int) -> dict
     return {cid: cnt for cid, cnt in (await session.execute(stmt)).all() if cid is not None}
 
 
+async def list_briefs(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    limit: int = 50,
+) -> list[tuple[Brief, str | None]]:
+    """Все брифы тенанта, свежие сверху — не только пришедшие по приглашению.
+
+    В отличие от `list_pending_invites`/`list_recent_received_invites` (источник —
+    таблица `BriefInvite`), здесь источник — сама таблица `Brief`: бриф может
+    прийти без приглашения (реферальная ссылка от клиента или холодный трафик
+    с лендинга, PRODUCT.md §«Три источника трафика»), и такие брифы иначе нигде
+    не видны оператору. `outerjoin` к `Client` одним запросом — имя клиента для
+    строки списка без отдельного запроса на каждую строку (N+1).
+    """
+    stmt = (
+        select(Brief, Client.full_name)
+        .outerjoin(Client, Client.id == Brief.client_id)
+        .where(Brief.account_id == account_id)
+        .order_by(Brief.created_at.desc(), Brief.id.desc())
+        .limit(limit)
+    )
+    return [(brief, full_name) for brief, full_name in (await session.execute(stmt)).all()]
+
+
 async def list_campaigns(session: AsyncSession, account_id: int) -> list[Campaign]:
     """Все кампании тенанта (свежие первыми) — для админ-панели."""
     stmt = select(Campaign).where(Campaign.account_id == account_id).order_by(Campaign.id.desc())
