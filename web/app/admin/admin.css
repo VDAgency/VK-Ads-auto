@@ -1,10 +1,13 @@
 /* ==========================================================================
    admin.css — рабочий стол оператора.
 
-   Это внутренний инструмент, а не витрина: плотнее, шире и тише, чем
-   клиентские экраны. Прежде админка жила в колонке 720 px посреди окна 1440,
-   навигация была россыпью одинаковых кнопок в три ряда на телефоне, а «Выйти»
-   стояла в том же ряду, что рабочие разделы.
+   Каркас: шапка + постоянная левая навигация + рабочая область на всю
+   доступную ширину (`--w-wide`, до 84rem) — раньше контент жался в колонку
+   720px посреди окна 1440, а разделы переключались кнопками в потоке
+   (DESIGN.md называет это расточительством).
+
+   Пластика — эталон `LoginModal.tsx` (карточка, бейдж, кикер, кнопка во всю
+   ширину): экран входа и диалог смены пароля используют тот же язык.
    ========================================================================== */
 
 .adm-shell {
@@ -12,6 +15,9 @@
   background: var(--paper);
 }
 
+/* --------------------------------------------------------------------------
+   Шапка
+   -------------------------------------------------------------------------- */
 .adm-header {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
@@ -20,7 +26,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-3);
   max-width: var(--w-wide);
   margin: 0 auto;
   padding: var(--space-3) var(--space-6);
@@ -34,7 +41,6 @@
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--ink);
-  text-decoration: none;
 }
 .adm-brand__dot {
   color: var(--accent);
@@ -47,24 +53,104 @@
   letter-spacing: 0.08em;
   color: var(--muted);
 }
-/* Выход отделён от рабочих разделов: он не должен читаться как один из них. */
-.adm-logout {
-  min-height: 2.25rem;
-  padding-inline: var(--space-3);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--muted);
+.adm-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
-
-.adm-main {
-  max-width: var(--w-wide);
-  margin: 0 auto;
-  padding: var(--space-8) var(--space-6) var(--space-16);
+.adm-operator {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------
-   Плитки-счётчики. Теперь это фильтры, а не декорация: цифра «6 ждём брифы»
-   очевидно должна вести в соответствующий список.
+   Тело: постоянная левая навигация + рабочая область
+   -------------------------------------------------------------------------- */
+.adm-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  max-width: var(--w-wide);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6) var(--space-16);
+}
+
+.adm-sidenav {
+  flex: 0 0 12rem;
+  position: sticky;
+  top: var(--space-6);
+}
+.adm-sidenav ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.adm-sidenav__link {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem; /* 44px — тач-таргет */
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .adm-sidenav__link:hover {
+    background: var(--surface-sunk);
+    color: var(--ink);
+  }
+}
+.adm-sidenav__link.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.adm-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.adm-page-title {
+  margin: 0 0 var(--space-6);
+  font-size: var(--fs-2xl);
+}
+/* Заголовок раздела принимает программный фокус при смене раздела (переход
+   по левой навигации) — обычный контур фокуса здесь не нужен: сюда не
+   попадают табом, а только из скрипта. */
+.adm-page-title:focus {
+  outline: none;
+}
+.adm-page-title:focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+@media (max-width: 60rem) {
+  .adm-body {
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .adm-sidenav {
+    position: static;
+    flex-basis: auto;
+    width: 100%;
+    overflow-x: auto;
+  }
+  .adm-sidenav ul {
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Плитки-счётчики (Обзор)
    -------------------------------------------------------------------------- */
 .adm-tiles {
   display: grid;
@@ -103,60 +189,23 @@
     border-color: var(--ink);
   }
 }
-.adm-tile.is-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
 .adm-tile.is-alert b {
   color: var(--warn);
 }
 
 /* --------------------------------------------------------------------------
-   Навигация разделов
+   Панель действий (поиск, кнопки над списком)
    -------------------------------------------------------------------------- */
-.adm-nav {
+.adm-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  margin-bottom: var(--space-6);
-  background: var(--surface-sunk);
-  border-radius: var(--radius);
-}
-.adm-nav__btn {
-  min-height: 2.5rem;
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    background-color var(--dur) var(--ease-out),
-    color var(--dur) var(--ease-out);
-}
-@media (hover: hover) and (pointer: fine) {
-  .adm-nav__btn:hover {
-    color: var(--ink);
-  }
-}
-.adm-nav__btn.is-active {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 1px 3px rgba(23, 21, 18, 0.1);
-}
-
-/* --------------------------------------------------------------------------
-   Поиск
-   -------------------------------------------------------------------------- */
-.adm-search {
-  display: block;
-  width: 100%;
-  max-width: 26rem;
+  align-items: center;
+  gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+.adm-search {
+  flex: 1 1 20rem;
+  max-width: 26rem;
   font-family: inherit;
   font-size: var(--fs-sm);
   color: var(--ink);
@@ -164,7 +213,14 @@
   border: 1px solid var(--line-input);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-4);
-  min-height: 2.5rem;
+  min-height: 2.75rem;
+}
+
+.adm-nav--actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
 /* --------------------------------------------------------------------------
@@ -180,6 +236,7 @@
   justify-content: space-between;
   gap: var(--space-4);
   width: 100%;
+  min-height: 2.75rem;
   padding: var(--space-4) var(--space-5);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -199,12 +256,19 @@
     background: var(--surface-sunk);
   }
 }
+/* Строка без действия (карточка кабинета, «ждём» без ссылки открыть) — блок,
+   не кнопка: нефункциональный фокусируемый элемент сам по себе дефект. */
+.adm-row--static {
+  cursor: default;
+}
+.adm-row--static:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
 .adm-row__main {
   min-width: 0;
   flex: 1 1 auto;
 }
-/* Блочные: инлайновые span склеивали заголовок с подписью в одну строку и
-   раздували минимальную ширину строки, из-за чего страница уезжала вбок. */
 .adm-row__title {
   display: block;
   font-weight: 600;
@@ -224,34 +288,77 @@
   flex-shrink: 0;
 }
 
-.adm-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
+/* --------------------------------------------------------------------------
+   Загрузка — скелет повторяет геометрию строки/плитки, не спиннер по центру
+   (spec 2026-08-31 §7). Блоки пульсируют синхронно — списки не анимируются
+   построчно (DESIGN.md §9).
+   -------------------------------------------------------------------------- */
+.adm-skel {
+  display: inline-block;
+  border-radius: var(--radius-sm);
   background: var(--surface-sunk);
-  border: 1px solid var(--line);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  color: var(--ink);
-  white-space: nowrap;
+  animation: adm-skel-pulse 1.4s var(--ease-in-out) infinite;
 }
-.adm-badge--accent {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--accent-strong);
+@keyframes adm-skel-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
 }
-/* Сколько дней клиент ждёт. Данные приходили с сервера и не выводились —
-   оператору критично видеть тех, кто ждёт долго. */
-.adm-badge--wait {
-  background: #f7ece4;
-  border-color: transparent;
-  color: var(--warn);
-  font-family: var(--font-mono);
+.adm-row--skel {
+  cursor: default;
+}
+.adm-row--skel:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.adm-tile--skel {
+  cursor: default;
 }
 
 /* --------------------------------------------------------------------------
-   Карточка брифа
+   Пусто / ошибка
+   -------------------------------------------------------------------------- */
+.adm-empty {
+  padding: var(--space-8);
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--line-input);
+  border-radius: var(--radius);
+}
+.adm-empty__title {
+  margin: 0 0 var(--space-1);
+  font-weight: 600;
+  color: var(--ink);
+}
+.adm-empty__desc {
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.adm-empty__title:last-child,
+.adm-empty__desc:last-child {
+  margin-bottom: 0;
+}
+
+.adm-error {
+  padding: var(--space-6);
+  text-align: center;
+  background: #fdf3f3;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+}
+.adm-error__text {
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   Карточка (бриф, форма добавления кабинета)
    -------------------------------------------------------------------------- */
 .adm-card {
   background: var(--surface);
@@ -277,6 +384,15 @@
   font-size: var(--fs-sm);
   color: var(--muted);
 }
+/* Площадка, как её понял разбор брифа: ошибка должна быть видна до запуска. */
+.adm-card__surface {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--accent-strong);
+}
 
 .adm-back {
   display: inline-flex;
@@ -299,9 +415,8 @@
   }
 }
 
-/* Поля брифа таблицей. Прежде это был сплошной список строк одного веса, и
-   номер — рабочий инструмент, по нему идут правки `номер.значение` — терялся
-   в тексте. */
+/* Поля брифа таблицей: номер — рабочий инструмент, по нему идут правки
+   `номер.значение` в боте, и он обязан находиться взглядом. */
 .adm-fields {
   display: grid;
   gap: 0;
@@ -377,34 +492,183 @@
   resize: vertical;
 }
 
-.adm-empty {
-  padding: var(--space-8);
-  text-align: center;
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  background: var(--surface);
-  border: 1px dashed var(--line-input);
-  border-radius: var(--radius);
+/* Номер брифа моноширинным: он же используется в боте и в письмах. */
+.adm-mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
-   Экран «вход только из бота»
+   Поле пароля (вход, смена пароля) — глаз показать/скрыть, как в LoginModal.
    -------------------------------------------------------------------------- */
-.adm-gate {
-  max-width: 34rem;
-  margin: var(--space-20) auto;
-  padding: var(--space-8);
+.adm-pw {
+  position: relative;
+}
+.adm-pw input {
+  padding-right: 3rem;
+}
+.adm-pw__eye {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .adm-pw__eye:hover {
+    color: var(--accent-strong);
+    background: var(--surface-sunk);
+  }
+}
+.adm-pw__eye.is-on {
+  color: var(--accent-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Экран входа — пластика LoginModal, но во весь экран (пока нет сессии).
+   -------------------------------------------------------------------------- */
+.adm-auth {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: var(--space-6);
+}
+.adm-auth__card {
+  width: 100%;
+  max-width: 26rem;
+  padding: var(--space-8) var(--space-6) var(--space-6);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-lift);
   text-align: center;
+}
+.adm-auth__badge {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 auto var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+.adm-auth__kicker {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: var(--space-2);
+}
+.adm-auth__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-xl);
+}
+.adm-auth__sub {
+  margin: 0 0 var(--space-6);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.adm-auth__card form {
+  text-align: left;
+}
+.adm-auth__error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: #f8e9e9;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+.adm-auth__submit {
+  width: 100%;
+}
+.adm-auth__hint {
+  margin: var(--space-5) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   Диалог смены пароля — тот же язык, что у экрана входа, поверх содержимого.
+   -------------------------------------------------------------------------- */
+.adm-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+.adm-dialog__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(23, 21, 18, 0.45);
+}
+.adm-dialog__card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 26rem;
+  padding: var(--space-8) var(--space-6) var(--space-6);
+  background: var(--surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lift);
+}
+.adm-dialog__close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .adm-dialog__close:hover {
+    background: var(--surface-sunk);
+    color: var(--ink);
+  }
+}
+.adm-dialog__head {
+  margin-bottom: var(--space-5);
+}
+.adm-dialog__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-xl);
+}
+.adm-dialog__sub {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.adm-dialog__submit {
+  width: 100%;
+  margin-top: var(--space-2);
 }
 
 @media (max-width: 48rem) {
-  .adm-main {
-    padding: var(--space-5) var(--space-4) var(--space-12);
-  }
   .adm-field {
     grid-template-columns: 2rem minmax(0, 1fr);
     row-gap: var(--space-1);
@@ -416,59 +680,4 @@
     flex-direction: column;
     align-items: flex-start;
   }
-}
-
-/* Номер брифа моноширинным: он же используется в боте и в письмах. */
-.adm-mono {
-  font-family: var(--font-mono);
-  font-weight: 600;
-}
-
-/* Карточка формы добавления кабинета и статическая строка списка.
-   `.adm-row` рассчитана на клик по всей строке; у кабинетов кликают кнопки
-   внутри, поэтому курсор и подсветку по наведению снимаем. */
-.adm-card {
-  padding: 14px;
-  border: 1px solid var(--line, #e3e7ee);
-  border-radius: 10px;
-  background: var(--surface, #fff);
-  margin-bottom: 12px;
-}
-
-.adm-row--static {
-  cursor: default;
-  align-items: center;
-}
-
-.adm-row--static:hover {
-  border-color: var(--line, #e3e7ee);
-}
-
-/* Площадка, как её понял разбор брифа: ошибка должна быть видна до запуска. */
-.adm-card__surface {
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--accent-soft);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
-  color: var(--accent-strong);
-}
-
-/* Строка-карточка без действия: используется списком рекламных кабинетов. */
-.adm-row--static {
-  display: block;
-  cursor: default;
-}
-.adm-row--static:hover {
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-/* Панель действий над списком кабинетов: обычный ряд кнопок, а не сегменты. */
-.adm-nav--actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: 0;
-  background: none;
 }
