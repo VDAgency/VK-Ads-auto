@@ -60,10 +60,8 @@ class CommunityTokenOut(BaseModel):
     reason: str
 
 
-@router.post("/community-token", status_code=201)
-async def post_community_token(
-    payload: CommunityTokenIn,
-    session: Annotated[AsyncSession, Depends(get_session)],
+async def create_community_token_response(
+    session: AsyncSession, payload: CommunityTokenIn
 ) -> CommunityTokenOut:
     """Опознать сообщество по токену, сохранить токен, сразу проверить Senler.
 
@@ -77,6 +75,8 @@ async def post_community_token(
        запуск кампании проверит подключение сам,
        `services.launch_service._verify_senler`), а оператор получает честный
        статус вместо утечки 500.
+
+    Общая часть для операторского эндпоинта и веб-админки.
     """
     try:
         identity = await fetch_own_community(payload.token)
@@ -114,6 +114,38 @@ async def post_community_token(
     )
 
 
+async def delete_community_token_response(session: AsyncSession, reference: str) -> None:
+    """Отвязать токен сообщества (снять устаревшую или ошибочную привязку).
+
+    `reference` — короткий адрес сообщества ИЛИ его числовой id, тем же
+    приёмом и приоритетом, что и поиск токена под запуск
+    (`db.community_tokens.find_decrypted_token`): цифры целиком — числовой id,
+    иначе — короткий адрес (регистр не важен). Оператор обычно знает адрес
+    (это то же, что в ссылке из брифа), а не числовой id сообщества.
+
+    Бросает `HTTPException(404, "not_found")` — активной привязки для этого
+    сообщества не было. Общая часть для операторского эндпоинта и веб-админки.
+    """
+    ref = reference.strip()
+    community_id = ref if ref.isdigit() else None
+    screen_name = None if community_id else ref.lower()
+    removed = await delete_community_token(
+        session, DEFAULT_ACCOUNT_ID, community_id=community_id, screen_name=screen_name
+    )
+    if removed is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    await session.commit()
+
+
+@router.post("/community-token", status_code=201)
+async def post_community_token(
+    payload: CommunityTokenIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CommunityTokenOut:
+    """Опознать сообщество по токену, сохранить токен, сразу проверить Senler."""
+    return await create_community_token_response(session, payload)
+
+
 @router.delete("/community-token", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_community_token_endpoint(
     reference: Annotated[str, Query(min_length=1, max_length=64)],
@@ -126,24 +158,8 @@ async def delete_community_token_endpoint(
     как правкой базы руками (ревью 2026-08-24, дефект 3). Это и была причина,
     по которой дефект 1 (аномалия с двумя активными токенами на один короткий
     адрес) некому было бы исправить в проде.
-
-    `reference` — короткий адрес сообщества ИЛИ его числовой id, тем же
-    приёмом и приоритетом, что и поиск токена под запуск
-    (`db.community_tokens.find_decrypted_token`): цифры целиком — числовой id,
-    иначе — короткий адрес (регистр не важен). Оператор обычно знает адрес
-    (это то же, что в ссылке из брифа), а не числовой id сообщества.
-
-    404 `not_found` — активной привязки для этого сообщества не было.
     """
-    ref = reference.strip()
-    community_id = ref if ref.isdigit() else None
-    screen_name = None if community_id else ref.lower()
-    removed = await delete_community_token(
-        session, DEFAULT_ACCOUNT_ID, community_id=community_id, screen_name=screen_name
-    )
-    if removed is None:
-        raise HTTPException(status_code=404, detail="not_found")
-    await session.commit()
+    await delete_community_token_response(session, reference)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

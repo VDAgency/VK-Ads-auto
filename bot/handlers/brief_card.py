@@ -24,7 +24,6 @@ from bot.api_client import (
     CreativeRejected,
 )
 from bot.handlers.creative import (
-    GOAL_LABELS,
     create_cabinet_or_report,
     offer_cabinet_creation,
     render_launch_confirmation,
@@ -112,24 +111,19 @@ async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int
         await message.answer(result.message)
 
 
-# Продвижение готового поста, клипа или трека всегда идёт под целью «подписчики»:
-# ни одна площадка без креатива не относится к лид-форме/сообщениям/Senler
-# (services/goals.py:goal_for_target_type — этим трём целям отвечают только свои
-# явные target_type; пост/клип/музыка используют цель «подписчики» по умолчанию).
-# Бот — тонкий клиент и не разбирает бриф сам (CLAUDE.md §1.3), поэтому опирается
-# на это правило локально, а не запрашивает цель у оператора, как при загрузке
-# креатива (`bot/handlers/creative.py`).
-_NO_CREATIVE_GOAL_LABEL = GOAL_LABELS["subscribers"]
-
-
 async def _show_launch_confirmation(
     message: Message, card: BriefCard, account: AdAccountItem
 ) -> None:
     """Показать карточку подтверждения запуска без креатива (Т3) — та же карточка,
     что и в сценарии с креативом (`bot/handlers/creative.py:render_launch_confirmation`).
-    Запуск происходит только по нажатию кнопки на этой карточке."""
+    Запуск происходит только по нажатию кнопки на этой карточке.
+
+    Цель («Подписчики» — продвижение готового поста, клипа или трека всегда идёт
+    под ней) считает ядро и отдаёт готовым названием в `card.launch_goal_title`
+    (`services.goals.NO_CREATIVE_GOAL`); бот бриф сам не разбирает (CLAUDE.md §1.3).
+    """
     text = (
-        render_launch_confirmation(card, account, _NO_CREATIVE_GOAL_LABEL)
+        render_launch_confirmation(card, account, card.launch_goal_title)
         + "\n\nНажмите «🚀 Запустить», чтобы кампания без креатива ушла в VK."
     )
     await message.answer(
@@ -174,7 +168,7 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
-    if await offer_cabinet_creation(message, card, accounts, action="nocre"):
+    if await offer_cabinet_creation(message, card, action="nocre"):
         # Карточка создания кабинета показана (C1) — ждём решение оператора
         # (`cabcreate:nocre:*`/`cabcreate_skip:nocre:*` ниже).
         await callback.answer()

@@ -73,9 +73,12 @@ def test_instruction_page_served() -> None:
     response = client.get("/instrukciya-vk-cabinet.html")
     assert response.status_code == 200
     # Ключевые ориентиры инструкции по созданию кабинета VK Реклама.
-    assert "ID кабинета" in response.text
+    assert "Создайте новый кабинет" in response.text
     assert "Рекламодатель" in response.text
     assert "ads.vk.ru" in response.text
+    # Поле «ID кабинета VK Реклама» убрано из брифа 2026-08-19, и инструкция больше
+    # не должна вести клиента к нему: шаг с копированием ID приводил в тупик.
+    assert "ID кабинета" not in response.text
 
 
 def test_health_still_works_with_static_mount() -> None:
@@ -155,7 +158,7 @@ def test_landing_has_login_modal() -> None:
     assert 'role="dialog"' in body
     assert "data-open-login" in body  # ссылки открывают модалку
     assert "form-field" in body  # полноширинные поля ввода
-    assert "data-login-mode" in body  # сегментный переключатель способов входа
+    assert "seg__btn" in body  # сегментный переключатель способов входа
     assert "data-toggle-password" in body  # показать/скрыть пароль
     assert 'id="lm-email"' in body  # поле входа по паролю
     assert 'id="lm-forgot-email"' in body  # поле входа по ссылке на почту
@@ -168,30 +171,22 @@ def test_landing_css_has_modal_styles() -> None:
     css = page_css(client, "/")
     assert ".lp-modal" in css
     assert "backdrop-filter" in css  # стеклянное затемнение
-    assert ".lp-seg" in css  # сегментный переключатель
+    assert ".seg" in css  # сегментный переключатель (общий компонент, styles.css)
     assert ".lp-eye" in css  # кнопка показа пароля
 
 
-def test_admin_page_served_with_sections() -> None:
+def test_admin_page_served_with_login_screen() -> None:
     client = TestClient(create_app())
     resp = client.get("/admin.html")
     assert resp.status_code == 200
     body = resp.text
-    # Оболочка админки: экран «нужен вход» и операторская навигация.
-    # Экраны внутри (карточка брифа с правками и загрузкой креатива) рендерятся
-    # только после выбора брифа, поэтому в статике их нет — как и вызовов
-    # /api/v1/admin/*, уехавших в бандл. Проверяются прогоном поведения (§7).
-    assert "Вход только из бота" in body
-    assert "/admin" in body  # подсказка «команда /admin в боте»
-    assert "Отправить бриф" in body  # веб-отправка брифа клиенту
-    assert "Клиенты" in body
-    assert "Пришли брифы" in body
-    assert "Ждём брифы" in body
-    assert "Кампании" in body
-    assert "Рекламные кабинеты" in body  # управление кабинетами доступно и в вебе
-    assert "adm-gate" in body  # экран «вход только из бота»
-    assert "adm-nav__btn" in body  # навигация разделов
-    assert 'id="app"' in body
+    # В статике лежит только экран входа: разделы кабинета и их данные рисуются
+    # после авторизации, уже в браузере. Поэтому проверяем вход, а поведение
+    # разделов — прогоном в браузере (§7).
+    assert "Ваш номер в Telegram" in body  # вход по паролю
+    assert "Пароль" in body
+    assert "/set_password" in body  # подсказка, где взять пароль
+    assert "панель оператора" in body.lower()  # операторский режим шапки
 
 
 def test_admin_page_never_ships_a_token_field_value() -> None:

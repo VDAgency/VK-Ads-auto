@@ -110,6 +110,16 @@ class BriefCardOut(BaseModel):
     surface_title: str = ""
     # Нужен ли креатив: у продвижения готового поста его не спрашивают.
     surface_needs_creative: bool = True
+    # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
+    # каналы больше не решают это правило сами (CLAUDE.md §1.3), а показывают то,
+    # что уже посчитало ядро.
+    launch_goal_title: str = ""
+    # Состояние шага C1 «завести клиенту кабинет автоматически»
+    # (`services.agency_cabinets.cabinet_step_state`) — каналы не читают
+    # `vk_agency_confirmed` и не разбирают бриф сами.
+    cabinet_step_available: bool = False
+    cabinet_step_own_cabinet_exists: bool = False
+    cabinet_step_blocked_reason: str | None = None
 
 
 class BriefEditIn(BaseModel):
@@ -188,6 +198,10 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         campaign_status=view.campaign_status,
         surface_title=view.surface_title,
         surface_needs_creative=view.surface_needs_creative,
+        launch_goal_title=view.launch_goal_title,
+        cabinet_step_available=view.cabinet_step_available,
+        cabinet_step_own_cabinet_exists=view.cabinet_step_own_cabinet_exists,
+        cabinet_step_blocked_reason=view.cabinet_step_blocked_reason,
     )
 
 
@@ -255,23 +269,19 @@ async def edit_brief(
     return BriefEditOut(**card.model_dump(), unknown=unknown)
 
 
-@router.post("/{brief_id}/launch", status_code=201)
-async def launch_brief(
-    brief_id: int,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    data: LaunchIn | None = None,
+async def launch_brief_response(
+    session: AsyncSession, brief_id: int, ad_account_id: int | None
 ) -> CreativeLaunchOut:
-    """Запустить кампанию без креатива — для площадок, которым он не нужен.
+    """Запустить кампанию без креатива — общая часть для бота и веб-админки.
 
     Продвижение готового поста, клипа или трека: объявлением служит сам объект.
     Требовать при этом картинку было бы выдумкой, поэтому у таких брифов запуск
     отдельным действием.
 
-    `ad_account_id` — кабинет, выбранный оператором в боте (см. `LaunchIn`). Не
-    передан — ядро берёт кабинет по умолчанию и, если это невозможно (кабинетов
-    нет или их несколько), отвечает 409 вместо угадывания.
+    `ad_account_id` — кабинет, выбранный оператором. Не передан — ядро берёт
+    кабинет по умолчанию и, если это невозможно (кабинетов нет или их
+    несколько), отвечает 409 вместо угадывания.
     """
-    ad_account_id = data.ad_account_id if data is not None else None
     try:
         outcome = await launch_without_creative(
             session, DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id
@@ -302,6 +312,17 @@ async def launch_brief(
         campaign_id=outcome.campaign_id,
         message=outcome.message,
     )
+
+
+@router.post("/{brief_id}/launch", status_code=201)
+async def launch_brief(
+    brief_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    data: LaunchIn | None = None,
+) -> CreativeLaunchOut:
+    """Запустить кампанию без креатива — для площадок, которым он не нужен."""
+    ad_account_id = data.ad_account_id if data is not None else None
+    return await launch_brief_response(session, brief_id, ad_account_id)
 
 
 @router.post("/{brief_id}/creative", status_code=201)

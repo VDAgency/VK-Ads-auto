@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ApiError } from "@/lib/api";
-import { AD_ACCOUNT_ERRORS, adminFetch, HEALTH_RU, type AdAccount } from "@/lib/adminApi";
+import {
+  AD_ACCOUNT_ERRORS,
+  adminFetch,
+  HEALTH_RU,
+  isHealthBad,
+  type AdAccount,
+} from "@/lib/adminApi";
+import { useAdminResource } from "@/lib/useAdminResource";
+
+import { HealthBadge } from "./ui/Badge";
+import { EmptyState } from "./ui/EmptyState";
+import { ErrorState } from "./ui/ErrorState";
+import { SkeletonRows } from "./ui/Skeleton";
 
 /**
  * Рекламные кабинеты оператора: список, добавление, проверка, удаление.
@@ -15,7 +27,7 @@ import { AD_ACCOUNT_ERRORS, adminFetch, HEALTH_RU, type AdAccount } from "@/lib/
  * не задерживается: обратно ядро отдаёт только последние 4 символа.
  */
 export function AdAccounts() {
-  const [items, setItems] = useState<AdAccount[] | null>(null);
+  const [state, retry] = useAdminResource<{ items: AdAccount[] }>("/ad-accounts");
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -24,24 +36,6 @@ export function AdAccounts() {
   const [kind, setKind] = useState<"owner" | "third_party">("owner");
   const [advertiserName, setAdvertiserName] = useState("");
   const [advertiserInn, setAdvertiserInn] = useState("");
-
-  // Первичная загрузка — цепочкой промисов, как в остальных списках админки:
-  // синхронный setState внутри эффекта запрещён правилом react-hooks.
-  useEffect(() => {
-    void adminFetch<{ items: AdAccount[] }>("/ad-accounts")
-      .then((data) => setItems(data.items))
-      .catch(() => setItems([]));
-  }, []);
-
-  /** Перечитать список после добавления/проверки/удаления. */
-  async function load() {
-    try {
-      const data = await adminFetch<{ items: AdAccount[] }>("/ad-accounts");
-      setItems(data.items);
-    } catch {
-      setMsg({ text: "Не удалось обновить список кабинетов.", ok: false });
-    }
-  }
 
   async function add() {
     const value = token.trim();
@@ -66,7 +60,7 @@ export function AdAccounts() {
       setAdvertiserInn("");
       setShowForm(false);
       setMsg({ text: `✅ Кабинет «${created.title}» добавлен.`, ok: true });
-      await load();
+      retry();
     } catch (error) {
       const detail = error instanceof ApiError ? String(error.detail ?? "") : "";
       setMsg({
@@ -86,7 +80,7 @@ export function AdAccounts() {
         text: `Кабинет «${updated.title}»: ${HEALTH_RU[updated.health] ?? updated.health}`,
         ok: updated.health === "healthy",
       });
-      await load();
+      retry();
     } catch {
       setMsg({ text: "Не удалось проверить кабинет.", ok: false });
     } finally {
@@ -104,15 +98,13 @@ export function AdAccounts() {
     try {
       await adminFetch(`/ad-accounts/${account.id}`, { method: "DELETE" });
       setMsg({ text: "🗑 Кабинет удалён.", ok: true });
-      await load();
+      retry();
     } catch {
       setMsg({ text: "Не удалось удалить кабинет.", ok: false });
     } finally {
       setBusy(false);
     }
   }
-
-  if (items === null) return null;
 
   return (
     <>
@@ -206,51 +198,69 @@ export function AdAccounts() {
 
       {msg ? <div className={`result show ${msg.ok ? "ok" : "err"}`}>{msg.text}</div> : null}
 
-      {!items.length ? (
-        <p className="note">
-          Кабинетов пока нет. Пока не добавлен ни один, запускать кампании некуда.
-        </p>
+      {state.status === "loading" ? <SkeletonRows count={3} /> : null}
+      {state.status === "error" ? (
+        <ErrorState message="Не удалось загрузить кабинеты." onRetry={retry} />
+      ) : null}
+      {state.status === "ready" && !state.data.items.length ? (
+        <EmptyState
+          title="Кабинетов пока нет."
+          description="Пока не добавлен ни один, запускать кампании некуда."
+        />
       ) : null}
 
-      {items.map((account) => (
-        <div className="adm-row adm-row--static" key={account.id}>
-          <div>
-            <strong>{account.title}</strong>
-            <div className="muted">
-              id {account.external_id} · токен {account.token_tail ? `…${account.token_tail}` : "—"}{" "}
-              · {HEALTH_RU[account.health] ?? account.health}
-            </div>
-            {account.health_error ? <div className="muted">{account.health_error}</div> : null}
-            {account.advertiser_kind === "third_party" ? (
-              <div className="muted">
-                реклама третьего лица: {account.advertiser_name || "не указан"}
-                {account.advertiser_inn ? `, ИНН ${account.advertiser_inn}` : ""}
+      {state.status === "ready"
+        ? state.data.items.map((account) => (
+            <div className="adm-row adm-row--static" key={account.id}>
+              <div>
+                <strong>{account.title}</strong> <HealthBadge health={account.health} />
+                <div className="muted">
+                  id {account.external_id} · токен{" "}
+                  {account.token_tail ? `…${account.token_tail}` : "—"}
+                </div>
+                {/* Ошибку прошлой проверки показываем только при ДЕЙСТВИТЕЛЬНО плохом
+                    состоянии сейчас — иначе (найденный баг) бейдж говорит «жив», а
+                    строкой ниже висит текст неудачи, которую уже исправили. */}
+                {isHealthBad(account.health) && account.health_error ? (
+                  <div className="muted">{account.health_error}</div>
+                ) : null}
+                {account.advertiser_kind === "third_party" ? (
+                  <div className="muted">
+                    {account.advertiser_name ? (
+                      <>
+                        Реклама третьего лица: {account.advertiser_name}
+                        {account.advertiser_inn ? `, ИНН ${account.advertiser_inn}` : ""}
+                      </>
+                    ) : (
+                      "Реклама третьего лица — рекламодатель не указан."
+                    )}
+                  </div>
+                ) : null}
+                {account.balance_rub ? (
+                  <div className="muted">баланс {account.balance_rub} ₽</div>
+                ) : null}
               </div>
-            ) : null}
-            {account.balance_rub ? (
-              <div className="muted">баланс {account.balance_rub} ₽</div>
-            ) : null}
-          </div>
-          <div>
-            <button
-              className="btn"
-              type="button"
-              disabled={busy}
-              onClick={() => void check(account.id)}
-            >
-              Проверить
-            </button>{" "}
-            <button
-              className="btn"
-              type="button"
-              disabled={busy}
-              onClick={() => void remove(account)}
-            >
-              Удалить
-            </button>
-          </div>
-        </div>
-      ))}
+              <div>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void check(account.id)}
+                >
+                  Проверить
+                </button>{" "}
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void remove(account)}
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))
+        : null}
     </>
   );
 }

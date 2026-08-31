@@ -4,6 +4,11 @@
 → `POST /admin/authenticate` проверяет токен и выставляет session-cookie. Публичного
 эндпоинта «выдать ссылку» нет (минтить может только процесс с секретом — бот). Данные
 админки (клиенты/брифы/кампании) — в отдельных роутерах под `require_admin` (Фаза 8а W3).
+
+С spec 2026-08-31 добавлен возвратный вход паролем (`POST /admin/login`) и смена пароля
+(`POST /admin/password`, `services/operator_auth.py`) — по образцу клиентского кабинета
+(`core/api/v1/cabinet.py`). Важно: identity здесь — Telegram ID оператора (то же, что несёт
+admin-сессия), а не `Operator.id` из БД — не перепутать при обращении к сервису.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from config.settings import get_settings
+from db.session import get_session
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel
 from services.admin_auth import (
@@ -19,16 +25,32 @@ from services.admin_auth import (
     verify_admin_link,
     verify_admin_session,
 )
+from services.operator_auth import WeakPasswordError, authenticate_operator, set_operator_password
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.rate_limit import cabinet_auth_rate_limit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _SESSION_COOKIE = "admin_session"
+DEFAULT_ACCOUNT_ID = 1
 
 
 class AdminAuthIn(BaseModel):
     token: str
+
+
+class AdminLoginIn(BaseModel):
+    """Возвратный вход в админку: Telegram ID оператора + пароль."""
+
+    telegram_id: int
+    password: str
+
+
+class AdminPasswordIn(BaseModel):
+    """Установка/смена пароля оператора текущей admin-сессией."""
+
+    password: str
 
 
 class OkResponse(BaseModel):
@@ -56,12 +78,19 @@ def _set_admin_cookie(response: Response, operator_id: int) -> None:
 def require_admin(
     admin_session: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
 ) -> int:
-    """FastAPI-зависимость: вернуть operator_id из admin-сессии или 401."""
+    """FastAPI-зависимость: вернуть operator_id из admin-сессии или 401.
+
+    Подпись валидна — не значит «доступ есть навсегда»: отдельно перепроверяем
+    `is_operator` (config/settings.py), чтобы убранный из списка операторов ID
+    не мог продолжать ходить по старой, ещё не истёкшей сессии (spec 2026-08-31,
+    см. докстринг модуля `services/admin_auth`). Проверка по списку в памяти,
+    в БД не ходит.
+    """
     if admin_session:
         operator_id = verify_admin_session(
             admin_session, get_settings().secret_key.get_secret_value()
         )
-        if operator_id is not None:
+        if operator_id is not None and get_settings().is_operator(operator_id):
             return operator_id
     raise HTTPException(status_code=401, detail="admin_auth_required")
 
@@ -76,6 +105,28 @@ async def authenticate(data: AdminAuthIn, response: Response) -> OkResponse:
     return OkResponse()
 
 
+@router.post("/login", dependencies=[Depends(cabinet_auth_rate_limit)])
+async def login(
+    data: AdminLoginIn,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OkResponse:
+    """Возвратный вход в админку: Telegram ID + пароль → session-cookie.
+
+    `is_operator` проверяется здесь же, ДО/наравне с паролем: пароль в БД мог
+    пережить исключение оператора из `OPERATOR_TELEGRAM_IDS` (уволили — строку
+    никто не чистит). Отказ по любой из двух причин выглядит одинаково —
+    снаружи не должно быть видно, чем вызван 401.
+    """
+    ok = get_settings().is_operator(data.telegram_id) and await authenticate_operator(
+        session, DEFAULT_ACCOUNT_ID, data.telegram_id, data.password
+    )
+    if not ok:
+        raise HTTPException(status_code=401, detail="Не подходит номер или пароль")
+    _set_admin_cookie(response, data.telegram_id)
+    return OkResponse()
+
+
 @router.post("/logout")
 async def logout(response: Response) -> OkResponse:
     """Выход из админки — очистить session-cookie."""
@@ -87,3 +138,21 @@ async def logout(response: Response) -> OkResponse:
 async def me(operator_id: Annotated[int, Depends(require_admin)]) -> AdminMe:
     """Проверка сессии: вернуть operator_id (для дашборда)."""
     return AdminMe(operator_id=operator_id)
+
+
+@router.post("/password")
+async def set_password(
+    data: AdminPasswordIn,
+    operator_id: Annotated[int, Depends(require_admin)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OkResponse:
+    """Поставить/сменить пароль оператора текущей admin-сессии."""
+    try:
+        await set_operator_password(session, DEFAULT_ACCOUNT_ID, operator_id, data.password)
+    except WeakPasswordError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Пароль короче десяти символов — так его слишком просто подобрать",
+        ) from exc
+    await session.commit()
+    return OkResponse()

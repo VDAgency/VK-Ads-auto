@@ -137,6 +137,20 @@ a:hover {
   left: 0;
 }
 
+/* Видимо только для скринридера — объявления смены раздела/шага и подписи к
+   скелетам загрузки, которым не место в визуальной вёрстке. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .topbar {
   background: var(--ink-surface);
   color: var(--on-ink);
@@ -221,6 +235,22 @@ fieldset {
   color: var(--ink);
   margin-bottom: var(--space-2);
 }
+/* Одиночный radio/checkbox-выбор с подписью в той же строке (например, «Свою» /
+   «Третьего лица» в `AdAccounts.tsx`/`SendBrief.tsx`) — не заголовок поля, а
+   сама кликабельная опция: без этого правила общий стиль `label` выше сажал
+   переключатель на всю ширину, подпись съезжала отдельной строкой (найденный
+   баг), а тач-таргет был меньше кружка. */
+.field label:has(> input[type="radio"]),
+.field label:has(> input[type="checkbox"]),
+.form-field label:has(> input[type="radio"]),
+.form-field label:has(> input[type="checkbox"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  font-weight: 400;
+  cursor: pointer;
+}
 .field .hint {
   display: block;
   font-size: var(--fs-xs);
@@ -232,10 +262,15 @@ fieldset {
   margin-bottom: var(--space-4);
 }
 
-.field input,
+/* `:not([type="radio"]):not([type="checkbox"])` — иначе правило ловит и их:
+   `AdAccounts.tsx`/`SendBrief.tsx` кладут обычные radio-`<label>` прямо в
+   `fieldset.form-field`, и без исключения переключатель раздувался в
+   полноширинный блок 44px высотой, а подпись съезжала под него отдельной
+   строкой (найденный вживую баг). */
+.field input:not([type="radio"]):not([type="checkbox"]),
 .field select,
 .field textarea,
-.form-field input,
+.form-field input:not([type="radio"]):not([type="checkbox"]),
 .form-field select,
 .form-field textarea {
   width: 100%;
@@ -262,16 +297,16 @@ fieldset {
 .form-field input::placeholder {
   color: #68738a; /* 4.76:1 на белом */
 }
-.field input:hover,
+.field input:not([type="radio"]):not([type="checkbox"]):hover,
 .field select:hover,
 .field textarea:hover,
-.form-field input:hover {
+.form-field input:not([type="radio"]):not([type="checkbox"]):hover {
   border-color: var(--ink);
 }
-.field input:focus-visible,
+.field input:not([type="radio"]):not([type="checkbox"]):focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible,
-.form-field input:focus-visible,
+.form-field input:not([type="radio"]):not([type="checkbox"]):focus-visible,
 .form-field select:focus-visible,
 .form-field textarea:focus-visible {
   border-color: var(--accent);
@@ -396,6 +431,47 @@ fieldset {
   background: #f8e9e9;
   color: var(--danger);
   border-color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Сегментный переключатель — снят с модалки входа (LoginModal), которую
+   DESIGN.md называет эталоном пластики. Общий компонент: переключает способ
+   входа там и фильтр «Ждём / Пришли» в брифах админки.
+   -------------------------------------------------------------------------- */
+.seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-sunk);
+  border-radius: var(--radius);
+}
+.seg__btn {
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-3);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .seg__btn:hover {
+    color: var(--ink);
+  }
+}
+.seg__btn.is-active {
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: 0 2px 8px rgba(23, 21, 18, 0.08);
 }
 
 /* --------------------------------------------------------------------------

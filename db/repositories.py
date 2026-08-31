@@ -99,6 +99,31 @@ async def count_briefs_by_client(session: AsyncSession, account_id: int) -> dict
     return {cid: cnt for cid, cnt in (await session.execute(stmt)).all() if cid is not None}
 
 
+async def list_briefs(
+    session: AsyncSession,
+    account_id: int,
+    *,
+    limit: int = 50,
+) -> list[tuple[Brief, str | None]]:
+    """Все брифы тенанта, свежие сверху — не только пришедшие по приглашению.
+
+    В отличие от `list_pending_invites`/`list_recent_received_invites` (источник —
+    таблица `BriefInvite`), здесь источник — сама таблица `Brief`: бриф может
+    прийти без приглашения (реферальная ссылка от клиента или холодный трафик
+    с лендинга, PRODUCT.md §«Три источника трафика»), и такие брифы иначе нигде
+    не видны оператору. `outerjoin` к `Client` одним запросом — имя клиента для
+    строки списка без отдельного запроса на каждую строку (N+1).
+    """
+    stmt = (
+        select(Brief, Client.full_name)
+        .outerjoin(Client, Client.id == Brief.client_id)
+        .where(Brief.account_id == account_id)
+        .order_by(Brief.created_at.desc(), Brief.id.desc())
+        .limit(limit)
+    )
+    return [(brief, full_name) for brief, full_name in (await session.execute(stmt)).all()]
+
+
 async def list_campaigns(session: AsyncSession, account_id: int) -> list[Campaign]:
     """Все кампании тенанта (свежие первыми) — для админ-панели."""
     stmt = select(Campaign).where(Campaign.account_id == account_id).order_by(Campaign.id.desc())
@@ -214,6 +239,29 @@ async def set_client_password(
     client.password_set_at = datetime.now(UTC)
     await session.flush()
     return client
+
+
+async def find_operator_by_telegram_id(
+    session: AsyncSession, account_id: int, telegram_id: int
+) -> Operator | None:
+    """Найти оператора тенанта по telegram_id, не создавая (для входа по паролю).
+
+    В отличие от `get_or_create_operator` не заводит строку на неизвестный
+    telegram_id — иначе подбор ID при входе плодил бы мусорные записи операторов.
+    """
+    stmt = select(Operator).where(
+        Operator.account_id == account_id, Operator.telegram_id == telegram_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def set_operator_password_hash(
+    session: AsyncSession, operator: Operator, password_hash: str
+) -> None:
+    """Записать хеш пароля оператору и отметить время установки."""
+    operator.password_hash = password_hash
+    operator.password_set_at = datetime.now(UTC)
+    await session.flush()
 
 
 async def get_or_create_operator(

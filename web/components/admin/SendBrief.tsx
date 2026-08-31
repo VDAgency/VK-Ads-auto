@@ -51,15 +51,15 @@ export function SendBrief() {
   }
 
   return (
-    <div className="card" style={{ maxWidth: 520 }}>
-      <h3>Отправить бриф клиенту</h3>
+    <div className="card adm-card--narrow">
+      <h2>Отправить бриф клиенту</h2>
       <p className="note">
         Бот пришлёт клиенту ссылку на бриф. Веб-канал работает, даже если Telegram недоступен.
       </p>
 
-      <div className="form-field">
-        <label>Тип клиента</label>
-        <label style={{ fontWeight: "normal", marginRight: 16 }}>
+      <fieldset className="form-field">
+        <legend>Тип клиента</legend>
+        <label>
           <input
             type="radio"
             name="sb-variant"
@@ -68,8 +68,8 @@ export function SendBrief() {
             onChange={() => setVariant("individual")}
           />{" "}
           Физлицо
-        </label>
-        <label style={{ fontWeight: "normal" }}>
+        </label>{" "}
+        <label>
           <input
             type="radio"
             name="sb-variant"
@@ -79,7 +79,7 @@ export function SendBrief() {
           />{" "}
           Юрлицо / бизнес
         </label>
-      </div>
+      </fieldset>
 
       <div className="form-field">
         <label htmlFor="sb-contact">Контакт клиента (email, @telegram или телефон)</label>
@@ -99,7 +99,7 @@ export function SendBrief() {
         className={msg ? `result show ${msg.ok ? "ok" : "err"}` : "result"}
         id="sb-msg"
         hidden={!msg}
-        style={{ marginTop: 12, whiteSpace: "pre-wrap" }}
+        style={{ whiteSpace: "pre-wrap" }}
       >
         {msg?.text}
       </div>

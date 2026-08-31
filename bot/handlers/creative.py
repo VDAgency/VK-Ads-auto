@@ -16,9 +16,9 @@ from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from config.settings import get_settings
 from services.brief_parser import parse_budget
-from services.launch import daily_budget_rub_from_amount
+from services.goals import launch_goals
+from services.launch import balance_below_daily_budget
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -63,26 +63,27 @@ _NO_LIVE_CABINETS = (
     "Откройте /cabinets, проверьте кабинеты и обновите токен."
 )
 
-# Цели рекламы: (код, подпись, реализована ли). Нереализованные показываем
-# «серыми» — оператор видит план, но выбрать не может: кнопка ведёт на «goal:soon»,
-# а не на реальный код цели. «Сообщения» прошли боевой зонд 2026-08-23
-# (integrations.vk_surfaces.VK_MESSAGES.verified=True) и включены. «Заявка через
-# Senler» технически работает тем же пакетом VK, что и «Сообщения»
-# (integrations.vk_surfaces.VK_SENLER) и включена в services/launch_service.
-# SUPPORTED_GOALS — собственный боевой прогон под именем Senler тоже проведён
-# 2026-08-24 (Surface.verified=True): площадка больше не «скоро» ни здесь, ни в
-# каталоге площадок подписки.
+# Цели рекламы: код, подпись кнопки, реализована ли. Список и названия — из
+# services.goals.launch_goals() (единый источник для бота и веб-кабинета,
+# CLAUDE.md §1.3: список не должен жить в обработчике канала); эмодзи — уже
+# кнопочная разметка, чисто бот-презентация, поэтому остаётся здесь. Нереализованную
+# цель показываем «серой» — оператор видит план, но выбрать не может: кнопка ведёт
+# на «goal:soon», а не на реальный код цели.
+_GOAL_EMOJI: dict[str, str] = {
+    "subscribers": "👥 ",
+    "messages": "✉️ ",
+    "lead_form": "📝 ",
+    "senler": "🤖 ",
+}
 GOALS: list[tuple[str, str, bool]] = [
-    ("subscribers", "👥 Подписчики", True),
-    ("messages", "✉️ Сообщения в сообщество", True),
-    ("lead_form", "📝 Заявки — лид-форма", True),
-    ("senler", "🤖 Заявка через Senler", True),
+    (goal.code, _GOAL_EMOJI.get(goal.code, "") + goal.title, goal.implemented)
+    for goal in launch_goals()
 ]
 
 # Те же цели без эмодзи и без разметки кнопок — для карточки подтверждения запуска
 # (Т3, spec 2026-08-25-cabinet-client-binding-design §2: «цель по-русски»). Считаем
-# из GOALS, а не дублируем текстом, чтобы подписи не могли разойтись.
-GOAL_LABELS: dict[str, str] = {code: label.split(" ", 1)[1] for code, label, _ in GOALS}
+# из launch_goals(), а не дублируем текстом, чтобы подписи не могли разойтись.
+GOAL_LABELS: dict[str, str] = {goal.code: goal.title for goal in launch_goals()}
 
 
 # --- C1: предложение завести клиенту кабинет автоматически ---------------------
@@ -121,29 +122,6 @@ _CABINET_ALREADY_EXISTS = (
 )
 
 
-def _own_cabinet_missing(accounts: list[AdAccountItem], client_id: int | None) -> bool:
-    """Нет ли у клиента СВОЕГО кабинета среди уже показанных `accounts`.
-
-    `accounts` уже отфильтрован по клиенту (`list_ad_accounts(client_id=...)`):
-    общие плюс закреплённые за ним. «Свой» — закреплённый именно за этим
-    `client_id`, не общий. `client_id=None` — у брифа нет привязанного клиента
-    вовсе (не должно случаться в норме, см. `BriefCard.client_id`) — заводить
-    кабинет тогда решительно не для кого, шаг просто пропускаем.
-    """
-    if client_id is None:
-        return False
-    return not any(item.client_id == client_id for item in accounts)
-
-
-def _cabinet_prereq_issue(card: BriefCard) -> str | None:
-    """Чего не хватает, чтобы предложить автосоздание кабинета. `None` — всё есть."""
-    if not (card.client_name or "").strip():
-        return _NO_NAME_FOR_CABINET
-    if not _tax_id(card):
-        return _NO_TAX_ID_FOR_CABINET
-    return None
-
-
 def _variant_label(variant: str) -> str:
     """Тип лица рекламодателя для карточки создания кабинета — тот же корень
     формулировки, что `_VARIANT_RU` в `bot/handlers/brief_card.py:_render_card`."""
@@ -177,34 +155,33 @@ def render_cabinet_create_card(card: BriefCard) -> str:
     return "\n".join(lines)
 
 
-async def offer_cabinet_creation(
-    message: Message, card: BriefCard, accounts: list[AdAccountItem], *, action: str
-) -> bool:
+async def offer_cabinet_creation(message: Message, card: BriefCard, *, action: str) -> bool:
     """Показать шаг C1, если он нужен, перед выбором кабинета.
 
     `True` — показана карточка создания с кнопками, вызывающая сторона должна
     остановиться и ждать решение оператора (`cabcreate:*`/`cabcreate_skip:*`
-    ниже). `False` — шаг не нужен (у клиента уже есть свой кабинет) либо ИНН/имя
-    не хватает: тогда честно предупреждаем (`_cabinet_prereq_issue`), но поток
-    продолжается обычным выбором кабинета — строгий отказ здесь заблокировал бы
-    все запуски, пока агентский статус VK не подтверждён.
+    ниже). `False` — шаг не нужен (у клиента уже есть свой кабинет, флаг
+    `vk_agency_confirmed` выключен либо у брифа нет привязанного клиента) либо
+    ИНН/имя не хватает: тогда честно предупреждаем, но поток продолжается
+    обычным выбором кабинета — строгий отказ здесь заблокировал бы все запуски,
+    пока агентский статус VK не подтверждён.
 
-    Ранний выход, если `vk_agency_confirmed` выключен (CLAUDE.md §1.4): бот
-    читает то же окружение, что и ядро (`config.settings.get_settings`), а
-    операция всё равно откажет `AgencyDisabledError`, если до неё дойти. Без
-    этого выхода шаг C1 показывался бы на каждом запуске — сегодня почти все
-    кабинеты общие (привязка к клиентам появилась совсем недавно), значит
-    практически весь трафик получал бы лишнюю карточку (или ложное
-    предупреждение про недостающий ИНН) вместо прежнего прямого перехода к
-    выбору кабинета (ревью ветки).
+    Все предусловия решает ядро (`card.cabinet_step_*`,
+    `services.agency_cabinets.cabinet_step_state`) — бот больше не читает
+    `vk_agency_confirmed` и не разбирает бриф сам (CLAUDE.md §1.3). Без этого
+    шаг C1 показывался бы на каждом запуске — сегодня почти все кабинеты общие
+    (привязка к клиентам появилась совсем недавно), значит практически весь
+    трафик получал бы лишнюю карточку (или ложное предупреждение про
+    недостающий ИНН) вместо прежнего прямого перехода к выбору кабинета
+    (ревью ветки).
     """
-    if not get_settings().vk_agency_confirmed:
+    if not card.cabinet_step_available or card.cabinet_step_own_cabinet_exists:
         return False
-    if not _own_cabinet_missing(accounts, card.client_id):
+    if card.cabinet_step_blocked_reason == "missing_name":
+        await message.answer(_NO_NAME_FOR_CABINET)
         return False
-    issue = _cabinet_prereq_issue(card)
-    if issue:
-        await message.answer(issue)
+    if card.cabinet_step_blocked_reason == "missing_tax_id":
+        await message.answer(_NO_TAX_ID_FOR_CABINET)
         return False
     await message.answer(
         render_cabinet_create_card(card),
@@ -223,14 +200,15 @@ async def create_cabinet_or_report(
     предложения остаётся в чате с кнопкой «Выбрать кабинет вручную» — повторное
     нажатие никуда не делось).
 
-    Перед вызовом ядра список кабинетов клиента запрашивается заново и
-    перепроверяется через `_own_cabinet_missing` (ревью ветки §4): клавиатура
-    после успеха из чата не убирается, а сама операция — три последовательных
-    запроса в VK, так что повторное нажатие вполне реально. Если кабинет у
-    клиента уже появился (с прошлого нажатия, которое успело завершиться), в
-    VK второй раз не идём — иначе завели бы второго клиента агентства с
-    отдельным токеном; вместо этого честно сообщаем и продолжаем с уже
-    существующим кабинетом, как будто он и был результатом этого нажатия.
+    Перед вызовом ядра бриф запрашивается заново, а «своего кабинета уже нет»
+    перепроверяется через свежий `card.cabinet_step_own_cabinet_exists`
+    (ревью ветки §4): клавиатура после успеха из чата не убирается, а сама
+    операция — три последовательных запроса в VK, так что повторное нажатие
+    вполне реально. Если кабинет у клиента уже появился (с прошлого нажатия,
+    которое успело завершиться), в VK второй раз не идём — иначе завели бы
+    второго клиента агентства с отдельным токеном; вместо этого честно
+    сообщаем и продолжаем с уже существующим кабинетом, как будто он и был
+    результатом этого нажатия.
     """
     try:
         card = await api_client.get_brief(brief_id)
@@ -241,12 +219,18 @@ async def create_cabinet_or_report(
         await message.answer(_UNAVAILABLE)
         return None
 
-    issue = _cabinet_prereq_issue(card)
-    if card.client_id is None or issue:
-        # Данные брифа изменились между показом карточки и нажатием кнопки
-        # (например, ИНН стёрли правкой) — честно останавливаемся, а не идём
-        # в ядро с заведомо отказным запросом.
-        await message.answer(issue or _UNAVAILABLE)
+    # Данные брифа изменились между показом карточки и нажатием кнопки
+    # (например, ИНН стёрли правкой, или у брифа вовсе пропал клиент) — честно
+    # останавливаемся, а не идём в ядро с заведомо отказным запросом. Причина —
+    # уже готовое решение ядра (`card.cabinet_step_blocked_reason`), бот сам
+    # бриф не перепроверяет (CLAUDE.md §1.3).
+    if card.client_id is None or card.cabinet_step_blocked_reason is not None:
+        if card.cabinet_step_blocked_reason == "missing_name":
+            await message.answer(_NO_NAME_FOR_CABINET)
+        elif card.cabinet_step_blocked_reason == "missing_tax_id":
+            await message.answer(_NO_TAX_ID_FOR_CABINET)
+        else:
+            await message.answer(_UNAVAILABLE)
         return None
 
     try:
@@ -254,7 +238,7 @@ async def create_cabinet_or_report(
     except CoreUnavailable:
         await message.answer(_UNAVAILABLE)
         return None
-    if not _own_cabinet_missing(precheck_accounts, card.client_id):
+    if card.cabinet_step_own_cabinet_exists:
         await message.answer(_CABINET_ALREADY_EXISTS)
         return card, precheck_accounts
 
@@ -318,7 +302,7 @@ async def start_creative(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-    if await offer_cabinet_creation(message, card, accounts, action="creative"):
+    if await offer_cabinet_creation(message, card, action="creative"):
         # Карточка создания кабинета показана (C1) — ждём решение оператора
         # (`cabcreate:creative:*`/`cabcreate_skip:creative:*` ниже).
         await callback.answer()
@@ -605,19 +589,6 @@ _BALANCE_WARNING = (
 )
 
 
-def _daily_budget_rub(card: BriefCard) -> float | None:
-    """Дневной бюджет из брифа (C2) — формула ровно одна на весь проект:
-    `services.launch.daily_budget_rub_from_amount` (ревью, «Важное» — раньше
-    здесь жила своя копия формулы, и это значило, что изменившееся округление
-    или знаменатель в `services.launch` тихо разошлись бы с предупреждением
-    здесь). Бот лишь разбирает сырую строку бюджета брифа
-    (`services.brief_parser.parse_budget`) — само деление на срок кампании
-    считает `services.launch`. `None` — бюджет не указан или «обсудим» (тогда
-    сравнивать не с чем, предупреждение не показываем)."""
-    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
-    return daily_budget_rub_from_amount(amount, needs_discussion)
-
-
 def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     """Строка баланса кабинета для карточки подтверждения запуска (C2).
 
@@ -625,6 +596,12 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     та же логика, что в /cabinets (`bot/handlers/ad_accounts.py:_account_line`).
     Предупреждаем, если баланса меньше дневного бюджета брифа, но НЕ блокируем
     запуск (план 2026-08-25, «Баланс» в таблице решений) — решение оператора.
+
+    Само правило сравнения — `services.launch.balance_below_daily_budget`
+    (перенос, ревью: раньше решение жило здесь же, локальной проверкой; теперь
+    оно одно на оба канала). Бот лишь разбирает сырую строку бюджета брифа
+    (`services.brief_parser.parse_budget`) — сравнение и деление на срок
+    кампании считает `services.launch`.
     """
     if not account.balance_rub:
         return None
@@ -633,8 +610,8 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     except ValueError:
         return None
     line = f"💳 Баланс кабинета: {_escape(account.balance_rub)} ₽"
-    daily_budget = _daily_budget_rub(card)
-    if daily_budget is not None and balance < daily_budget:
+    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
+    if balance_below_daily_budget(balance, amount, needs_discussion):
         line += "\n" + _BALANCE_WARNING
     return line
 

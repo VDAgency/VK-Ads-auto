@@ -21,9 +21,10 @@ from db.repositories import (
 from integrations.vk_surfaces import surface_for
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.agency_cabinets import cabinet_step_state
 from services.brief_fields import apply_edits, numbered
 from services.brief_parser import parse_target_type
-from services.goals import target_title
+from services.goals import NO_CREATIVE_GOAL, launch_goal_title, target_title
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,18 @@ class BriefCardView:
     # Нужен ли креатив этой площадке. Продвижение готового поста обходится без него,
     # и интерфейсы не должны просить у оператора картинку, которая никуда не пойдёт.
     surface_needs_creative: bool
+    # Название цели запуска без креатива (правило `services.goals.NO_CREATIVE_GOAL`:
+    # продвижение готового поста/клипа/трека всегда идёт под целью «подписчики»).
+    # Раньше это решал каждый канал сам локальной константой — теперь ядро отдаёт
+    # готовое название, чтобы каналы бриф не разбирали (CLAUDE.md §1.3).
+    launch_goal_title: str
+    # Состояние шага C1 «завести клиенту кабинет автоматически» (план
+    # 2026-08-25-agency-cabinets, волна C, `services.agency_cabinets.cabinet_step_state`) —
+    # каналы больше не читают `vk_agency_confirmed` и не разбирают бриф сами
+    # (CLAUDE.md §1.3), а показывают то, что уже решило ядро.
+    cabinet_step_available: bool = False
+    cabinet_step_own_cabinet_exists: bool = False
+    cabinet_step_blocked_reason: str | None = None
     # Числовой `Client.id` брифа (spec 2026-08-25-cabinet-client-binding-design §Т3) —
     # бот использует его, чтобы запросить кабинеты, пригодные именно этому клиенту
     # (`GET /ad-accounts?client_id=`), а не весь пул. В хвосте с дефолтом `None`, тот
@@ -77,6 +90,7 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
     ]
     creative = await get_creative_for_brief(session, account_id, brief.id)
     campaign = await get_latest_campaign_for_brief(session, account_id, brief.id)
+    cabinet_step = await cabinet_step_state(session, account_id, brief.id)
     return BriefCardView(
         brief_id=brief.id,
         variant=brief.variant,
@@ -90,6 +104,10 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         campaign_status=campaign.status if campaign is not None else None,
         surface_title=target_title(kind),
         surface_needs_creative=surface_for(kind).needs_creative,
+        launch_goal_title=launch_goal_title(NO_CREATIVE_GOAL),
+        cabinet_step_available=cabinet_step.available,
+        cabinet_step_own_cabinet_exists=cabinet_step.own_cabinet_exists,
+        cabinet_step_blocked_reason=cabinet_step.blocked_reason,
         client_id=brief.client_id,
     )
 
@@ -120,3 +138,31 @@ async def apply_brief_edits(
     await session.flush()
     view = await _build_view(session, account_id, brief)
     return view, unknown
+
+
+def field_value(card: BriefCardView, *labels: str) -> str:
+    """Значение первого поля карточки с одной из подписей (нужно там, где вариант
+    брифа individual/community расходится в написании одного и того же поля,
+    `services/brief_fields.py`); неизвестная подпись — пустая строка.
+
+    Публичная версия приватного `_field_value` бота (`bot/handlers/creative.py`):
+    оба места решают одну и ту же задачу над одной и той же `BriefCardView`, но
+    по соглашению проекта (см. `_advertiser_line` там же) такие мелкие view-хелперы
+    не импортируются между независимо владеемыми модулями канала и ядра — это
+    создало бы скрытую связь. Здесь — версия для сервисов ядра (`services.launch_service.
+    launch_preview`), которым нужен тот же разбор для карточки веб-предпросмотра.
+    """
+    for field in card.fields:
+        if field.label in labels:
+            return field.value
+    return ""
+
+
+def tax_id(card: BriefCardView) -> str:
+    """ИНН клиента из карточки брифа. Подпись поля разная у вариантов («ИНН» /
+    «ИНН / ОГРН / ОГРНИП», `services/brief_fields.py`) — обе начинаются с «ИНН».
+    Публичная версия приватного `_tax_id` бота — см. докстринг `field_value` выше."""
+    for field in card.fields:
+        if field.label.startswith("ИНН"):
+            return field.value
+    return ""

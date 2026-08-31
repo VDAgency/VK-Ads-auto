@@ -1,43 +1,63 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AdAccounts } from "@/components/admin/AdAccounts";
-import { BriefCardView } from "@/components/admin/BriefCardView";
-import { BriefList, CampaignList, ClientDetailView, ClientList } from "@/components/admin/Lists";
-import { SendBrief } from "@/components/admin/SendBrief";
-import { adminFetch, type Flash, type Overview } from "@/lib/adminApi";
+import { AdminShell } from "@/components/admin/AdminShell";
+import { ChangePasswordModal } from "@/components/admin/ChangePasswordModal";
+import { LoginScreen } from "@/components/admin/LoginScreen";
+import { BriefsScreen } from "@/components/admin/screens/BriefsScreen";
+import { CampaignsScreen } from "@/components/admin/screens/CampaignsScreen";
+import { ChannelsScreen } from "@/components/admin/screens/ChannelsScreen";
+import { ClientsScreen } from "@/components/admin/screens/ClientsScreen";
+import { OverviewScreen } from "@/components/admin/screens/OverviewScreen";
+import { adminFetch, onSessionExpired, type AdminMe, type Flash } from "@/lib/adminApi";
+import { parseRoute, routeHash, type Route } from "@/lib/adminRoute";
 
 import "./admin.css";
 
-/** Что показано в основной области. Прежний routeView, только типизированный. */
-type Screen =
-  | { kind: "send" }
-  | { kind: "clients" }
-  | { kind: "briefs"; status: "recent" | "pending" }
-  | { kind: "campaigns" }
-  | { kind: "adAccounts" }
-  | { kind: "client"; id: number }
-  | { kind: "brief"; id: number };
-
 type Auth = "checking" | "need" | "ok";
+
+/** Сколько показывать обратимое подтверждение, прежде чем убрать само
+ * (spec 2026-08-31 §7: «успех — короткое подтверждение, исчезающее само»). */
+const FLASH_AUTO_HIDE_MS = 4000;
 
 export default function AdminPage() {
   const [auth, setAuth] = useState<Auth>("checking");
-  const [authError, setAuthError] = useState("");
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [screen, setScreen] = useState<Screen>({ kind: "clients" });
+  const [operatorId, setOperatorId] = useState<number | null>(null);
+  // Показывается на экране входа — либо магик-линк не сработал, либо сессия
+  // закончилась и оператора вернуло сюда (см. подписку на `onSessionExpired` ниже).
+  const [loginNotice, setLoginNotice] = useState("");
+  const [route, setRoute] = useState<Route>({ screen: "overview" });
   const [flash, setFlash] = useState<Flash>(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   const enterApp = useCallback(async () => {
+    const me = await adminFetch<AdminMe>("/me");
+    setOperatorId(me.operator_id);
     setAuth("ok");
-    try {
-      setOverview(await adminFetch<Overview>("/overview"));
-    } catch {
-      // Плитки — не критично: без них панель остаётся работоспособной.
-    }
   }, []);
 
+  // Единообразная реакция на «сессия больше не действует» (spec: 401 от любого
+  // запроса `/api/v1/admin/*` — не только по сроку, но и если оператора убрали
+  // из списка на сервере). Реагируем только из состояния «ok»: на экране входа
+  // (пароль не подошёл, магик-линк истёк) это событие тоже долетает через тот
+  // же `adminFetch`, но там уже есть своё, более точное сообщение — не перебиваем.
+  const authRef = useRef(auth);
+  useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
+
+  useEffect(() => {
+    return onSessionExpired(() => {
+      if (authRef.current !== "ok") return;
+      setOperatorId(null);
+      setAuth("need");
+      setLoginNotice("Нужно войти заново — доступ пришлось подтвердить снова.");
+    });
+  }, []);
+
+  // Магик-линк из бота (`?token=`) продолжает работать как раньше: меняем его
+  // на сессию и убираем из адресной строки, чтобы не осталось в истории.
   useEffect(() => {
     async function init() {
       const token = new URLSearchParams(location.search).get("token");
@@ -48,18 +68,18 @@ export default function AdminPage() {
             method: "POST",
             body: JSON.stringify({ token }),
           });
-          // Убираем токен из URL и входим.
           history.replaceState(null, "", "/admin.html");
           await enterApp();
         } catch {
           setAuth("need");
-          setAuthError("Ссылка недействительна или истекла. Запросите новую в боте: /admin.");
+          setLoginNotice(
+            "Ссылка недействительна или истекла. Войдите по паролю или запросите новую в боте: /admin.",
+          );
         }
         return;
       }
 
       try {
-        await adminFetch("/me");
         await enterApp();
       } catch {
         setAuth("need");
@@ -69,9 +89,26 @@ export default function AdminPage() {
     void init();
   }, [enterApp]);
 
-  function go(next: Screen) {
-    setFlash(null);
-    setScreen(next);
+  // Раздел читается из hash при загрузке и при «назад»/«вперёд» браузера.
+  // Начальное состояние — фиксированный «overview»: `location` недоступен на
+  // этапе статического рендера, читать его можно только после монтирования.
+  useEffect(() => {
+    const applyHash = () => setRoute(parseRoute(location.hash));
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
+
+  // Обратимые подтверждения исчезают сами; необратимые (`persistent`) остаются
+  // до следующего действия оператора.
+  useEffect(() => {
+    if (!flash || !flash.ok || flash.persistent) return;
+    const timer = setTimeout(() => setFlash(null), FLASH_AUTO_HIDE_MS);
+    return () => clearTimeout(timer);
+  }, [flash]);
+
+  function navigate(hash: string) {
+    location.hash = hash;
   }
 
   async function logout() {
@@ -83,177 +120,43 @@ export default function AdminPage() {
     location.href = "/admin.html";
   }
 
-  /** Активен ли раздел — чтобы оператор видел, где находится. */
-  function isActive(kind: Screen["kind"], status?: "recent" | "pending") {
-    if (screen.kind !== kind) return false;
-    if (kind === "briefs" && screen.kind === "briefs") return screen.status === status;
-    return true;
+  if (auth !== "ok") {
+    return <LoginScreen notice={loginNotice} onLoggedIn={() => void enterApp()} />;
   }
 
   return (
-    <div className="adm-shell">
-      <header className="adm-header">
-        <div className="adm-header__inner">
-          <span className="adm-brand">
-            Ads<span className="adm-brand__dot">·</span>auto
-            <span className="adm-brand__role">панель оператора</span>
-          </span>
-          {auth === "ok" ? (
-            <button
-              className="btn btn--ghost adm-logout"
-              type="button"
-              onClick={() => void logout()}
-            >
-              Выйти
-            </button>
-          ) : null}
-        </div>
-      </header>
+    <>
+      <AdminShell
+        active={route.screen}
+        operatorId={operatorId as number}
+        onChangePassword={() => setShowChangePassword(true)}
+        onLogout={() => void logout()}
+      >
+        {route.screen === "overview" ? <OverviewScreen onNavigate={navigate} /> : null}
+        {route.screen === "clients" ? (
+          <ClientsScreen
+            clientId={route.id}
+            onOpenClient={(id) => navigate(routeHash.clients(id))}
+            onCloseClient={() => navigate(routeHash.clients())}
+            onOpenBrief={(id) => navigate(routeHash.briefs(id))}
+          />
+        ) : null}
+        {route.screen === "briefs" ? (
+          <BriefsScreen
+            briefId={route.id}
+            onOpenBrief={(id) => navigate(routeHash.briefs(id))}
+            onCloseBrief={() => navigate(routeHash.briefs())}
+            flash={flash}
+            onFlash={setFlash}
+          />
+        ) : null}
+        {route.screen === "campaigns" ? <CampaignsScreen /> : null}
+        {route.screen === "channels" ? <ChannelsScreen /> : null}
+      </AdminShell>
 
-      <main className="adm-main">
-        {/* Нужен вход */}
-        <section className="adm-gate" hidden={auth !== "need"}>
-          <div className="eyebrow">Админ-панель</div>
-          <h2>Вход только из бота</h2>
-          <p className="lead">
-            Откройте админку из Telegram-бота командой <strong>/admin</strong> — бот пришлёт ссылку
-            для входа. Она действует 15 минут.
-          </p>
-          <div className="result err" id="auth-error" hidden={!authError}>
-            {authError}
-          </div>
-        </section>
-
-        {/* Приложение */}
-        <section id="app" hidden={auth !== "ok"}>
-          <div className="adm-tiles" id="tiles">
-            {overview ? (
-              <>
-                <button
-                  className={`adm-tile${isActive("clients") ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => go({ kind: "clients" })}
-                >
-                  <b>{overview.clients}</b>
-                  <span>Клиенты</span>
-                </button>
-                <button
-                  className={`adm-tile${overview.pending > 0 ? " is-alert" : ""}${
-                    isActive("briefs", "pending") ? " is-active" : ""
-                  }`}
-                  type="button"
-                  onClick={() => go({ kind: "briefs", status: "pending" })}
-                >
-                  <b>{overview.pending}</b>
-                  <span>Ждём брифы</span>
-                </button>
-                <button
-                  className={`adm-tile${isActive("briefs", "recent") ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => go({ kind: "briefs", status: "recent" })}
-                >
-                  <b>{overview.recent}</b>
-                  <span>Пришли за неделю</span>
-                </button>
-                <button
-                  className={`adm-tile${isActive("campaigns") ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => go({ kind: "campaigns" })}
-                >
-                  <b>{overview.campaigns}</b>
-                  <span>Кампании</span>
-                </button>
-              </>
-            ) : null}
-          </div>
-
-          <div className="adm-nav">
-            <button
-              className={`adm-nav__btn${isActive("send") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "send" })}
-            >
-              Отправить бриф
-            </button>
-            <button
-              className={`adm-nav__btn${isActive("clients") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "clients" })}
-            >
-              Клиенты
-            </button>
-            <button
-              className={`adm-nav__btn${isActive("briefs", "recent") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "briefs", status: "recent" })}
-            >
-              Пришли брифы
-            </button>
-            <button
-              className={`adm-nav__btn${isActive("briefs", "pending") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "briefs", status: "pending" })}
-            >
-              Ждём брифы
-            </button>
-            <button
-              className={`adm-nav__btn${isActive("campaigns") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "campaigns" })}
-            >
-              Кампании
-            </button>
-            <button
-              className={`adm-nav__btn${isActive("adAccounts") ? " is-active" : ""}`}
-              type="button"
-              onClick={() => go({ kind: "adAccounts" })}
-            >
-              Рекламные кабинеты
-            </button>
-          </div>
-
-          <div id="list">
-            {auth === "ok" && screen.kind === "send" ? <SendBrief /> : null}
-            {auth === "ok" && screen.kind === "clients" ? (
-              <ClientList onOpenClient={(id) => go({ kind: "client", id })} />
-            ) : null}
-            {auth === "ok" && screen.kind === "briefs" ? (
-              <BriefList
-                key={screen.status}
-                status={screen.status}
-                onOpenBrief={(id) => go({ kind: "brief", id })}
-              />
-            ) : null}
-            {auth === "ok" && screen.kind === "campaigns" ? <CampaignList /> : null}
-            {auth === "ok" && screen.kind === "adAccounts" ? <AdAccounts /> : null}
-          </div>
-
-          <div id="detail">
-            {auth === "ok" && screen.kind === "client" ? (
-              <ClientDetailView
-                id={screen.id}
-                onBack={() => go({ kind: "clients" })}
-                onOpenBrief={(id) => go({ kind: "brief", id })}
-              />
-            ) : null}
-            {auth === "ok" && screen.kind === "brief" ? (
-              <BriefCardView
-                id={screen.id}
-                onBack={() => go({ kind: "briefs", status: "recent" })}
-                onFlash={setFlash}
-              />
-            ) : null}
-          </div>
-
-          <div
-            className={flash ? `result show ${flash.ok ? "ok" : "err"}` : "result"}
-            id="msg"
-            hidden={!flash}
-          >
-            {flash?.text}
-          </div>
-        </section>
-      </main>
-    </div>
+      {showChangePassword ? (
+        <ChangePasswordModal onClose={() => setShowChangePassword(false)} />
+      ) : null}
+    </>
   );
 }

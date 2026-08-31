@@ -29,10 +29,18 @@ class StatsSyncOut(BaseModel):
     results: dict[int, str]
 
 
-@router.post("/sync")
-async def sync(session: Annotated[AsyncSession, Depends(get_session)]) -> StatsSyncOut:
-    """Снять метрики и статусы активных кампаний, сохранить срезы."""
+async def sync_stats_response(session: AsyncSession) -> StatsSyncOut:
+    """Снять метрики и статусы активных кампаний, сохранить срезы.
+
+    Общая часть для операторского эндпоинта и веб-админки.
+    """
     results = await sync_campaign_stats(session, DEFAULT_ACCOUNT_ID)
     await session.commit()
     failed = sum(1 for outcome in results.values() if outcome != "ok")
     return StatsSyncOut(synced=len(results) - failed, failed=failed, results=results)
+
+
+@router.post("/sync")
+async def sync(session: Annotated[AsyncSession, Depends(get_session)]) -> StatsSyncOut:
+    """Снять метрики и статусы активных кампаний, сохранить срезы."""
+    return await sync_stats_response(session)

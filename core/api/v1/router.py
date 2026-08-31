@@ -12,7 +12,10 @@ from core.api.v1 import (
     ad_accounts,
     admin,
     admin_ad_accounts,
+    admin_campaigns,
+    admin_channels,
     admin_data,
+    admin_operations,
     briefs,
     cabinet,
     cabinets,
@@ -26,7 +29,10 @@ router = APIRouter(prefix="/api/v1", tags=["v1"])
 router.include_router(ad_accounts.router)
 router.include_router(admin.router)
 router.include_router(admin_ad_accounts.router)
+router.include_router(admin_campaigns.router)
+router.include_router(admin_channels.router)
 router.include_router(admin_data.router)
+router.include_router(admin_operations.router)
 router.include_router(briefs.router)
 router.include_router(cabinet.router)
 router.include_router(cabinets.router)

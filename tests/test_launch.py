@@ -4,6 +4,7 @@ from integrations.adapter import PlatformAdapter
 from services.launch import (
     DEFAULT_TERM_DAYS,
     LaunchResult,
+    balance_below_daily_budget,
     daily_budget_rub,
     daily_budget_rub_from_amount,
     launch_confirmation,
@@ -123,3 +124,27 @@ def test_daily_budget_rub_delegates_to_the_shared_formula() -> None:
     )
     assert daily_budget_rub(spec) == daily_budget_rub_from_amount(12345, False)
     assert daily_budget_rub(spec) == round(12345 / DEFAULT_TERM_DAYS, 2)
+
+
+# --- balance_below_daily_budget: предупреждение о балансе кабинета (C2) ----------
+#
+# Перенос из `bot/handlers/creative.py` (`_balance_line`) — сравнение баланса с
+# дневным бюджетом решало каждое сообщение бота само; теперь решение отдаётся
+# обоим каналам одной функцией.
+
+
+def test_balance_below_daily_budget_true_when_balance_is_lower() -> None:
+    assert balance_below_daily_budget(100.0, 30000, False) is True  # дневной = 1000.0
+
+
+def test_balance_below_daily_budget_false_when_balance_is_enough() -> None:
+    assert balance_below_daily_budget(5000.0, 30000, False) is False
+
+
+def test_balance_below_daily_budget_false_when_budget_needs_discussion() -> None:
+    """Бюджет «готов обсудить» — сравнивать не с чем, предупреждение не выдумываем."""
+    assert balance_below_daily_budget(1.0, 30000, True) is False
+
+
+def test_balance_below_daily_budget_false_without_amount() -> None:
+    assert balance_below_daily_budget(1.0, None, False) is False

@@ -411,6 +411,59 @@ def test_bot_and_web_see_the_same_accounts() -> None:
     asyncio.run(_with_api(scenario, authed=True))
 
 
+def test_admin_list_with_client_id_narrows_to_common_and_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Зеркало ведёт себя ровно как операторский оригинал (Пробел 1): общие плюс
+    закреплённые за этим клиентом, чужие закреплённые — не видны."""
+
+    async def scenario(client: AsyncClient) -> None:
+        await client.post("/api/v1/admin/ad-accounts", json=_body())  # общий
+
+        async def other_identity(token: str, **_: object) -> VkIdentity:
+            return VkIdentity("222", "b", "Клиентский", "active")
+
+        # Второй кабинет — с другим external_id, чтобы не словить duplicate_account.
+        monkeypatch.setattr(ad_accounts, "fetch_identity", other_identity)
+        bound = await client.post(
+            "/api/v1/admin/ad-accounts",
+            json=_body({"client_id": 100, "token": "another-token"}),
+        )
+        assert bound.status_code == 201, bound.text
+
+        for_owner = await client.get("/api/v1/admin/ad-accounts", params={"client_id": 100})
+        assert {a["external_id"] for a in for_owner.json()["items"]} == {"10000001", "222"}
+
+        for_other = await client.get("/api/v1/admin/ad-accounts", params={"client_id": 200})
+        assert {a["external_id"] for a in for_other.json()["items"]} == {"10000001"}
+
+    asyncio.run(_with_api(scenario, authed=True))
+
+
+def test_admin_list_without_client_id_returns_everything_as_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Без `client_id` зеркало не сужает список — прежнее поведение не сломано."""
+
+    async def scenario(client: AsyncClient) -> None:
+        await client.post("/api/v1/admin/ad-accounts", json=_body())
+
+        async def other_identity(token: str, **_: object) -> VkIdentity:
+            return VkIdentity("222", "b", "Клиентский", "active")
+
+        monkeypatch.setattr(ad_accounts, "fetch_identity", other_identity)
+        bound = await client.post(
+            "/api/v1/admin/ad-accounts",
+            json=_body({"client_id": 100, "token": "another-token"}),
+        )
+        assert bound.status_code == 201, bound.text
+
+        listed = await client.get("/api/v1/admin/ad-accounts")
+        assert {a["external_id"] for a in listed.json()["items"]} == {"10000001", "222"}
+
+    asyncio.run(_with_api(scenario, authed=True))
+
+
 # --- заведение клиенту кабинета через агентский API (B2/B3) -------------------
 
 _VK_CLIENT = VkAgencyClient(
@@ -628,3 +681,56 @@ def test_post_agency_cabinet_own_token_unavailable_after_retry_returns_503(
         assert resp.json()["detail"] == "vk_oauth_unavailable"
 
     asyncio.run(_with_api(scenario))
+
+
+# --- админское зеркало заведения кабинета (B2/B3) -----------------------------
+
+
+def test_admin_agency_cabinet_requires_admin_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post("/api/v1/admin/ad-accounts/agency-cabinets", json=_agency_body())
+        return resp.status_code
+
+    assert asyncio.run(_with_api(scenario, authed=False)) == 401
+
+
+def test_admin_agency_cabinet_mirrors_the_operator_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Веб обязан уметь ровно то же, что бот: тот же сервис, тот же результат."""
+    _mock_agency_settings(monkeypatch)
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", _fake_create_agency_client)
+
+    async def issue(*args: object, **kwargs: object) -> VkOAuthToken:
+        return _ISSUED_TOKEN
+
+    monkeypatch.setattr(agency_cabinets, "request_agency_client_token", issue)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/admin/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 201, resp.text
+        assert "fresh-access-token" not in resp.text
+        data = resp.json()
+        assert data["client_id"] == 100
+        assert data["advertiser_kind"] == "third_party"
+        assert data["advertiser_name"] == "Иван Иванов"
+
+        # Кабинет, заведённый через веб, виден и оператору (общий источник правды).
+        operator_view = await client.get("/api/v1/ad-accounts")
+        assert len(operator_view.json()["items"]) == 1
+
+    asyncio.run(_with_api(scenario, authed=True))
+
+
+def test_admin_agency_cabinet_disabled_flag_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Предохранитель `vk_agency_confirmed` веб честно транслирует, не обходит его."""
+    _mock_agency_settings(monkeypatch, confirmed=False)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/admin/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "agency_disabled"
+
+    asyncio.run(_with_api(scenario, authed=True))

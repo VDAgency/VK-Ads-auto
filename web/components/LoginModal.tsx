@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Segmented } from "@/components/admin/ui/Segmented";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type LoginMode = "pw" | "link";
@@ -224,26 +225,15 @@ export function LoginModal() {
         </div>
 
         {/* Два реальных способа входа: по паролю или по ссылке на почту. */}
-        <div className="lp-seg" role="group" aria-label="Способ входа">
-          <button
-            className={mode === "pw" ? "lp-seg__btn is-active" : "lp-seg__btn"}
-            type="button"
-            aria-pressed={mode === "pw"}
-            data-login-mode="pw"
-            onClick={() => setMode("pw")}
-          >
-            По паролю
-          </button>
-          <button
-            className={mode === "link" ? "lp-seg__btn is-active" : "lp-seg__btn"}
-            type="button"
-            aria-pressed={mode === "link"}
-            data-login-mode="link"
-            onClick={() => setMode("link")}
-          >
-            По ссылке на почту
-          </button>
-        </div>
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          ariaLabel="Способ входа"
+          options={[
+            { value: "pw", label: "По паролю" },
+            { value: "link", label: "По ссылке на почту" },
+          ]}
+        />
 
         {/* Способ 1 — email + пароль. */}
         <form
