@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up uv + Python 3.11
         uses: astral-sh/setup-uv@v5
@@ -63,7 +63,7 @@ jobs:
         working-directory: web
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Полная история: gitleaks проверяет не только рабочее дерево, но и
           # каждый коммит. Секрет, добавленный и удалённый следующим коммитом,
