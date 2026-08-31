@@ -38,10 +38,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 from config.settings import Settings, get_settings
-from db.repositories import get_client
+from db.repositories import get_brief, get_client, list_ad_accounts_for_client
 from integrations.adapter import AgencyCabinetAdapter
 from integrations.vk_api import VkAgencyClientUnavailable, VkApiAdapter
 from integrations.vk_oauth import (
@@ -371,6 +372,75 @@ async def create_client_cabinet(
     return view
 
 
+# Ключ брифа, из которого берётся ИНН клиента (services/brief_fields.py:
+# оба варианта брифа — individual и community — используют один и тот же ключ
+# payload, только разные подписи поля: "ИНН" / "ИНН / ОГРН / ОГРНИП").
+_TAX_ID_PAYLOAD_KEY = "tax_id"
+
+
+@dataclass(frozen=True, slots=True)
+class CabinetStepState:
+    """Состояние шага C1 (план 2026-08-25-agency-cabinets, волна C) — что каналу
+    показать перед выбором кабинета, без чтения настроек и без разбора брифа
+    самим каналом (CLAUDE.md §1.3): решает ядро, каналы только показывают.
+
+    `available=False` — шага нет вовсе, не «есть, но заблокирован»:
+    `vk_agency_confirmed` выключен, брифа нет у тенанта либо у брифа нет
+    привязанного клиента (заводить кабинет решительно не для кого).
+
+    `blocked_reason` заполнен, только когда шаг доступен и своего кабинета у
+    клиента ещё нет, но чего-то не хватает для предложения создания:
+    `"missing_name"` (не указано имя/название клиента) или `"missing_tax_id"`
+    (не указан ИНН). Вызывающая сторона в этом случае показывает предупреждение
+    и продолжает обычным выбором кабинета — поток не блокируется.
+    """
+
+    available: bool
+    own_cabinet_exists: bool
+    blocked_reason: str | None = None
+
+
+async def cabinet_step_state(
+    session: AsyncSession, account_id: int, brief_id: int, *, settings: Settings | None = None
+) -> CabinetStepState:
+    """Предусловия шага C1 по брифу — единственное место, где они решаются.
+
+    Раньше это была пара функций бота (`_own_cabinet_missing`,
+    `_cabinet_prereq_issue`) плюс прямое чтение `get_settings().vk_agency_confirmed`
+    в обработчике (`bot/handlers/creative.py`) — канал не должен читать настройки
+    ядра и разбирать бриф сам. Сама агентская схема создания кабинета
+    (`create_client_cabinet` выше) этой функцией не затрагивается: здесь только
+    чтение предусловий рядом с ней.
+    """
+    cfg = settings or get_settings()
+    if not cfg.vk_agency_confirmed:
+        return CabinetStepState(available=False, own_cabinet_exists=False)
+
+    brief = await get_brief(session, account_id, brief_id)
+    if brief is None or brief.client_id is None:
+        return CabinetStepState(available=False, own_cabinet_exists=False)
+
+    accounts = await list_ad_accounts_for_client(session, account_id, brief.client_id)
+    own_cabinet_exists = any(row.client_id == brief.client_id for row in accounts)
+    if own_cabinet_exists:
+        return CabinetStepState(available=True, own_cabinet_exists=True)
+
+    client = await get_client(session, account_id, brief.client_id)
+    full_name = (client.full_name if client else None) or ""
+    if not full_name.strip():
+        return CabinetStepState(
+            available=True, own_cabinet_exists=False, blocked_reason="missing_name"
+        )
+
+    tax_id = str(brief.payload.get(_TAX_ID_PAYLOAD_KEY) or "")
+    if not tax_id.strip():
+        return CabinetStepState(
+            available=True, own_cabinet_exists=False, blocked_reason="missing_tax_id"
+        )
+
+    return CabinetStepState(available=True, own_cabinet_exists=False)
+
+
 __all__ = [
     "AgencyCabinetClientGoneError",
     "AgencyCabinetDuplicateError",
@@ -379,5 +449,7 @@ __all__ = [
     "AgencyDisabledError",
     "AgencyMissingTaxIdError",
     "AgencyTokenIssuanceFailedError",
+    "CabinetStepState",
+    "cabinet_step_state",
     "create_client_cabinet",
 ]

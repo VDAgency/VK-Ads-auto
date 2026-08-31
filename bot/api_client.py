@@ -148,6 +148,16 @@ class BriefCard:
     # Распознанная площадка подписки — приходит из ядра готовой строкой.
     surface_title: str = ""
     surface_needs_creative: bool = True
+    # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
+    # ядро уже применило правило «пост/клип/трек без креатива → подписчики»,
+    # бот только показывает (CLAUDE.md §1.3).
+    launch_goal_title: str = ""
+    # Состояние шага C1 «завести клиенту кабинет автоматически» — ядро уже
+    # прочитало `vk_agency_confirmed` и разобрало бриф, бот больше не делает
+    # этого сам (CLAUDE.md §1.3, `services.agency_cabinets.cabinet_step_state`).
+    cabinet_step_available: bool = False
+    cabinet_step_own_cabinet_exists: bool = False
+    cabinet_step_blocked_reason: str | None = None
     # Числовой `Client.id` брифа (spec 2026-08-25 §Т3) — сузить список кабинетов
     # до пригодных этому клиенту (`list_ad_accounts(client_id=...)`). `None` — у
     # брифа нет привязанного клиента (не должно случаться в норме, сервис всегда
@@ -311,6 +321,10 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         campaign_status=payload.get("campaign_status"),
         surface_title=str(payload.get("surface_title") or ""),
         surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
+        launch_goal_title=str(payload.get("launch_goal_title") or ""),
+        cabinet_step_available=bool(payload.get("cabinet_step_available", False)),
+        cabinet_step_own_cabinet_exists=bool(payload.get("cabinet_step_own_cabinet_exists", False)),
+        cabinet_step_blocked_reason=payload.get("cabinet_step_blocked_reason"),
         client_id=client.get("id"),
     )
 

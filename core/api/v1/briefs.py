@@ -110,6 +110,16 @@ class BriefCardOut(BaseModel):
     surface_title: str = ""
     # Нужен ли креатив: у продвижения готового поста его не спрашивают.
     surface_needs_creative: bool = True
+    # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
+    # каналы больше не решают это правило сами (CLAUDE.md §1.3), а показывают то,
+    # что уже посчитало ядро.
+    launch_goal_title: str = ""
+    # Состояние шага C1 «завести клиенту кабинет автоматически»
+    # (`services.agency_cabinets.cabinet_step_state`) — каналы не читают
+    # `vk_agency_confirmed` и не разбирают бриф сами.
+    cabinet_step_available: bool = False
+    cabinet_step_own_cabinet_exists: bool = False
+    cabinet_step_blocked_reason: str | None = None
 
 
 class BriefEditIn(BaseModel):
@@ -188,6 +198,10 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         campaign_status=view.campaign_status,
         surface_title=view.surface_title,
         surface_needs_creative=view.surface_needs_creative,
+        launch_goal_title=view.launch_goal_title,
+        cabinet_step_available=view.cabinet_step_available,
+        cabinet_step_own_cabinet_exists=view.cabinet_step_own_cabinet_exists,
+        cabinet_step_blocked_reason=view.cabinet_step_blocked_reason,
     )
 
 
