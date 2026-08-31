@@ -12,6 +12,8 @@ export const STATUS_RU: Record<string, string> = {
   parsed: "В работе",
   prepared: "Готов к запуску",
   launched: "Запущена",
+  moderation: "На модерации",
+  stopped: "Остановлена",
   failed: "Ошибка",
 };
 
@@ -19,6 +21,8 @@ export const VARIANT_RU: Record<string, string> = {
   individual: "Физлицо",
   community: "Бизнес",
 };
+
+export type AdminMe = { operator_id: number };
 
 export type Overview = {
   clients: number;
@@ -97,8 +101,13 @@ export type InviteResult = {
   error: string | null;
 };
 
-/** Сообщение в общей полосе результата админки. */
-export type Flash = { text: string; ok: boolean } | null;
+/** Сообщение в общей полосе результата админки.
+ *
+ * `persistent` — для необратимых действий (запуск кампании, отправка креатива):
+ * подтверждение остаётся на экране. Обратимые (правки полей) исчезают сами
+ * (spec 2026-08-31 §7: «успех — короткое подтверждение, исчезающее само; для
+ * необратимого — остаётся»). */
+export type Flash = { text: string; ok: boolean; persistent?: boolean } | null;
 
 /** Собрать контакты клиента в одну строку (как в прежней вёрстке). */
 export function contactLine(client: {

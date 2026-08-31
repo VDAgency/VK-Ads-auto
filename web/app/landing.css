@@ -710,42 +710,10 @@
   line-height: var(--lh-base);
 }
 
-/* Сегментный переключатель: два реальных способа входа. */
-.lp-seg {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  margin-bottom: var(--space-5);
-  background: var(--surface-sunk);
-  border-radius: var(--radius);
-}
-.lp-seg__btn {
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  min-height: 2.5rem;
-  padding: var(--space-2) var(--space-3);
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    background-color var(--dur) var(--ease-out),
-    color var(--dur) var(--ease-out),
-    box-shadow var(--dur) var(--ease-out);
-}
-@media (hover: hover) and (pointer: fine) {
-  .lp-seg__btn:hover {
-    color: var(--ink);
-  }
-}
-.lp-seg__btn.is-active {
-  background: var(--surface);
-  color: var(--accent-strong);
-  box-shadow: 0 2px 8px rgba(23, 21, 18, 0.08);
-}
+/* Сегментный переключатель (два способа входа) переехал в styles.css как
+   общий компонент `.seg`/`.seg__btn` — его переиспользует и фильтр брифов
+   в админке (spec 2026-08-31, DESIGN.md: «Segmented — вынести в общий
+   компонент»). Здесь своей копии больше нет. */
 
 .lp-modal__pane[hidden] {
   display: none;

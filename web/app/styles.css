@@ -137,6 +137,20 @@ a:hover {
   left: 0;
 }
 
+/* Видимо только для скринридера — объявления смены раздела/шага и подписи к
+   скелетам загрузки, которым не место в визуальной вёрстке. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .topbar {
   background: var(--ink-surface);
   color: var(--on-ink);
@@ -396,6 +410,47 @@ fieldset {
   background: #f8e9e9;
   color: var(--danger);
   border-color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Сегментный переключатель — снят с модалки входа (LoginModal), которую
+   DESIGN.md называет эталоном пластики. Общий компонент: переключает способ
+   входа там и фильтр «Ждём / Пришли» в брифах админки.
+   -------------------------------------------------------------------------- */
+.seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-sunk);
+  border-radius: var(--radius);
+}
+.seg__btn {
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-3);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .seg__btn:hover {
+    color: var(--ink);
+  }
+}
+.seg__btn.is-active {
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: 0 2px 8px rgba(23, 21, 18, 0.08);
 }
 
 /* --------------------------------------------------------------------------
