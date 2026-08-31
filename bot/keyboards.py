@@ -280,6 +280,32 @@ def client_pick_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def cabinet_create_confirm_keyboard(brief_id: int, action: str) -> InlineKeyboardMarkup:
+    """Кнопки шага C1 (план 2026-08-25, волна C): завести клиенту кабинет
+    автоматически либо выбрать кабинет вручную, как раньше.
+
+    `action` разводит сценарии запуска (`creative` — с креативом, `nocre` — без
+    него) — та же схема, что у `ad_account_pick_keyboard`: каждый сценарий читает
+    только свой префикс callback_data, поэтому кнопки одного сценария не могут
+    случайно попасть в обработчик другого.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Создать кабинет", callback_data=f"cabcreate:{action}:{brief_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗂 Выбрать кабинет вручную",
+                    callback_data=f"cabcreate_skip:{action}:{brief_id}",
+                )
+            ],
+        ]
+    )
+
+
 def launch_goal_keyboard(brief_id: int, goals: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
     """Выбор цели рекламы. `goals` = [(код, подпись, доступна)].
 

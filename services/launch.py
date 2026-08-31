@@ -27,15 +27,31 @@ class LaunchResult:
     launched: bool
 
 
+def daily_budget_rub_from_amount(amount: int | None, needs_discussion: bool) -> float | None:
+    """Дневной лимит бюджета по уже разобранной сумме (план
+    2026-08-25-agency-cabinets, ревью C1/C2 бота): та же формула, что и
+    `daily_budget_rub` ниже, но без сборки полной `CampaignSpec` — вызывающей
+    стороне (карточка подтверждения запуска в боте, где бюджет уже разобран
+    `services.brief_parser.parse_budget`) незачем тащить весь маппинг брифа
+    ради одного числа. `daily_budget_rub` — тонкая обёртка поверх этой функции,
+    так что формула теперь ровно одна: разойдись бот и реальный запуск раньше
+    считали бы дневной бюджет каждый по-своему, и предупреждение о нехватке
+    баланса могло бы не совпасть с тем, что площадка реально спишет.
+
+    `None` — сумма не задана или ещё обсуждается: тогда сравнивать не с чем.
+    """
+    if needs_discussion or not amount:
+        return None
+    return round(amount / DEFAULT_TERM_DAYS, 2)
+
+
 def daily_budget_rub(spec: CampaignSpec) -> float | None:
     """Дневной лимит бюджета из спеки. `None` — бюджет не задан или обсуждается.
 
     `None` означает «ключ не отправляем площадке», а не «ноль»: без бюджета
     кампания создаётся с настройками кабинета по умолчанию.
     """
-    if spec.needs_budget_discussion or not spec.budget_rub:
-        return None
-    return round(spec.budget_rub / DEFAULT_TERM_DAYS, 2)
+    return daily_budget_rub_from_amount(spec.budget_rub, spec.needs_budget_discussion)
 
 
 async def run_campaign(

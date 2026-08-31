@@ -8,8 +8,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from services.mapping import CampaignSpec
+
+if TYPE_CHECKING:
+    # Только для типов: `integrations.vk_api` уже импортирует этот модуль
+    # (`VkApiAdapter(PlatformAdapter)`), обратный импорт на уровне рантайма
+    # замкнул бы модули друг на друга. Под `TYPE_CHECKING` цикла нет — mypy
+    # разрешает такие форвард-ссылки штатно.
+    from integrations.vk_api import VkAgencyClient
 
 
 class PlatformAdapter(ABC):
@@ -93,3 +102,36 @@ class PlatformAdapter(ABC):
         if creative_ref:
             await self.upload_creative(campaign_id, creative_ref)
         return campaign_id
+
+
+class AgencyCabinetAdapter(Protocol):
+    """Узкий протокол агентских операций поверх VK Ads API (задачи B2/B3, план
+    2026-08-25-agency-cabinets.md).
+
+    Сознательно НЕ метод `PlatformAdapter`: общий контракт кампаний не должен
+    знать про агентских клиентов — иначе пришлось бы заглушать эти операции в
+    `StubAdapter`/`KotbotAdapter` без всякой пользы, а смена типа возврата у
+    существующего `PlatformAdapter.create_cabinet` (он отдаёт голый `str`, а
+    заведению клиента агентства нужна вся структура `VkAgencyClient` — id,
+    username, баланс, статус) сломала бы подстановку типов и строгий mypy.
+
+    Структурный протокол (`Protocol`), а не абстрактный базовый класс:
+    `VkApiAdapter.create_agency_client` (integrations/vk_api.py) удовлетворяет
+    ему просто по форме метода, без наследования и без правок самого адаптера.
+    `services.agency_cabinets` зависит от этой формы, а не от конкретного
+    класса — сегодня её реализует только VK-адаптер, но место для другой
+    площадки (kotbot) остаётся.
+    """
+
+    async def create_agency_client(
+        self,
+        *,
+        client_name: str,
+        client_info: str | None = None,
+        additional_emails: Sequence[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> VkAgencyClient:
+        """Завести нового клиента агентства (см. `VkApiAdapter.create_agency_client`
+        для полного контракта параметров и исключений)."""
+        ...

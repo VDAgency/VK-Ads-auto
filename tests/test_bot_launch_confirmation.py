@@ -184,6 +184,60 @@ def test_card_escapes_html_special_characters() -> None:
     assert "&amp; Co" in text
 
 
+# --- C2: баланс кабинета в карточке подтверждения ---------------------------------
+#
+# `_card()` даёт «Бюджет: 10 000 ₽» — дневной бюджет по формуле MVP (бюджет / 30
+# дней, `services.launch.DEFAULT_TERM_DAYS`) выходит 333.33 ₽.
+
+
+def test_balance_shown_when_above_daily_budget() -> None:
+    """Баланс известен и его достаточно — показан, предупреждения нет."""
+    account = _account(balance_rub="5000.00")
+
+    text = creative.render_launch_confirmation(_card(), account, "Подписчики")
+
+    assert "💳 Баланс кабинета: 5000.00 ₽" in text
+    assert "меньше дневного бюджета" not in text
+
+
+def test_balance_below_daily_budget_warns_but_does_not_block() -> None:
+    """Баланса меньше дневного бюджета брифа — спокойное предупреждение, но
+    карточка по-прежнему строится (запуск ничем не блокируется)."""
+    account = _account(balance_rub="100.00")
+
+    text = creative.render_launch_confirmation(_card(), account, "Подписчики")
+
+    assert "💳 Баланс кабинета: 100.00 ₽" in text
+    assert "меньше дневного бюджета" in text
+    assert "агентский аккаунт" in text  # ведёт к действию, а не грозит сбоем
+    assert "решение за вами" in text.lower() or "не влияет" in text
+
+
+def test_balance_unknown_omits_the_line() -> None:
+    """Баланс не известен (VK не ответил, свежий кабинет) — строку не выдумываем."""
+    account = _account(balance_rub=None)
+
+    text = creative.render_launch_confirmation(_card(), account, "Подписчики")
+
+    assert "Баланс кабинета" not in text
+
+
+def test_balance_not_warned_when_budget_needs_discussion() -> None:
+    """Бюджет брифа — «готов обсудить», сумма неизвестна: сравнивать не с чем,
+    предупреждение не выдумываем из воздуха."""
+    card = _card(
+        fields=[
+            BriefFieldItem(n=13, label="Бюджет", value="готов обсудить"),
+        ]
+    )
+    account = _account(balance_rub="1.00")
+
+    text = creative.render_launch_confirmation(card, account, "Подписчики")
+
+    assert "💳 Баланс кабинета: 1.00 ₽" in text
+    assert "меньше дневного бюджета" not in text
+
+
 # --- «Без креатива»: запуск ждёт подтверждения, сквозной сценарий ----------------
 
 
@@ -270,14 +324,20 @@ def test_launch_without_creative_end_to_end_waits_for_confirmation(
 ) -> None:
     """Показ карточки сам по себе не запускает кампанию; запускает только явное
     нажатие «Запустить» на самой карточке (Т3 — раньше кнопка карточки брифа
-    отправляла кампанию в ядро одним нажатием, без единого шанса передумать)."""
+    отправляла кампанию в ядро одним нажатием, без единого шанса передумать).
+
+    Кабинет закреплён за клиентом брифа (`client_id=42`) — у клиента уже есть
+    свой кабинет, поэтому шаг C1 (предложение завести кабинет автоматически)
+    здесь не должен показываться; он проверен отдельно в
+    `test_launch_without_creative_offers_cabinet_creation_when_client_has_none`.
+    """
     launched: dict[str, Any] = {}
 
     async def fake_get_brief(brief_id: int) -> BriefCard:
         return _card(brief_id=brief_id)
 
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
-        return [_account(id=3)]
+        return [_account(id=3, client_id=42, client_name="Иван Петров")]
 
     async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> Any:
         launched["brief_id"] = brief_id

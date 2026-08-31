@@ -13,6 +13,7 @@ BASE = {
     "target_type": "личная страница",
     "email": "i@e.com",
     "phone": "+79990000000",
+    "tax_id": "770700000000",
     "gender": "мужской",
     "age_from": "18",
     "age_to": "24",

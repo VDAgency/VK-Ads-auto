@@ -1,7 +1,14 @@
 import asyncio
 
 from integrations.adapter import PlatformAdapter
-from services.launch import LaunchResult, daily_budget_rub, launch_confirmation, run_campaign
+from services.launch import (
+    DEFAULT_TERM_DAYS,
+    LaunchResult,
+    daily_budget_rub,
+    daily_budget_rub_from_amount,
+    launch_confirmation,
+    run_campaign,
+)
 from services.mapping import CampaignSpec
 
 
@@ -81,3 +88,38 @@ def test_daily_budget_is_none_when_budget_needs_discussion() -> None:
 
 def test_daily_budget_is_none_without_amount() -> None:
     assert daily_budget_rub(SPEC) is None
+
+
+# --- daily_budget_rub_from_amount: формула без сборки CampaignSpec ---------------
+#
+# Ревью плана 2026-08-25-agency-cabinets (C1/C2): формула дневного бюджета жила в
+# двух местах — здесь и копией в `bot/handlers/creative.py`. Теперь она одна,
+# `daily_budget_rub` выше — тонкая обёртка поверх неё; эти тесты проверяют саму
+# формулу и то, что обёртка её не подменяет собственной копией.
+
+
+def test_daily_budget_rub_from_amount_splits_over_term() -> None:
+    assert daily_budget_rub_from_amount(30000, False) == 1000.0
+
+
+def test_daily_budget_rub_from_amount_none_when_discussion() -> None:
+    assert daily_budget_rub_from_amount(30000, True) is None
+
+
+def test_daily_budget_rub_from_amount_none_without_amount() -> None:
+    assert daily_budget_rub_from_amount(None, False) is None
+
+
+def test_daily_budget_rub_from_amount_none_for_zero_amount() -> None:
+    assert daily_budget_rub_from_amount(0, False) is None
+
+
+def test_daily_budget_rub_delegates_to_the_shared_formula() -> None:
+    """`daily_budget_rub(spec)` не считает по-своему — зовёт
+    `daily_budget_rub_from_amount` с полями спеки. Меняется знаменатель или
+    округление в общей формуле — обе точки входа меняются вместе, а не расходятся."""
+    spec = CampaignSpec(
+        objective="socialengagement", name="n", object_url="u", geo_raw="Москва", budget_rub=12345
+    )
+    assert daily_budget_rub(spec) == daily_budget_rub_from_amount(12345, False)
+    assert daily_budget_rub(spec) == round(12345 / DEFAULT_TERM_DAYS, 2)

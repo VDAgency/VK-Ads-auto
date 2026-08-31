@@ -70,7 +70,11 @@ async def intake_brief(
 ) -> Brief:
     """Принять бриф: разобрать, привязать/создать клиента, сохранить.
 
-    Бросает `BriefValidationError`, если не хватает обязательных полей.
+    Бросает `BriefValidationError`, если не хватает обязательных полей — включая
+    ИНН (`require_tax_id=True`, решение 2026-08-25): без него клиенту не завести
+    рекламный кабинет. Это касается только приёма НОВОГО брифа; уже сохранённые
+    брифы без ИНН по-прежнему разбираются при запуске кампании
+    (`services/launch_service.py` зовёт `parse_brief` без этого флага).
     Клиент ищется по совпадению любого из контактов (email/phone/telegram).
     Если клиент новый и пришёл по реф-коду — фиксируем реферал и скидку рефереру.
 
@@ -87,7 +91,7 @@ async def intake_brief(
             # received (двойной сабмит) / superseded / pending (не доставлялся) — не принимаем.
             raise InviteTokenError("inactive")
 
-    parsed = parse_brief(payload, variant)
+    parsed = parse_brief(payload, variant, require_tax_id=True)
     contact = parsed.contact
 
     client = await find_client_by_contacts(

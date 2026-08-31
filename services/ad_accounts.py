@@ -14,9 +14,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TypeVar
 
 from config.settings import Settings, get_settings
 from db.models import AdAccount
@@ -31,7 +32,9 @@ from db.repositories import (
     list_ad_accounts_for_client,
     set_ad_account_client,
     set_ad_account_health,
+    set_ad_account_tokens,
 )
+from integrations.vk_oauth import VkOAuthError, VkOAuthUnavailable, refresh_agency_token
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +47,8 @@ from services.vk_identity import (
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # Чью рекламу размещаем в кабинете (spec §5). Признак информационный:
 # маркировку (erid/ЕРИР) присваивает сама площадка, через API её не задать.
@@ -77,6 +82,23 @@ class AccountNotFoundError(AdAccountError):
 
 class TokenUnavailableError(AdAccountError):
     """У кабинета нет пригодного токена (архивный или ключ шифрования сменился)."""
+
+
+class TokenRefreshUnavailableError(AdAccountError):
+    """У кабинета нет ключа обновления — обновить токен нечем (B3).
+
+    Отличать от `TokenRefreshFailedError`: здесь `refresh_encrypted` попросту
+    пуст (старый кабинет, добавленный без него, либо архивный), запрос к VK
+    даже не уходит.
+    """
+
+
+class TokenRefreshFailedError(AdAccountError):
+    """VK отказал в обновлении токена по ключу обновления (B3).
+
+    Причина — в `__cause__` (`VkOAuthInvalidCredentials`/`VkOAuthRejected`/
+    `VkOAuthUnavailable` после повтора, см. `integrations.vk_oauth`).
+    """
 
 
 class NoAdAccountError(AdAccountError):
@@ -346,6 +368,35 @@ async def set_account_client(
     return await _view_with_client(session, account_id, row)
 
 
+async def _retry_once(operation: Callable[[], Awaitable[T]], *, retry_on: type[Exception]) -> T:
+    """Ровно одна повторная попытка при моргнувшей сети (план B2/B3 §3): «две
+    попытки, не больше». Отказ по существу (любой другой тип исключения) здесь
+    не перехватывается вовсе и улетает с первой попытки — повторять его
+    бессмысленно.
+    """
+    try:
+        return await operation()
+    except retry_on:
+        logger.warning("VK request failed, retrying once: %s", retry_on.__name__)
+        return await operation()
+
+
+async def _probe(token: str) -> tuple[str, str | None, str | None]:
+    """Живой опрос VK по токену → (health, error, balance). Общая часть
+    `check_health` — вынесена, чтобы после обновления токена (B3) перепроверить
+    новым токеном, не дублируя логику разбора ответа."""
+    try:
+        identity = await fetch_identity(token)
+        balance = await fetch_balance(token)
+        if identity.status not in ("active", "unknown"):
+            return HEALTH_ERROR, f"VK account status: {identity.status}", balance
+        return HEALTH_HEALTHY, None, balance
+    except InvalidTokenError:
+        return HEALTH_UNAUTHORIZED, "VK отклонил токен — выпустите новый", None
+    except VkUnreachableError as exc:
+        return HEALTH_ERROR, str(exc)[:255], None
+
+
 async def check_health(
     session: AsyncSession,
     account_id: int,
@@ -356,6 +407,13 @@ async def check_health(
     """Проверить кабинет живым запросом и записать результат.
 
     Архивный кабинет не проверяем: токена у него уже нет (стёрт при удалении).
+
+    Отказ авторизации (401/403) с сохранённым ключом обновления — не сразу
+    приговор (B3, план 2026-08-25-agency-cabinets.md): токен VK живёт сутки,
+    так что «протух» — обычное дело. Пробуем обновить его РОВНО ОДИН раз
+    (`refresh_account_token`) и перепроверяем новым токеном; если обновление
+    не удалось или новый токен тоже отклонён — честно помечаем `unauthorized`,
+    без дальнейших попыток (иначе риск зациклиться на VK).
     """
     cfg = settings or get_settings()
     row = await get_ad_account(session, account_id, ad_account_id)
@@ -374,21 +432,97 @@ async def check_health(
         )
         return await _view_with_client(session, account_id, updated or row)
 
-    health, error, balance = HEALTH_HEALTHY, None, None
-    try:
-        identity = await fetch_identity(token)
-        balance = await fetch_balance(token)
-        if identity.status not in ("active", "unknown"):
-            health, error = HEALTH_ERROR, f"VK account status: {identity.status}"
-    except InvalidTokenError:
-        health, error = HEALTH_UNAUTHORIZED, "VK отклонил токен — выпустите новый"
-    except VkUnreachableError as exc:
-        health, error = HEALTH_ERROR, str(exc)[:255]
+    health, error, balance = await _probe(token)
+    if health == HEALTH_UNAUTHORIZED and row.refresh_encrypted:
+        try:
+            await refresh_account_token(session, account_id, ad_account_id, settings=cfg)
+        except (
+            TokenRefreshUnavailableError,
+            TokenRefreshFailedError,
+            NotConfiguredError,
+            TokenUnavailableError,
+        ) as exc:
+            logger.warning(
+                "token refresh after 401 failed for ad account %s: %s",
+                ad_account_id,
+                type(exc).__name__,
+            )
+        else:
+            new_token = await resolve_token(session, account_id, ad_account_id, settings=cfg)
+            health, error, balance = await _probe(new_token.get_secret_value())
 
     updated = await set_ad_account_health(
         session, account_id, ad_account_id, health, error=error, balance_rub=balance
     )
     return await _view_with_client(session, account_id, updated or row)
+
+
+async def refresh_account_token(
+    session: AsyncSession,
+    account_id: int,
+    ad_account_id: int,
+    *,
+    settings: Settings | None = None,
+) -> AdAccountView:
+    """Обновить токен кабинета ключом обновления (B3): токен VK живёт сутки,
+    `refresh_encrypted` до сих пор заполнялся, но нигде не читался — мёртвое
+    поле. Читает его, просит VK новую пару access+refresh
+    (`integrations.vk_oauth.refresh_agency_token`, `grant_type=refresh_token`,
+    одна повторная попытка при сетевом сбое) и сохраняет обе зашифрованными.
+    Кабинет помечается снова `healthy` — как и должно быть после успешного
+    обновления живого токена.
+
+    Бросает `AccountNotFoundError`, `TokenRefreshUnavailableError` (нет
+    `refresh_encrypted` либо кабинет архивный), `TokenUnavailableError`
+    (расшифровать `refresh_encrypted` не удалось — сменился ключ),
+    `NotConfiguredError` (не задан `VK_ADS_SECRET_KEY`) и
+    `TokenRefreshFailedError` (VK отказал — причина в `__cause__`). Успех и
+    отказ различимы явно: полусостояния (обновили, но не сохранили) здесь нет,
+    сохранение — последний шаг перед возвратом.
+    """
+    cfg = settings or get_settings()
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        raise AccountNotFoundError(str(ad_account_id))
+    if row.status != "active" or not row.refresh_encrypted:
+        raise TokenRefreshUnavailableError(f"ad account {ad_account_id} has no refresh token")
+
+    box = _box(cfg)
+    if not box.configured:
+        raise NotConfiguredError("VK_ADS_SECRET_KEY is empty")
+    try:
+        refresh_token = box.decrypt(row.refresh_encrypted)
+    except Exception as exc:  # noqa: BLE001 — сменился ключ шифрования
+        raise TokenUnavailableError(
+            f"cannot decrypt refresh token of ad account {ad_account_id}"
+        ) from exc
+
+    oauth_client_id = cfg.vk_ads_client_id.get_secret_value()
+    oauth_client_secret = cfg.vk_ads_client_secret.get_secret_value()
+    try:
+        new_token = await _retry_once(
+            lambda: refresh_agency_token(refresh_token, oauth_client_id, oauth_client_secret),
+            retry_on=VkOAuthUnavailable,
+        )
+    except VkOAuthError as exc:
+        raise TokenRefreshFailedError(
+            f"VK refused to refresh the token of ad account {ad_account_id}"
+        ) from exc
+
+    access_value = new_token.access_token.get_secret_value()
+    updated = await set_ad_account_tokens(
+        session,
+        account_id,
+        ad_account_id,
+        token_encrypted=box.encrypt(access_value),
+        refresh_encrypted=box.encrypt(new_token.refresh_token.get_secret_value()),
+        token_tail=token_tail(access_value),
+    )
+    if updated is None:
+        raise AccountNotFoundError(str(ad_account_id))
+    healthy = await set_ad_account_health(session, account_id, ad_account_id, HEALTH_HEALTHY)
+    logger.info("ad account token refreshed: id=%s", ad_account_id)
+    return await _view_with_client(session, account_id, healthy or updated)
 
 
 async def resolve_token(
@@ -510,6 +644,8 @@ __all__ = [
     "ClientNotFoundError",
     "DuplicateAccountError",
     "NoAdAccountError",
+    "TokenRefreshFailedError",
+    "TokenRefreshUnavailableError",
     "TokenUnavailableError",
     "add_account",
     "check_health",
@@ -518,6 +654,7 @@ __all__ = [
     "list_accounts",
     "list_accounts_for_client",
     "mark_unauthorized",
+    "refresh_account_token",
     "resolve_default_account",
     "resolve_token",
     "seed_from_env",

@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     vk_ads_access_token: SecretStr = SecretStr("")
     vk_ads_refresh_token: SecretStr = SecretStr("")
     vk_ads_token_type: str = "Bearer"
+    # Агентский OAuth-клиент VK Ads (integrations/vk_oauth.py): выпуск токенов на
+    # кабинеты клиентов агентства без подтверждения с их стороны
+    # (`grant_type=agency_client_credentials`). Пусто = агентский доступ не
+    # настроен — операции отвечают понятной `VkOAuthNotConfigured`, а не стучатся
+    # в VK с пустыми учётными данными.
+    vk_ads_client_id: SecretStr = SecretStr("")
+    vk_ads_client_secret: SecretStr = SecretStr("")
     # Ключ шифрования токенов рекламных кабинетов в БД (Fernet, base64 32 байта).
     # Пусто = «не сконфигурировано»: приложение поднимается, но операции с
     # кабинетами отвечают понятной ошибкой (spec 2026-07-27 §6).

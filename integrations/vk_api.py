@@ -18,6 +18,7 @@ VERIFY, требуют проверки мутацией на минимальн
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from collections.abc import Mapping, Sequence
@@ -199,6 +200,168 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+# Ресурс агентских клиентов (B1, план 2026-08-25-agency-cabinets.md): заводит клиента
+# либо добавляет уже существующего. Контракт сверен с документацией VK
+# (`ads.vk.ru/en/doc/api/resource/AgencyClients`; боевой хост API, как и везде в этом
+# модуле, — `ads.vk.com`), боевым вызовом ЕЩЁ НЕ проверен — до подтверждения
+# агентского аккаунта.
+AGENCY_CLIENTS_PATH = "/agency/clients.json"
+AGENCY_ACCESS_FULL = "full_access"
+# Лимит VK на постраничный запрос списка клиентов (по умолчанию 20, максимум 50).
+AGENCY_CLIENTS_LIMIT_DEFAULT = 20
+AGENCY_CLIENTS_LIMIT_MAX = 50
+
+
+class VkAgencyClientError(Exception):
+    """Базовая ошибка операций с клиентами агентства VK (`/agency/clients.json`)."""
+
+
+class VkAgencyClientForbidden(VkAgencyClientError):
+    """VK отказал по правам (403): агентский статус не подтверждён либо нет права
+    `create_clients`. Отличать от прочих отказов важно — вызывающему коду (B2) нужен
+    внятный текст для оператора, а не общее «что-то пошло не так»."""
+
+
+class VkAgencyClientValidationError(VkAgencyClientError):
+    """VK отклонил тело запроса (400) — ошибка валидации полей."""
+
+
+class VkAgencyClientNotFound(VkAgencyClientError):
+    """VK не нашёл клиента (404) — например, неверный `user.id`/`user.username` при
+    добавлении уже существующего клиента."""
+
+
+class VkAgencyClientUnavailable(VkAgencyClientError):
+    """VK недоступен либо ответил непонятно (сеть, 5xx, битое тело, пустой `items`)."""
+
+
+@dataclass(frozen=True, slots=True)
+class VkAgencyClient:
+    """Клиент агентства VK — то, что понадобится дальше по цепочке (A1/B2).
+
+    `client_id` и `username` оба годятся для `agency_client_id`/`agency_client_name`
+    при выпуске токена (`integrations/vk_oauth.py::request_agency_client_token`);
+    `username` критичен — именно он остаётся ссылкой на клиента, когда числовой id
+    ещё не сохранён вызывающей стороной. `ad_account_id`/`balance` — из `user.account`,
+    оба могут быть `None`, если рекламный аккаунт клиента ещё не создан площадкой.
+    """
+
+    client_id: str
+    username: str | None
+    ad_account_id: str | None
+    balance: str | None
+    status: str
+    access_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class VkAgencyClientPage:
+    """Страница списка клиентов агентства (`GET /agency/clients.json`)."""
+
+    items: list[VkAgencyClient]
+    count: int
+    limit: int
+    offset: int
+
+
+def _agency_error_detail(response: httpx.Response) -> str:
+    """Короткий текст ошибки из тела ответа (если есть) — без секретов, для оператора."""
+    with contextlib.suppress(ValueError):
+        payload = response.json()
+        if isinstance(payload, dict):
+            for key in ("error_description", "error", "detail", "message"):
+                value = payload.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    return ""
+
+
+def _raise_for_agency_status(response: httpx.Response) -> None:
+    """Ответ `/agency/clients.json` → типизированное исключение (см. справку VK).
+
+    403 разбирается отдельно от прочих отказов: это единственный код, за которым
+    стоит конкретная и действенная причина («подтвердите агентский аккаунт /
+    выдайте право create_clients»), а не общая формулировка отказа.
+    """
+    if response.status_code < 400:
+        return
+    detail = _agency_error_detail(response)
+    if response.status_code == 403:
+        logger.warning("VK denied agency clients access (403): %s", detail or "no detail")
+        raise VkAgencyClientForbidden(
+            "VK denied access to agency clients (403): agency account not confirmed "
+            "or missing the create_clients permission"
+        )
+    if response.status_code == 400:
+        raise VkAgencyClientValidationError(f"VK rejected the request: {detail or 'HTTP 400'}")
+    if response.status_code == 404:
+        raise VkAgencyClientNotFound(f"VK could not find the agency client: {detail or 'HTTP 404'}")
+    if response.status_code >= 500:
+        raise VkAgencyClientUnavailable(f"VK returned HTTP {response.status_code}")
+    raise VkAgencyClientUnavailable(
+        f"VK returned HTTP {response.status_code}: {detail or 'no detail'}"
+    )
+
+
+def _agency_payload(response: httpx.Response) -> dict[str, Any]:
+    """Тело успешного ответа `/agency/clients.json` как dict."""
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise VkAgencyClientUnavailable("VK returned a non-JSON body") from exc
+    if not isinstance(payload, dict):
+        raise VkAgencyClientUnavailable("VK returned an unexpected body")
+    return payload
+
+
+def _agency_items(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Список `items[]` тела ответа как dict-ы; чужие/нестроковые элементы отбрасываются."""
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _as_str(value: Any) -> str | None:
+    """Число или строка из ответа VK → строка; `None`, если поля нет/тип неожиданный.
+
+    VK отдаёт часть числовых полей строками, часть — числами (та же непоследовательность,
+    что и у метрик статистики, см. `_as_float`) — приводим единообразно на своей стороне.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float, str)):
+        return str(value)
+    return None
+
+
+def _parse_agency_client(item: Mapping[str, Any]) -> VkAgencyClient:
+    """Один элемент `items[]` ответа `/agency/clients.json` → `VkAgencyClient`."""
+    user = item.get("user")
+    if not isinstance(user, dict):
+        raise VkAgencyClientUnavailable("VK item has no user object")
+    client_id = _as_str(user.get("id"))
+    if client_id is None:
+        raise VkAgencyClientUnavailable("VK item has no user.id")
+    account = user.get("account")
+    ad_account_id: str | None = None
+    balance: str | None = None
+    if isinstance(account, dict):
+        ad_account_id = _as_str(account.get("id"))
+        balance = _as_str(account.get("balance"))
+    username = user.get("username")
+    status = user.get("status")
+    access_type = item.get("access_type")
+    return VkAgencyClient(
+        client_id=client_id,
+        username=username if isinstance(username, str) else None,
+        ad_account_id=ad_account_id,
+        balance=balance,
+        status=status if isinstance(status, str) else "unknown",
+        access_type=access_type if isinstance(access_type, str) else "unknown",
+    )
+
+
 class VkApiAdapter(PlatformAdapter):
     """Адаптер прямого VK Ads API. `client` можно подменить (тесты/моки)."""
 
@@ -227,10 +390,133 @@ class VkApiAdapter(PlatformAdapter):
         return response.status_code == 200
 
     async def create_cabinet(self, account_id: int, client_ref: str) -> str:
-        """Создать клиентский кабинет (агентство). Тело — см. справку (verify)."""
-        response = await self._request("POST", "/agency/clients.json", json={"name": client_ref})
-        response.raise_for_status()
-        return str(response.json()["id"])
+        """Создать клиентский кабинет (агентство) — тонкая обёртка контракта
+        `PlatformAdapter` (возвращает только id строкой) поверх `create_agency_client`.
+
+        `account_id` здесь не используется: в настоящем контракте VK у создания
+        клиента агентства нет такого параметра — поле осталось только в сигнатуре
+        интерфейса (см. отчёт задачи B1). Для дальнейшей работы (выпуск токена на
+        кабинет через `agency_client_credentials`, баланс, id рекламного аккаунта)
+        нужна вся структура — используйте `create_agency_client` напрямую, а не этот
+        метод: `PlatformAdapter.create_cabinet` не может её вернуть без изменения
+        абстрактного контракта (вне зоны этой задачи, см. отчёт).
+        """
+        client = await self.create_agency_client(client_name=client_ref)
+        return client.client_id
+
+    async def create_agency_client(
+        self,
+        *,
+        client_name: str,
+        client_info: str | None = None,
+        additional_emails: Sequence[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> VkAgencyClient:
+        """Завести нового клиента агентства либо добавить уже существующего.
+
+        `POST /api/v2/agency/clients.json` (документация VK,
+        `ads.vk.ru/en/doc/api/resource/AgencyClients`; боевой хост API, как и везде в
+        адаптере, — `ads.vk.com`). Тело вложенное: `access_type` обязателен
+        (`full_access`); `user.id` ИЛИ `user.username` задаются, только когда
+        добавляем УЖЕ существующего клиента — оставьте оба пустыми для нового.
+        Контракт сверен с документацией, боевым вызовом ЕЩЁ НЕ проверен — это
+        случится после подтверждения агентского аккаунта (план
+        `docs/superpowers/plans/2026-08-25-agency-cabinets.md`, задача B1).
+
+        Бросает `ValueError` (заданы одновременно `user_id` и `username`),
+        `VkAgencyClientValidationError` (400), `VkAgencyClientForbidden` (403 —
+        агентский статус не подтверждён либо нет права `create_clients`),
+        `VkAgencyClientNotFound` (404 — неверная ссылка на существующего клиента)
+        или `VkAgencyClientUnavailable` (сеть/5xx/битый ответ/пустой `items`).
+        """
+        if user_id and username:
+            raise ValueError("provide at most one of user_id or username")
+
+        additional_info: dict[str, str] = {"client_name": client_name}
+        if client_info:
+            additional_info["client_info"] = client_info
+        user_body: dict[str, Any] = {"additional_info": additional_info}
+        if additional_emails:
+            user_body["additional_emails"] = list(additional_emails)
+        if user_id:
+            user_body["id"] = int(user_id)
+        if username:
+            user_body["username"] = username
+
+        response = await self._request(
+            "POST",
+            AGENCY_CLIENTS_PATH,
+            json={"access_type": AGENCY_ACCESS_FULL, "user": user_body},
+        )
+        _raise_for_agency_status(response)
+        items = _agency_items(_agency_payload(response))
+        if not items:
+            raise VkAgencyClientUnavailable("VK response has no items")
+        return _parse_agency_client(items[0])
+
+    async def list_agency_clients(
+        self,
+        *,
+        limit: int = AGENCY_CLIENTS_LIMIT_DEFAULT,
+        offset: int = 0,
+        user_id: str | None = None,
+        username: str | None = None,
+        status: str | None = None,
+        query: str | None = None,
+    ) -> VkAgencyClientPage:
+        """Список клиентов агентства (`GET /api/v2/agency/clients.json`), с
+        постраничностью и фильтрами.
+
+        `limit` не может превышать лимит VK (`AGENCY_CLIENTS_LIMIT_MAX` = 50) —
+        нарушение отклоняется `ValueError` ещё до сети. Карта отказов та же, что у
+        `create_agency_client`.
+
+        ⚠️ Задумывался как способ находить уже заведённых клиентов и не плодить
+        дубли при повторе `create_agency_client` (B2), но этим методом сейчас
+        НЕ пользуется никто: `services.agency_cabinets.create_client_cabinet`
+        вызывает его нигде, а её единственная повторная попытка создания
+        (`VkAgencyClientUnavailable` — сеть/5xx/битый ответ) неидемпотентна —
+        если VK успел создать клиента, а ответ потерялся, повтор заведёт
+        второго (ревью ветки §5). Дело не в лени: у новых клиентов при первом
+        заведении нет `user_id`/`username` (они появляются только у уже
+        существующего клиента), значит единственный связывающий признак —
+        полнотекстовый `query` (`_q`) по `client_name`, а как VK на самом деле
+        сопоставляет по нему (точное совпадение? подстрока?) невозможно
+        проверить без боевого агентского доступа, которого пока нет
+        (`vk_agency_confirmed` выключен). Подключать дедупликацию на этом
+        методе вслепую — рискованнее, чем оставить как есть: ошибка сопоставления
+        привяжет клиенту чужой существующий кабинет VK, а не просто оставит
+        осиротевшего дубля на ручную уборку администратором (что уже
+        предусмотрено — `AgencyTokenIssuanceFailedError`/
+        `AgencyCabinetPersistError` несут `vk_client_id`/`vk_username`).
+        Решение — сделать это на боевой проверке, когда будет с чем сверяться.
+        """
+        if not 1 <= limit <= AGENCY_CLIENTS_LIMIT_MAX:
+            raise ValueError(f"limit must be between 1 and {AGENCY_CLIENTS_LIMIT_MAX}")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if user_id:
+            params["_user__id"] = user_id
+        if username:
+            params["_user__username"] = username
+        if status:
+            params["_status"] = status
+        if query:
+            params["_q"] = query
+
+        response = await self._request("GET", AGENCY_CLIENTS_PATH, params=params)
+        _raise_for_agency_status(response)
+        payload = _agency_payload(response)
+        items = [_parse_agency_client(item) for item in _agency_items(payload)]
+        return VkAgencyClientPage(
+            items=items,
+            count=int(payload.get("count", len(items))),
+            limit=int(payload.get("limit", limit)),
+            offset=int(payload.get("offset", offset)),
+        )
 
     async def create_campaign(
         self, cabinet_id: str, goal: str, *, spec: CampaignSpec | None = None

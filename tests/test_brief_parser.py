@@ -183,6 +183,7 @@ def _individual_raw() -> dict[str, str]:
         "phone": "+7 (900) 123-45-67",
         "telegram": "@ivanov",
         "email": "ivanov@example.com",
+        "tax_id": "770700000000",
         "object_url": "https://vk.com/ivanov",
         "target_type": "🧑 Личная страница",
         "audience_description": "девушки 20-35, мода и красота",
@@ -232,9 +233,9 @@ def test_individual_has_no_business_fields() -> None:
 
 
 def test_individual_keeps_tax_id() -> None:
-    """ИНН спрашивают оба макета: у физлица — для оформления документов."""
-    raw = _individual_raw() | {"tax_id": "770700000000"}
-    brief = parse_brief(raw, BriefVariant.INDIVIDUAL)
+    """ИНН обязателен у ОБОИХ макетов (решение 2026-08-25) — у физлица тоже,
+    не только у бизнеса."""
+    brief = parse_brief(_individual_raw(), BriefVariant.INDIVIDUAL)
     assert brief.tax_id == "770700000000"
 
 
@@ -382,3 +383,43 @@ def test_missing_phone_reported_even_with_email() -> None:
         parse_brief(raw, BriefVariant.INDIVIDUAL)
     assert "phone" in exc.value.missing
     assert "email" not in exc.value.missing
+
+
+# --- ИНН: строго обязателен по умолчанию, разбор старого брифа — исключение --
+
+
+def test_missing_tax_id_raises_by_default_individual() -> None:
+    # Умолчание — строгое (закрывающее, а не открывающее): путь приёма,
+    # забывший передать флаг, всё равно получает проверку, а не молча
+    # пропускает бриф без ИНН.
+    raw = _individual_raw()
+    del raw["tax_id"]
+    with pytest.raises(BriefValidationError) as exc:
+        parse_brief(raw, BriefVariant.INDIVIDUAL)
+    assert "tax_id" in exc.value.missing
+
+
+def test_missing_tax_id_raises_by_default_community() -> None:
+    # Обязательность — «везде»: и у бизнес-варианта тоже, не только у физлица.
+    raw = _community_raw()
+    del raw["tax_id"]
+    with pytest.raises(BriefValidationError) as exc:
+        parse_brief(raw, BriefVariant.COMMUNITY)
+    assert "tax_id" in exc.value.missing
+
+
+def test_present_tax_id_parses_by_default() -> None:
+    brief = parse_brief(_individual_raw(), BriefVariant.INDIVIDUAL)
+    assert brief.tax_id == "770700000000"
+
+
+def test_require_tax_id_false_parses_legacy_brief_without_tax_id() -> None:
+    """Единственное послабление — явный `require_tax_id=False` при разборе УЖЕ
+    СОХРАНЁННОГО брифа (`services/launch_service.py`): среди старых брифов
+    физлиц есть такие, где ИНН не спрашивали вовсе, и требовать его задним
+    числом нельзя. Умолчание при этом остаётся строгим — послабление видно
+    глазами прямо на месте вызова, а не спрятано в сигнатуре по умолчанию."""
+    raw = _individual_raw()
+    del raw["tax_id"]
+    brief = parse_brief(raw, BriefVariant.INDIVIDUAL, require_tax_id=False)
+    assert brief.tax_id is None

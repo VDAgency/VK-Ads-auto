@@ -23,7 +23,12 @@ from bot.api_client import (
     CoreUnavailable,
     CreativeRejected,
 )
-from bot.handlers.creative import GOAL_LABELS, render_launch_confirmation
+from bot.handlers.creative import (
+    GOAL_LABELS,
+    create_cabinet_or_report,
+    offer_cabinet_creation,
+    render_launch_confirmation,
+)
 from bot.keyboards import ad_account_pick_keyboard, brief_card_keyboard, launch_confirm_keyboard
 from bot.states import EditBrief
 
@@ -169,14 +174,28 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
+    if await offer_cabinet_creation(message, card, accounts, action="nocre"):
+        # Карточка создания кабинета показана (C1) — ждём решение оператора
+        # (`cabcreate:nocre:*`/`cabcreate_skip:nocre:*` ниже).
+        await callback.answer()
+        return
+
+    await _continue_launch_without_creative(message, card, accounts)
+    await callback.answer()
+
+
+async def _continue_launch_without_creative(
+    message: Message, card: BriefCard, accounts: list[AdAccountItem]
+) -> None:
+    """Хвост выбора кабинета для сценария без креатива: общий для первого
+    захода `launch_without_creative` и для обоих исходов шага C1 (кабинет
+    создан либо оператор выбрал вручную)."""
     usable = [item for item in accounts if item.is_usable]
     if not accounts:
         await message.answer(_NO_CABINETS)
-        await callback.answer()
         return
     if not usable:
         await message.answer(_NO_LIVE_CABINETS)
-        await callback.answer()
         return
 
     if len(usable) == 1:
@@ -190,9 +209,54 @@ async def launch_without_creative(callback: CallbackQuery) -> None:
                 [(item.id, f"{item.title} (id {item.external_id})") for item in usable],
                 # Свой action, отличный от `launch:{id}` в creative.py — иначе
                 # выбор кабинета уедет в сценарий загрузки креатива (ловушка из ТЗ).
-                f"nocre:{brief_id}",
+                f"nocre:{card.brief_id}",
             ),
         )
+
+
+@router.callback_query(F.data.startswith("cabcreate:nocre:"))
+async def confirm_cabinet_create_for_launch(callback: CallbackQuery) -> None:
+    """Оператор подтвердил создание кабинета в сценарии без креатива (C1)."""
+    brief_id = int((callback.data or "").rsplit(":", 1)[1])
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    message = callback.message
+
+    result = await create_cabinet_or_report(message, brief_id)
+    if result is not None:
+        card, accounts = result
+        await _continue_launch_without_creative(message, card, accounts)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cabcreate_skip:nocre:"))
+async def skip_cabinet_create_for_launch(callback: CallbackQuery) -> None:
+    """Оператор отказался от автосоздания — выбираем кабинет вручную, как раньше."""
+    brief_id = int((callback.data or "").rsplit(":", 1)[1])
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    message = callback.message
+
+    try:
+        card = await api_client.get_brief(brief_id)
+    except BriefNotFound:
+        await message.answer(_NOT_FOUND)
+        await callback.answer()
+        return
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+    try:
+        accounts = await api_client.list_ad_accounts(client_id=card.client_id)
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    await _continue_launch_without_creative(message, card, accounts)
     await callback.answer()
 
 

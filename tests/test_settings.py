@@ -52,6 +52,21 @@ def test_tokens_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.vk_ads_access_token.get_secret_value() == "vk-access"
 
 
+def test_vk_agency_oauth_client_defaults_empty() -> None:
+    # Пусто = агентский доступ не настроен (integrations/vk_oauth.py).
+    settings = Settings(_env_file=None)
+    assert settings.vk_ads_client_id.get_secret_value() == ""
+    assert settings.vk_ads_client_secret.get_secret_value() == ""
+
+
+def test_vk_agency_oauth_client_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VK_ADS_CLIENT_ID", "agency-client-id")
+    monkeypatch.setenv("VK_ADS_CLIENT_SECRET", "agency-client-secret")
+    settings = Settings(_env_file=None)
+    assert settings.vk_ads_client_id.get_secret_value() == "agency-client-id"
+    assert settings.vk_ads_client_secret.get_secret_value() == "agency-client-secret"
+
+
 def test_operator_ids_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPERATOR_TELEGRAM_IDS", "5389520473, 5481870843")
     settings = Settings(_env_file=None)

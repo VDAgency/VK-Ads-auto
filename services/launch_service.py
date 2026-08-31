@@ -540,7 +540,13 @@ async def launch_from_creative(
     # должен узнать про мёртвый доступ сразу, а не после разбора полей.
     ad_account, vk_token = await _resolve_ad_account(session, account_id, ad_account_id, cfg)
 
-    parsed = parse_brief(brief.payload, BriefVariant(brief.variant))
+    # Разбор УЖЕ СОХРАНЁННОГО брифа, не приём нового — `require_tax_id=False`
+    # явно: среди старых брифов физлиц есть такие, где ИНН не спрашивали
+    # вовсе (обязательность введена позже, решение 2026-08-25), и требовать
+    # его задним числом при запуске кампании нельзя. `parse_brief` по
+    # умолчанию строгий (`require_tax_id=True`) — это единственное, видимое
+    # глазами послабление для разбора исторических данных.
+    parsed = parse_brief(brief.payload, BriefVariant(brief.variant), require_tax_id=False)
 
     # Сверка ДО любых побочных эффектов (Creative/Cabinet/кампания на площадке):
     # чужой кабинет или несовпавший ИНН обязаны прервать запуск начисто (spec §1.2-1.3).
