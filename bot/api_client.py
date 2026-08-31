@@ -252,6 +252,16 @@ class AdAccountNotFound(RuntimeError):
     """Кабинета нет (404) — вероятно, его уже удалили из другого окна."""
 
 
+class AgencyCabinetRejected(RuntimeError):
+    """Ядро отказалось завести клиенту кабинет автоматически (B2/B3, C1) —
+    причина уже человекочитаемая (`reason`), код ответа наружу не уходит.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _base_url() -> str:
     return get_settings().core_base_url.rstrip("/")
 
@@ -940,6 +950,120 @@ async def add_ad_account(
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
     return _to_ad_account(response.json())
+
+
+# Заведение клиенту кабинета через агентский API VK тянет несколько
+# последовательных вызовов VK (свой токен агентства, создание клиента, выпуск
+# доступа клиенту) — ждём дольше обычного, но не так долго, как запуск кампании
+# (_LAUNCH_TIMEOUT): модерации здесь нет.
+_AGENCY_CABINET_TIMEOUT = httpx.Timeout(60.0)
+
+# Известные отказы `POST /ad-accounts/agency-cabinets` (`core/api/v1/ad_accounts.py`)
+# со своим человеческим текстом каждый — оператор не должен видеть голый код
+# (CLAUDE.md §7). Слово «токен» здесь сознательно не используется: в этом сценарии
+# оператор ничего не копирует руками, доступ выпускается сам, и говорить ему про
+# токен — только путать.
+_AGENCY_CABINET_ERRORS = {
+    "agency_disabled": (
+        "Автоматическое создание кабинетов пока выключено — агентский доступ VK "
+        "ещё не подтверждён. Заведите кабинет вручную (/cabinets) или обратитесь "
+        "к администратору."
+    ),
+    "tax_id_required": (
+        "У клиента не указан ИНН — без него кабинет не завести. Дособерите ИНН "
+        "правкой брифа и повторите."
+    ),
+    "client_not_found": (
+        "Такого клиента не нашли — возможно, бриф изменился. Обновите карточку "
+        "брифа и попробуйте снова."
+    ),
+    "encryption_key_missing": (
+        "На сервере не задан ключ шифрования — без него кабинет негде хранить. "
+        "Нужна помощь администратора."
+    ),
+    "vk_oauth_not_configured": (
+        "Доступ агентства к VK ещё не настроен. Обратитесь к администратору."
+    ),
+    "vk_agency_not_confirmed": (
+        "VK не подтвердил агентский статус аккаунта — автоматически кабинет не "
+        "завести. Заведите кабинет вручную (/cabinets) или обратитесь к "
+        "администратору."
+    ),
+    "vk_rejected_client_data": (
+        "VK отклонил данные клиента при создании кабинета. Проверьте ФИО и ИНН "
+        "в брифе и попробуйте снова."
+    ),
+    "vk_client_not_found": (
+        "VK не нашёл только что созданного клиента. Попробуйте ещё раз через минуту."
+    ),
+    "vk_unreachable": "VK сейчас не отвечает. Попробуйте ещё раз через минуту.",
+    "duplicate_account": "Такой кабинет уже добавлен — обновите список и попробуйте снова.",
+}
+_AGENCY_CABINET_FALLBACK = (
+    "Кабинет создать не получилось. Попробуйте ещё раз или обратитесь к администратору."
+)
+_AGENCY_CABINET_KNOWN_STATUS = (400, 403, 404, 409, 422, 500, 502, 503)
+
+
+def _agency_cabinet_reject_reason(detail: Any) -> str:
+    """Человекочитаемая причина отказа `POST /ad-accounts/agency-cabinets`.
+
+    Половинчатые отказы (502 `token_issuance_failed`/`cabinet_persist_failed`)
+    приходят структурой с `vk_client_id`/`vk_username` — операция уже что-то
+    сделала в VK, и молчать об этом нельзя (CLAUDE.md §7): называем номер
+    клиента VK, чтобы администратор мог донастроить кабинет вручную, не заводя
+    в VK дубль.
+    """
+    if isinstance(detail, dict):
+        vk_client_id = detail.get("vk_client_id")
+        note = f" Номер клиента в VK: {vk_client_id}." if vk_client_id else ""
+        error_code = str(detail.get("error", ""))
+        if error_code == "token_issuance_failed":
+            return (
+                "Клиента в VK завели, но подключить кабинет к системе не получилось."
+                + note
+                + " Обратитесь к администратору — донастроить нужно вручную."
+            )
+        if error_code == "cabinet_persist_failed":
+            return (
+                "Кабинет в VK создан, но сохранить его в системе не получилось."
+                + note
+                + " Обратитесь к администратору — донастроить нужно вручную."
+            )
+        return _AGENCY_CABINET_FALLBACK
+    return _AGENCY_CABINET_ERRORS.get(str(detail or ""), _AGENCY_CABINET_FALLBACK)
+
+
+async def create_agency_cabinet(
+    client_id: int, full_name: str, tax_id: str, niche: str | None = None
+) -> AdAccountItem:
+    """`POST /ad-accounts/agency-cabinets`: завести клиенту кабинет VK автоматически (C1).
+
+    Ядро заводит клиента у агентства, выпускает ему доступ без подтверждения
+    клиента и закрепляет кабинет за `client_id` — оператору руками ничего
+    вставлять не нужно. Отказы превращаются в `AgencyCabinetRejected` с уже
+    готовым текстом; сеть/неопознанный код ответа → `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/ad-accounts/agency-cabinets"
+    payload: dict[str, Any] = {
+        "client_id": client_id,
+        "full_name": full_name,
+        "tax_id": tax_id,
+        "niche": niche,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_AGENCY_CABINET_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 201:
+        return _to_ad_account(response.json())
+    if response.status_code in _AGENCY_CABINET_KNOWN_STATUS:
+        detail: Any = None
+        with contextlib.suppress(ValueError):
+            detail = response.json().get("detail")
+        raise AgencyCabinetRejected(_agency_cabinet_reject_reason(detail))
+    raise CoreUnavailable(f"core {response.status_code}")
 
 
 async def set_ad_account_client(ad_account_id: int, client_id: int | None) -> AdAccountItem:
