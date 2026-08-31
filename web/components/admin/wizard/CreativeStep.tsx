@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { PickedFile } from "./types";
-import { buildFileIssues, pickFile, showFirstFrame } from "./fileUtils";
+import { buildFileIssues, formatFileSize, pickFile, showFirstFrame } from "./fileUtils";
 
 export function CreativeStep({
   picked,
@@ -136,7 +136,7 @@ export function CreativeStep({
             )}
             <p className="adm-drop__meta">
               <span>{picked.file.name}</span>
-              <span>{(picked.file.size / (1024 * 1024)).toFixed(1)} МБ</span>
+              <span>{formatFileSize(picked.file.size)}</span>
             </p>
             <div className="adm-drop__file-actions">
               <button className="btn" type="button" onClick={() => fileInputRef.current?.click()}>

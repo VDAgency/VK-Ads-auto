@@ -98,6 +98,17 @@ export function showFirstFrame(event: React.SyntheticEvent<HTMLVideoElement>): v
   }
 }
 
+/** Человеческий размер файла: до 1 МБ — в килобайтах (без дробной части),
+ * иначе — в мегабайтах с одним знаком после запятой. Раньше маленькие файлы
+ * (например, 19 КБ) всегда переводились в МБ и округлялись до «0.0 МБ» —
+ * бесполезная подпись (найденный баг). */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
 /** Файл → base64 без префикса `data:`. */
 export function readFileBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
