@@ -216,6 +216,29 @@ async def set_client_password(
     return client
 
 
+async def find_operator_by_telegram_id(
+    session: AsyncSession, account_id: int, telegram_id: int
+) -> Operator | None:
+    """Найти оператора тенанта по telegram_id, не создавая (для входа по паролю).
+
+    В отличие от `get_or_create_operator` не заводит строку на неизвестный
+    telegram_id — иначе подбор ID при входе плодил бы мусорные записи операторов.
+    """
+    stmt = select(Operator).where(
+        Operator.account_id == account_id, Operator.telegram_id == telegram_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def set_operator_password_hash(
+    session: AsyncSession, operator: Operator, password_hash: str
+) -> None:
+    """Записать хеш пароля оператору и отметить время установки."""
+    operator.password_hash = password_hash
+    operator.password_set_at = datetime.now(UTC)
+    await session.flush()
+
+
 async def get_or_create_operator(
     session: AsyncSession,
     account_id: int,
