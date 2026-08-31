@@ -423,7 +423,7 @@ def test_create_cabinet_or_report_stops_if_tax_id_disappeared_meanwhile(
         # Три кода ниже — выпуск собственного токена агентства, шаг до создания
         # клиента в VK (ревью ветки §3): раньше их не перехватывал ни один
         # блок роутера, кроме vk_oauth_not_configured.
-        (500, "vk_oauth_invalid_credentials", "Ключи", "vk_oauth_invalid_credentials"),
+        (500, "vk_oauth_invalid_credentials", "не принял", "vk_oauth_invalid_credentials"),
         (502, "vk_oauth_rejected", "администратора", "vk_oauth_rejected"),
         (503, "vk_oauth_unavailable", "минуту", "vk_oauth_unavailable"),
         # Неопознанная строковая деталь (например, будущий код ядра, которому
