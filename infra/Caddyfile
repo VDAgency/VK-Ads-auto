@@ -5,18 +5,64 @@
 vk-ads-auto.ru, www.vk-ads-auto.ru {
 	encode gzip
 
-	# Операторские/трекинг-эндпоинты — только для бота (он ходит в api:8000 внутри
-	# compose-сети, минуя Caddy). Снаружи отдаём 404, чтобы не светить ПДн клиентов
-	# (карточка брифа, список инвайтов) и не давать мутации без авторизации (152-ФЗ,
-	# CLAUDE.md §1.3). Публичные остаются открытыми: POST /api/v1/briefs (веб-форма),
-	# /api/v1/cabinet/* (клиентский кабинет), /api/v1/admin/* (своя авторизация).
-	# `/api/v1/ad-accounts*` здесь особенно важен: через него добавляются и
-	# удаляются токены доступа к рекламным кабинетам. Веб управляет ими через
-	# `/api/v1/admin/ad-accounts` — там своя авторизация (`require_admin`).
-	# `/api/v1/senler*` (B2) — тем же токеном обходится ad-accounts: сюда
-	# уходит токен доступа к сообществу.
-	@operator_only path /api/v1/briefs/* /api/v1/invites /api/v1/cabinets /api/v1/cabinets/* /api/v1/campaigns/* /api/v1/stats/* /api/v1/ad-accounts /api/v1/ad-accounts/* /api/v1/senler /api/v1/senler/*
-	handle @operator_only {
+	# --- Заголовки безопасности (аудит 2026-09-01) ---
+	# Раньше не отдавался ни один: ни HSTS, ни защита от кликджекинга, ни CSP.
+	header {
+		# Год HTTPS. Без `includeSubDomains` сознательно: поддомены сервисов
+		# (n8n, docs/N8N.md) заводятся отдельными блоками, и запрет HTTP на них
+		# браузер запомнил бы на год вперёд — откатить это уже нечем.
+		Strict-Transport-Security "max-age=31536000"
+		# Не угадывать тип по содержимому: загруженный креатив не должен
+		# «стать» html и выполниться в origin сайта.
+		X-Content-Type-Options "nosniff"
+		# Кабинет открывается по ссылке с токеном в адресе — обрамление чужой
+		# страницей запрещаем и старым заголовком, и `frame-ancestors` в CSP.
+		X-Frame-Options "DENY"
+		# Токен кабинета живёт в query (`/cabinet.html?token=`). Политика по
+		# умолчанию у браузеров та же, но полагаться на умолчание не будем.
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+		# `unsafe-inline` для script/style вынужденный: статический экспорт Next
+		# отдаёт инлайн-скрипт гидрации и инлайн-стили, а nonce проставить некому
+		# (рантайма нет). Остальные директивы при этом работают в полную силу:
+		# внешних ресурсов у страниц нет вообще, поэтому `default-src 'self'`
+		# ничего не ломает. `blob:` в img-src — превью креатива в мастере запуска
+		# (web/components/admin/wizard/fileUtils.ts, URL.createObjectURL).
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		# Не подсказывать снаружи, что за сервер внутри (отдавался `Server: uvicorn`).
+		-Server
+	}
+
+	# --- Периметр API: белый список (аудит 2026-09-01) ---
+	# Было наоборот — перечислялись ЗАКРЫТЫЕ пути, всё остальное проксировалось.
+	# Такая схема fail-open: новый операторский эндпоинт становился публичным по
+	# умолчанию, и заметить это можно было только вручную сверив два списка.
+	# Теперь публичное перечислено поимённо, а всё прочее под /api/v1 закрыто, и
+	# забывчивость приводит к недоступности, а не к утечке (CLAUDE.md §1.3, 152-ФЗ).
+	#
+	# Публичны ровно три вещи:
+	#   POST /api/v1/briefs      — приём брифа из веб-формы (свой rate-limit);
+	#   /api/v1/cabinet*         — клиентский кабинет (magic-link + session-cookie);
+	#   /api/v1/admin/*          — веб-админка оператора (`require_admin`).
+	# Операторские (`/invites`, `/cabinets`, `/ad-accounts`, `/campaigns`, `/stats`,
+	# `/senler`, `/briefs/{id}`) наружу не выходят: бот ходит к ним внутри
+	# compose-сети, минуя Caddy.
+	@public_api path /api/v1/briefs /api/v1/cabinet /api/v1/cabinet/* /api/v1/admin/*
+	handle @public_api {
+		reverse_proxy api:8000
+	}
+
+	# Схема и интерактивная документация FastAPI. Основной запрет — в самом ядре
+	# (`core/app.py`, docs_url=None на проде); здесь второй рубеж на случай, если
+	# `APP_ENV` на сервере окажется не `production`. До аудита 2026-09-01 всё это
+	# отдавалось наружу и раскрывало карту операторского API.
+	@api_docs path /docs /docs/* /redoc /redoc/* /openapi.json
+	handle @api_docs {
+		respond 404
+	}
+
+	@internal_api path /api/v1 /api/v1/*
+	handle @internal_api {
 		respond 404
 	}
 

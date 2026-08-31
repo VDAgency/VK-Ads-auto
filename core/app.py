@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from config.settings import get_settings
 from db.session import get_sessionmaker
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -98,7 +99,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Собрать и вернуть экземпляр FastAPI-приложения."""
-    app = FastAPI(title="VK-Ads-auto", version="0.0.0", lifespan=lifespan)
+    # Интерактивная документация и схема OpenAPI — только вне продакшена.
+    # Аудит 2026-09-01: на проде `/docs`, `/redoc` и `/openapi.json` отвечали 200 и
+    # отдавали все 52 эндпоинта с параметрами и телами запросов, включая
+    # операторские (`/invites`, `/ad-accounts`, `/senler`). Сами они закрыты
+    # периметром и отдают 404 — но схема раскрывала и факт их существования, и
+    # точную форму вызова, то есть готовую карту для атаки.
+    in_production = get_settings().app_env == "production"
+    app = FastAPI(
+        title="VK-Ads-auto",
+        version="0.0.0",
+        lifespan=lifespan,
+        docs_url=None if in_production else "/docs",
+        redoc_url=None if in_production else "/redoc",
+        openapi_url=None if in_production else "/openapi.json",
+    )
     # Сжатие текстовых ответов. StaticFiles ничего не сжимает сам, а фронт
     # Блока 2 — сотни килобайт JS и CSS: замер прод-сборки дал 421 КБ лишнего
     # трафика на один визит лендинга (по всей сборке 736.7 → 208.0 КБ).

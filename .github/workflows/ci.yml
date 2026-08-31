@@ -1,8 +1,13 @@
 name: CI
 
-# quality — гейт качества (на всех ветках/PR).
-# deploy — автодеплой на сервер ТОЛЬКО при push в main и только после зелёного quality
-#          (см. docs/DEPLOY.md). Секреты — в GitHub Actions Secrets, не в коде.
+# quality  — гейт качества (на всех ветках/PR).
+# frontend — гейт фронта (eslint/prettier/build/tsc).
+# security — гейт безопасности (аудит 2026-09-01): секреты, SAST, уязвимые
+#            зависимости фронта и бэка. До аудита в CI не было ни одной проверки
+#            безопасности — запрет CLAUDE.md §1.1 держался только на глазах ревьюера.
+# deploy   — автодеплой на сервер ТОЛЬКО при push в main и только после зелёных
+#            quality, frontend и security (см. docs/DEPLOY.md). Секреты — в GitHub
+#            Actions Secrets, не в коде.
 
 on:
   push:
@@ -85,9 +90,53 @@ jobs:
       - name: TypeScript
         run: npm run typecheck
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Полная история: gitleaks проверяет не только рабочее дерево, но и
+          # каждый коммит. Секрет, добавленный и удалённый следующим коммитом,
+          # остаётся в истории публичного репозитория навсегда.
+          fetch-depth: 0
+
+      - name: Gitleaks (секреты в коде и истории)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up uv + Python 3.11
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      # Падаем только на HIGH: LOW у bandit — это в основном строки русского
+      # интерфейса в переменных со словом «password» и `assert` для сужения
+      # типов под mypy. Держать гейт на них — значит приучить его игнорировать.
+      - name: Bandit (SAST по нашему Python-коду)
+        run: uvx bandit -r core bot services integrations db config userbot kotbot -lll -iii -q
+
+      - name: pip-audit (уязвимости зависимостей бэка)
+        run: |
+          uv export --frozen --no-dev --no-hashes --format requirements-txt > /tmp/requirements.txt
+          uvx pip-audit -r /tmp/requirements.txt
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm audit (уязвимости зависимостей фронта)
+        working-directory: web
+        run: npm audit --audit-level=high
+
   deploy:
     runs-on: ubuntu-latest
-    needs: [quality, frontend]
+    needs: [quality, frontend, security]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Deploy over SSH and verify health

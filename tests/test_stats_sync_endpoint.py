@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from core.app import create_app
@@ -88,5 +87,9 @@ def test_sync_without_active_campaigns_is_empty() -> None:
 
 def test_sync_path_is_closed_on_ingress() -> None:
     # Ручной триггер синхронизации — операторский, снаружи Caddy отдаёт 404.
-    caddyfile = Path(__file__).resolve().parent.parent / "infra" / "Caddyfile"
-    assert "/api/v1/stats/*" in caddyfile.read_text(encoding="utf-8")
+    # С аудита 2026-09-01 периметр — белый список: путь закрыт тем, что его в
+    # этом списке нет (было наоборот — перечислялись закрытые пути).
+    from tests.test_ingress_trust_boundary import _caddy_matcher_patterns, _caddy_path_matches
+
+    patterns = _caddy_matcher_patterns("public_api")
+    assert not any(_caddy_path_matches(p, "/api/v1/stats/sync") for p in patterns)

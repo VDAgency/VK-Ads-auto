@@ -82,7 +82,9 @@ def test_stop_does_not_cross_tenants() -> None:
 
 def test_stop_path_is_closed_on_ingress() -> None:
     # Снаружи операторский путь обязан отдавать 404 (Caddy), как соседние ресурсы.
-    from pathlib import Path
+    # С аудита 2026-09-01 периметр — белый список: путь закрыт тем, что его в
+    # этом списке нет (было наоборот — перечислялись закрытые пути).
+    from tests.test_ingress_trust_boundary import _caddy_matcher_patterns, _caddy_path_matches
 
-    caddyfile = Path(__file__).resolve().parent.parent / "infra" / "Caddyfile"
-    assert "/api/v1/campaigns/*" in caddyfile.read_text(encoding="utf-8")
+    patterns = _caddy_matcher_patterns("public_api")
+    assert not any(_caddy_path_matches(p, "/api/v1/campaigns/1/stop") for p in patterns)
