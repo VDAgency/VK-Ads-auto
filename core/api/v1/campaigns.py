@@ -29,12 +29,11 @@ class CampaignStopOut(BaseModel):
     external_id: str | None = None
 
 
-@router.post("/{campaign_id}/stop")
-async def stop(
-    campaign_id: int,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> CampaignStopOut:
-    """Остановить кампанию на площадке и зафиксировать статус `stopped`."""
+async def stop_campaign_response(session: AsyncSession, campaign_id: int) -> CampaignStopOut:
+    """Остановить кампанию на площадке и зафиксировать статус `stopped`.
+
+    Общая часть для операторского эндпоинта и веб-админки.
+    """
     try:
         campaign = await stop_campaign(session, DEFAULT_ACCOUNT_ID, campaign_id)
     except CampaignStopError as exc:
@@ -45,3 +44,12 @@ async def stop(
     return CampaignStopOut(
         campaign_id=campaign.id, status=campaign.status, external_id=campaign.external_id
     )
+
+
+@router.post("/{campaign_id}/stop")
+async def stop(
+    campaign_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CampaignStopOut:
+    """Остановить кампанию на площадке и зафиксировать статус `stopped`."""
+    return await stop_campaign_response(session, campaign_id)

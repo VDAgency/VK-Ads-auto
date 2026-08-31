@@ -69,11 +69,11 @@ class CabinetSyncOut(BaseModel):
     results: dict[int, str]
 
 
-@router.get("")
-async def get_cabinets(
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> CabinetsOut:
-    """Список рекламных кабинетов (реальные или демо, пока открыт мок-гейт)."""
+async def list_cabinets_response(session: AsyncSession) -> CabinetsOut:
+    """Список рекламных кабинетов (реальные или демо, пока открыт мок-гейт).
+
+    Общая часть для операторского эндпоинта и веб-админки.
+    """
     views = await list_cabinets(session, DEFAULT_ACCOUNT_ID)
     return CabinetsOut(
         items=[
@@ -89,16 +89,13 @@ async def get_cabinets(
     )
 
 
-@router.get("/{cabinet_id}/stats")
-async def get_cabinet_stats(
-    cabinet_id: str,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    period: Annotated[Literal["all", "month", "week"], Query()] = "all",
+async def cabinet_stats_response(
+    session: AsyncSession, cabinet_id: str, period: Literal["all", "month", "week"]
 ) -> StatsOut:
     """Метрики кабинета за период (`all`/`month`/`week`) + производные.
 
     Только чтение сохранённых данных — не мутирует БД (обновление — отдельный
-    `POST /{cabinet_id}/stats/sync`, см. ниже).
+    `sync_cabinet_response`, см. ниже). Общая часть для бота и веб-админки.
     """
     view = await cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id, period)
     return StatsOut(
@@ -115,11 +112,7 @@ async def get_cabinet_stats(
     )
 
 
-@router.post("/{cabinet_id}/stats/sync")
-async def sync_cabinet(
-    cabinet_id: str,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> CabinetSyncOut:
+async def sync_cabinet_response(session: AsyncSession, cabinet_id: str) -> CabinetSyncOut:
     """Обновить метрики и статус кампаний ЭТОГО кабинета перед показом (дефект 1).
 
     Синк по кампании никогда не бросает исключение наружу (см.
@@ -134,6 +127,8 @@ async def sync_cabinet(
     (A2, первая версия) такая сводка ошибочно засчитывалась `ok=False` наравне с
     настоящей ошибкой площадки — из-за этого бот рисовал тревожную пометку под
     каждым неподнятым кабинетом, хотя обновлять там было нечего.
+
+    Общая часть для бота и веб-админки.
     """
     results = await sync_cabinet_stats(session, DEFAULT_ACCOUNT_ID, cabinet_id)
     await session.commit()
@@ -146,3 +141,30 @@ async def sync_cabinet(
         failed=failed,
         results=results,
     )
+
+
+@router.get("")
+async def get_cabinets(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CabinetsOut:
+    """Список рекламных кабинетов (реальные или демо, пока открыт мок-гейт)."""
+    return await list_cabinets_response(session)
+
+
+@router.get("/{cabinet_id}/stats")
+async def get_cabinet_stats(
+    cabinet_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    period: Annotated[Literal["all", "month", "week"], Query()] = "all",
+) -> StatsOut:
+    """Метрики кабинета за период (`all`/`month`/`week`) + производные."""
+    return await cabinet_stats_response(session, cabinet_id, period)
+
+
+@router.post("/{cabinet_id}/stats/sync")
+async def sync_cabinet(
+    cabinet_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CabinetSyncOut:
+    """Обновить метрики и статус кампаний ЭТОГО кабинета перед показом (дефект 1)."""
+    return await sync_cabinet_response(session, cabinet_id)
