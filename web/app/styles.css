@@ -235,6 +235,22 @@ fieldset {
   color: var(--ink);
   margin-bottom: var(--space-2);
 }
+/* Одиночный radio/checkbox-выбор с подписью в той же строке (например, «Свою» /
+   «Третьего лица» в `AdAccounts.tsx`/`SendBrief.tsx`) — не заголовок поля, а
+   сама кликабельная опция: без этого правила общий стиль `label` выше сажал
+   переключатель на всю ширину, подпись съезжала отдельной строкой (найденный
+   баг), а тач-таргет был меньше кружка. */
+.field label:has(> input[type="radio"]),
+.field label:has(> input[type="checkbox"]),
+.form-field label:has(> input[type="radio"]),
+.form-field label:has(> input[type="checkbox"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  font-weight: 400;
+  cursor: pointer;
+}
 .field .hint {
   display: block;
   font-size: var(--fs-xs);
@@ -246,10 +262,15 @@ fieldset {
   margin-bottom: var(--space-4);
 }
 
-.field input,
+/* `:not([type="radio"]):not([type="checkbox"])` — иначе правило ловит и их:
+   `AdAccounts.tsx`/`SendBrief.tsx` кладут обычные radio-`<label>` прямо в
+   `fieldset.form-field`, и без исключения переключатель раздувался в
+   полноширинный блок 44px высотой, а подпись съезжала под него отдельной
+   строкой (найденный вживую баг). */
+.field input:not([type="radio"]):not([type="checkbox"]),
 .field select,
 .field textarea,
-.form-field input,
+.form-field input:not([type="radio"]):not([type="checkbox"]),
 .form-field select,
 .form-field textarea {
   width: 100%;
@@ -276,16 +297,16 @@ fieldset {
 .form-field input::placeholder {
   color: #68738a; /* 4.76:1 на белом */
 }
-.field input:hover,
+.field input:not([type="radio"]):not([type="checkbox"]):hover,
 .field select:hover,
 .field textarea:hover,
-.form-field input:hover {
+.form-field input:not([type="radio"]):not([type="checkbox"]):hover {
   border-color: var(--ink);
 }
-.field input:focus-visible,
+.field input:not([type="radio"]):not([type="checkbox"]):focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible,
-.form-field input:focus-visible,
+.form-field input:not([type="radio"]):not([type="checkbox"]):focus-visible,
 .form-field select:focus-visible,
 .form-field textarea:focus-visible {
   border-color: var(--accent);
