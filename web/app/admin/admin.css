@@ -499,6 +499,88 @@
 }
 
 /* --------------------------------------------------------------------------
+   Загрузка креатива — перетаскивание + клик, превью, ограничения заранее.
+   Фокус — по общему правилу [tabindex]:focus-visible из styles.css, здесь
+   ничего дополнительно объявлять не нужно.
+   -------------------------------------------------------------------------- */
+.adm-drop {
+  display: grid;
+  gap: var(--space-1);
+  place-items: center;
+  text-align: center;
+  padding: var(--space-8) var(--space-5);
+  background: var(--surface-sunk);
+  border: 2px dashed var(--line-input);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .adm-drop:hover {
+    border-color: var(--ink);
+  }
+}
+.adm-drop--over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.adm-drop__title {
+  margin: 0;
+  font-weight: 600;
+}
+.adm-drop__sub {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.adm-drop__hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.adm-drop__error {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: #f8e9e9;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.adm-drop__preview {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.adm-drop__media {
+  display: block;
+  max-width: 100%;
+  max-height: 16rem;
+  border-radius: var(--radius-sm);
+  margin: 0 auto var(--space-3);
+}
+.adm-drop__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+.adm-drop__file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* --------------------------------------------------------------------------
    Поле пароля (вход, смена пароля) — глаз показать/скрыть, как в LoginModal.
    -------------------------------------------------------------------------- */
 .adm-pw {

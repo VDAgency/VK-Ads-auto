@@ -31,18 +31,107 @@ function readFileBase64(file: File): Promise<string> {
   });
 }
 
-/** Размеры изображения для валидации на стороне ядра; для видео — нули. */
-function imageSize(file: File): Promise<{ width: number; height: number }> {
+type FileKind = "photo" | "video";
+
+/** Итог разбора выбранного файла — то, что нужно и для превью, и для проверок. */
+type PickedFile = {
+  file: File;
+  previewUrl: string;
+  kind: FileKind | null;
+  width: number;
+  height: number;
+};
+
+// Зеркало ограничений ядра — только для быстрой обратной связи до отправки;
+// последнее слово всегда за ядром (services/creative_intake.py, creative_validate.py).
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MIN_IMAGE_SIDE = 600;
+
+function isAllowedImageType(file: File): boolean {
+  return file.type === "image/jpeg" || file.type === "image/jpg" || file.type === "image/png";
+}
+
+function isAllowedVideoType(file: File): boolean {
+  return file.type === "video/mp4";
+}
+
+/** Размеры изображения через `Image`. */
+function readImageDimensions(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
-    if (!file.type.startsWith("image/")) {
-      resolve({ width: 0, height: 0 });
-      return;
-    }
     const img = new Image();
     img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
     img.onerror = () => resolve({ width: 0, height: 0 });
-    img.src = URL.createObjectURL(file);
+    img.src = url;
   });
+}
+
+/** Размеры видео через `<video>` и `videoWidth`/`videoHeight`. */
+function readVideoDimensions(url: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => resolve({ width: video.videoWidth, height: video.videoHeight });
+    video.onerror = () => resolve({ width: 0, height: 0 });
+    video.src = url;
+  });
+}
+
+/** Разобрать выбранный/перетащенный файл: тип, превью, размеры. */
+async function pickFile(file: File): Promise<PickedFile> {
+  const previewUrl = URL.createObjectURL(file);
+  const kind: FileKind | null = file.type.startsWith("image/")
+    ? "photo"
+    : file.type.startsWith("video/")
+      ? "video"
+      : null;
+  const { width, height } =
+    kind === "photo"
+      ? await readImageDimensions(previewUrl)
+      : kind === "video"
+        ? await readVideoDimensions(previewUrl)
+        : { width: 0, height: 0 };
+  return { file, previewUrl, kind, width, height };
+}
+
+/** Проверки до отправки, человеческим языком — ровно то, что реально проверяет
+ * ядро (25 МБ / формат и минимум 600×600 у фото / mp4 у видео), не больше. */
+function buildFileIssues(picked: PickedFile): string[] {
+  const issues: string[] = [];
+  const sizeMb = (picked.file.size / (1024 * 1024)).toFixed(1);
+
+  if (picked.file.size > MAX_UPLOAD_BYTES) {
+    issues.push(`Файл весит ${sizeMb} МБ — это больше, чем можно (до 25 МБ). Нужен файл поменьше.`);
+  }
+
+  if (picked.kind === null) {
+    issues.push("Такой файл не подходит — нужно фото или видео.");
+    return issues;
+  }
+
+  if (picked.kind === "photo") {
+    if (!isAllowedImageType(picked.file)) {
+      issues.push("Такой формат картинки не подходит — нужен JPG или PNG.");
+    } else if (picked.width < MIN_IMAGE_SIDE || picked.height < MIN_IMAGE_SIDE) {
+      issues.push(
+        `Изображение ${picked.width}×${picked.height} px — маловато. Нужно не меньше ${MIN_IMAGE_SIDE}×${MIN_IMAGE_SIDE} px.`,
+      );
+    }
+  } else if (!isAllowedVideoType(picked.file)) {
+    issues.push("Такой формат видео не подходит — нужен MP4.");
+  }
+
+  return issues;
+}
+
+/** Первый кадр видео как превью: перематываем на долю секунды, иначе плеер
+ * до нажатия «play» показывает чёрный кадр в части браузеров. */
+function showFirstFrame(event: React.SyntheticEvent<HTMLVideoElement>): void {
+  const video = event.currentTarget;
+  try {
+    video.currentTime = 0.01;
+  } catch {
+    // Не критично: плеер всё равно рабочий, просто без кадра до воспроизведения.
+  }
 }
 
 export function BriefCardView({
@@ -61,7 +150,11 @@ export function BriefCardView({
   const [edits, setEdits] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [picked, setPicked] = useState<PickedFile | null>(null);
+  const [fileIssues, setFileIssues] = useState<string[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [sending, setSending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Держим карточку отдельным состоянием: после правок/загрузки креатива её
   // обновляет ответ мутации напрямую, не дожидаясь нового GET через хук.
@@ -70,6 +163,32 @@ export function BriefCardView({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCard(resource.data);
   }, [resource]);
+
+  // Превью — objectURL, который нужно освободить при выборе нового файла и
+  // при уходе с экрана, иначе адреса копятся в памяти вкладки.
+  useEffect(() => {
+    return () => {
+      if (picked) URL.revokeObjectURL(picked.previewUrl);
+    };
+  }, [picked]);
+
+  async function selectFile(file: File) {
+    const next = await pickFile(file);
+    setPicked((prevPicked) => {
+      if (prevPicked) URL.revokeObjectURL(prevPicked.previewUrl);
+      return next;
+    });
+    setFileIssues(buildFileIssues(next));
+  }
+
+  function clearFile() {
+    setPicked((prevPicked) => {
+      if (prevPicked) URL.revokeObjectURL(prevPicked.previewUrl);
+      return null;
+    });
+    setFileIssues([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   async function applyEdits() {
     const parsed = parseEdits(edits);
@@ -116,24 +235,25 @@ export function BriefCardView({
   }
 
   async function uploadCreative() {
-    const file = fileRef.current?.files?.[0];
-    if (!file) {
+    if (!picked) {
       onFlash({ text: "Выберите фото или видео.", ok: false });
       return;
     }
+    if (fileIssues.length || picked.kind === null) {
+      onFlash({ text: "Сначала поправьте файл — ограничения показаны над кнопкой.", ok: false });
+      return;
+    }
 
-    onFlash({ text: "Загрузка…", ok: true });
-    const mediaType = file.type.startsWith("video/") ? "video" : "photo";
-    const [b64, size] = await Promise.all([readFileBase64(file), imageSize(file)]);
-
+    setSending(true);
     try {
+      const b64 = await readFileBase64(picked.file);
       const data = await adminFetch<{ message: string }>(`/briefs/${id}/creative`, {
         method: "POST",
         body: JSON.stringify({
           media_b64: b64,
-          media_type: mediaType,
-          width: size.width,
-          height: size.height,
+          media_type: picked.kind,
+          width: picked.width,
+          height: picked.height,
           title,
           body,
         }),
@@ -150,6 +270,8 @@ export function BriefCardView({
         else if (detail?.missing) reason = `Бриф неполный: ${detail.missing.join(", ")}`;
       }
       onFlash({ text: reason, ok: false });
+    } finally {
+      setSending(false);
     }
   }
 
@@ -270,9 +392,108 @@ export function BriefCardView({
 
       <div className="adm-panel" id="creative-box" hidden={!showCreative}>
         <div className="form-field">
-          <label htmlFor="cr-file">Фото или видео</label>
-          <input type="file" id="cr-file" accept="image/*,video/*" ref={fileRef} />
+          <label id="cr-file-label">Фото или видео</label>
+
+          {/* Зона — не button/label поверх input, а сама фокусируемая цель:
+              так одинаково работают клик, Enter/Пробел и перетаскивание. */}
+          <div
+            className={isDragOver ? "adm-drop adm-drop--over" : "adm-drop"}
+            role="button"
+            tabIndex={0}
+            aria-labelledby="cr-file-label"
+            aria-describedby="cr-file-hint cr-file-errors"
+            onClick={() => fileInputRef.current?.click()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragOver(true);
+            }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragOver(false);
+              const dropped = event.dataTransfer.files?.[0];
+              if (dropped) void selectFile(dropped);
+            }}
+          >
+            <p className="adm-drop__title">Перетащите файл сюда или нажмите, чтобы выбрать</p>
+            <p className="adm-drop__sub">Фото — JPG или PNG. Видео — MP4.</p>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            id="cr-file"
+            className="visually-hidden"
+            tabIndex={-1}
+            accept="image/jpeg,image/png,video/mp4"
+            onChange={(event) => {
+              const chosen = event.target.files?.[0];
+              if (chosen) void selectFile(chosen);
+            }}
+          />
+          <p className="adm-panel__hint" id="cr-file-hint">
+            Минимум для фото — 600×600 px. Файл — до 25 МБ.
+          </p>
+          <div id="cr-file-errors" role="alert">
+            {fileIssues.map((issue) => (
+              <p className="adm-drop__error" key={issue}>
+                {issue}
+              </p>
+            ))}
+          </div>
+
+          {picked ? (
+            <div className="adm-drop__preview">
+              {picked.kind === "video" ? (
+                <video
+                  className="adm-drop__media"
+                  src={picked.previewUrl}
+                  controls
+                  preload="metadata"
+                  onLoadedMetadata={showFirstFrame}
+                />
+              ) : (
+                // Превью локального blob-URL, не сетевой ассет — `next/image` тут
+                // ничего не оптимизирует (оптимизация и так выключена конфигом),
+                // только требует лишние поля.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  className="adm-drop__media"
+                  src={picked.previewUrl}
+                  alt={`Превью файла «${picked.file.name}»`}
+                />
+              )}
+              <p className="adm-drop__meta">
+                <span>{picked.file.name}</span>
+                <span>{(picked.file.size / (1024 * 1024)).toFixed(1)} МБ</span>
+              </p>
+              <div className="adm-drop__file-actions">
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={sending}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Заменить файл
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  disabled={sending}
+                  onClick={clearFile}
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
+
         <div className="form-field">
           <label htmlFor="cr-title">Заголовок</label>
           <input
@@ -300,9 +521,10 @@ export function BriefCardView({
           className="btn btn--primary"
           id="cr-send"
           type="button"
+          disabled={sending || !picked || fileIssues.length > 0}
           onClick={() => void uploadCreative()}
         >
-          Отправить и запустить кампанию
+          {sending ? "Отправляем…" : "Отправить и запустить кампанию"}
         </button>
       </div>
     </>
