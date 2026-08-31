@@ -56,8 +56,15 @@ from services.ad_accounts import (
     resolve_default_account,
     resolve_token,
 )
-from services.brief_parser import BriefVariant, Goal, parse_brief
-from services.launch import LaunchResult, daily_budget_rub, run_campaign
+from services.brief_parser import BriefVariant, Goal, parse_brief, parse_budget
+from services.brief_view import field_value, get_brief_card, tax_id
+from services.launch import (
+    LaunchResult,
+    balance_below_daily_budget,
+    daily_budget_rub,
+    daily_budget_rub_from_amount,
+    run_campaign,
+)
 from services.mapping import CampaignSpec, UnsupportedBriefGoalError, build_campaign_spec
 from services.notifier import notify_operator
 from services.secret_box import NotConfiguredError
@@ -264,6 +271,19 @@ def _digits_only(value: str) -> str:
     return re.sub(r"\D+", "", value)
 
 
+def ad_account_client_mismatch(ad_account: AdAccountView, brief_client_id: int | None) -> bool:
+    """Кабинет закреплён за ДРУГИМ клиентом, чем бриф — деньги спишутся не с того
+    счёта (spec 2026-08-25 §1.2). Общий кабинет (`client_id is None`) подходит
+    любому брифу — не признак ошибки.
+
+    Читающая версия первого правила `_check_ad_account_matches_brief` ниже (не
+    бросает исключение) — нужна карточке предпросмотра запуска (`launch_preview`),
+    которая показывает оператору то же условие, что реальный запуск отклонит
+    `AdAccountClientMismatchError`, но без побочных эффектов.
+    """
+    return ad_account.client_id is not None and ad_account.client_id != brief_client_id
+
+
 def _check_ad_account_matches_brief(
     ad_account: AdAccountView, brief_client_id: int | None, brief_tax_id: str | None
 ) -> None:
@@ -279,7 +299,10 @@ def _check_ad_account_matches_brief(
     брифов физлиц. Молчаливое сравнение по имени рекламодателя НЕ делаем — там
     опечатки и сокращения, ложный отказ гарантирован.
     """
-    if ad_account.client_id is not None and ad_account.client_id != brief_client_id:
+    if ad_account_client_mismatch(ad_account, brief_client_id):
+        # `ad_account_client_mismatch` истинно только когда `client_id` не пуст —
+        # но mypy об этом не знает через границу вызова функции, отсюда `assert`.
+        assert ad_account.client_id is not None
         raise AdAccountClientMismatchError(ad_account.id, ad_account.client_id, brief_client_id)
 
     account_inn = ad_account.advertiser_inn
@@ -325,6 +348,105 @@ async def _resolve_ad_account(
         raise AccountNotFoundError(str(ad_account_id))
     token = await resolve_token(session, account_id, ad_account_id, settings=settings)
     return view, token
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchPreview:
+    """Карточка предпросмотра запуска без креатива — то же самое, что видит
+    оператор бота на карточке подтверждения перед отправкой
+    (`bot/handlers/creative.py::render_launch_confirmation`), полями, а не
+    готовым текстом: рендер — дело канала (CLAUDE.md §1.3). Веб-мастеру запуска
+    она нужна затем же, зачем боту: запуск должен идти только после явного
+    подтверждения оператором, а не сразу по кнопке.
+    """
+
+    client_name: str | None
+    client_tax_id: str | None
+    object_url: str
+    surface_title: str
+    goal_title: str
+    budget_text: str
+    term_text: str
+    ad_account_id: int
+    ad_account_title: str
+    ad_account_external_id: str
+    ad_account_client_id: int | None
+    ad_account_client_name: str | None
+    ad_account_balance_rub: str | None
+    daily_budget_rub: float | None
+    balance_below_daily_budget: bool
+    client_mismatch: bool
+
+
+async def launch_preview(
+    session: AsyncSession,
+    account_id: int,
+    brief_id: int,
+    *,
+    ad_account_id: int | None = None,
+    settings: Settings | None = None,
+) -> LaunchPreview:
+    """Сводка перед запуском без креатива — только чтение, кампанию не создаёт и
+    не запускает; сам запуск остаётся отдельным явным вызовом
+    (`launch_without_creative`/`launch_from_creative`).
+
+    Кабинет выбирается тем же правилом, что и реальный запуск
+    (`_resolve_ad_account` выше): явно оператором либо единственный активный
+    (`resolve_default_account`) — те же ошибки выбора кабинета
+    (`AccountNotFoundError`, `NoAdAccountError`, `AmbiguousAdAccountError`,
+    `TokenUnavailableError`, `NotConfiguredError`) значат то же самое, что и при
+    запуске: маппинг в HTTP — дело роутера.
+
+    Данные клиента/объекта/площадки/цели и сырой текст бюджета/срока берутся из
+    `services.brief_view.get_brief_card` — той же карточки, что показывает бот
+    (`services.brief_view.field_value`/`tax_id` — публичные версии приватных
+    `_field_value`/`_tax_id` бота, см. их докстринги). Предупреждение о балансе —
+    той же формулой, что и реальный запуск (`services.launch.
+    balance_below_daily_budget`/`daily_budget_rub_from_amount`, перенесены туда
+    именно затем, чтобы бот и веб считали одинаково); признак чужого кабинета —
+    `ad_account_client_mismatch` выше, читающая версия того же правила, что
+    жёстко проверяет `_check_ad_account_matches_brief` при реальном запуске.
+
+    Бросает `BriefNotFoundError`, если брифа нет у тенанта.
+    """
+    cfg = settings or get_settings()
+    card = await get_brief_card(session, account_id, brief_id)
+    if card is None:
+        raise BriefNotFoundError(str(brief_id))
+
+    ad_account, _token = await _resolve_ad_account(session, account_id, ad_account_id, cfg)
+
+    budget_text = field_value(card, "Бюджет")
+    amount, needs_discussion = parse_budget(budget_text)
+    daily_budget = daily_budget_rub_from_amount(amount, needs_discussion)
+
+    balance_warning = False
+    if ad_account.balance_rub:
+        try:
+            balance = float(ad_account.balance_rub)
+        except ValueError:
+            balance = None
+        if balance is not None:
+            balance_warning = balance_below_daily_budget(balance, amount, needs_discussion)
+
+    return LaunchPreview(
+        client_name=card.client_name,
+        client_tax_id=tax_id(card) or None,
+        object_url=field_value(card, "Ссылка на страницу VK", "Ссылка на объект продвижения"),
+        surface_title=card.surface_title,
+        goal_title=card.launch_goal_title,
+        budget_text=budget_text,
+        term_text=field_value(card, "Срок / период"),
+        ad_account_id=ad_account.id,
+        ad_account_title=ad_account.title,
+        ad_account_external_id=ad_account.external_id,
+        ad_account_client_id=ad_account.client_id,
+        ad_account_client_name=ad_account.client_name,
+        ad_account_balance_rub=ad_account.balance_rub,
+        daily_budget_rub=daily_budget,
+        balance_below_daily_budget=balance_warning,
+        client_mismatch=ad_account_client_mismatch(ad_account, card.client_id),
+    )
 
 
 async def _resolve_cabinet(

@@ -18,8 +18,10 @@ from core.api.v1.ad_accounts import (
     AdAccountIn,
     AdAccountOut,
     AdAccountsOut,
+    AgencyCabinetIn,
     check_ad_account_response,
     create_ad_account_response,
+    create_agency_cabinet_response,
     delete_ad_account_response,
     list_ad_accounts_response,
 )
@@ -43,6 +45,20 @@ async def admin_post_ad_account(
 ) -> AdAccountOut:
     """Добавить рекламный кабинет из веб-админки."""
     return await create_ad_account_response(session, payload)
+
+
+@router.post("/ad-accounts/agency-cabinets", status_code=201)
+async def admin_post_agency_cabinet(
+    payload: AgencyCabinetIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AdAccountOut:
+    """Завести клиенту рекламный кабинет VK автоматически из веб-админки (зеркало).
+
+    Тот же `create_agency_cabinet_response`, что и у операторского пути: обработка
+    отказов сервиса (предохранитель `vk_agency_confirmed`, отсутствующий ИНН,
+    половинчатые состояния VK) не дублируется, а переиспользуется целиком.
+    """
+    return await create_agency_cabinet_response(session, payload)
 
 
 @router.post("/ad-accounts/{ad_account_id}/check")

@@ -138,3 +138,31 @@ async def apply_brief_edits(
     await session.flush()
     view = await _build_view(session, account_id, brief)
     return view, unknown
+
+
+def field_value(card: BriefCardView, *labels: str) -> str:
+    """Значение первого поля карточки с одной из подписей (нужно там, где вариант
+    брифа individual/community расходится в написании одного и того же поля,
+    `services/brief_fields.py`); неизвестная подпись — пустая строка.
+
+    Публичная версия приватного `_field_value` бота (`bot/handlers/creative.py`):
+    оба места решают одну и ту же задачу над одной и той же `BriefCardView`, но
+    по соглашению проекта (см. `_advertiser_line` там же) такие мелкие view-хелперы
+    не импортируются между независимо владеемыми модулями канала и ядра — это
+    создало бы скрытую связь. Здесь — версия для сервисов ядра (`services.launch_service.
+    launch_preview`), которым нужен тот же разбор для карточки веб-предпросмотра.
+    """
+    for field in card.fields:
+        if field.label in labels:
+            return field.value
+    return ""
+
+
+def tax_id(card: BriefCardView) -> str:
+    """ИНН клиента из карточки брифа. Подпись поля разная у вариантов («ИНН» /
+    «ИНН / ОГРН / ОГРНИП», `services/brief_fields.py`) — обе начинаются с «ИНН».
+    Публичная версия приватного `_tax_id` бота — см. докстринг `field_value` выше."""
+    for field in card.fields:
+        if field.label.startswith("ИНН"):
+            return field.value
+    return ""

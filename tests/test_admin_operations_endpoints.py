@@ -21,7 +21,7 @@ from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from services.ad_accounts import AmbiguousAdAccountError, NoAdAccountError
 from services.admin_auth import generate_admin_session
-from services.goals import subscription_targets
+from services.goals import launch_goals, subscription_targets
 from services.launch_service import LaunchOutcome
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -106,6 +106,37 @@ def test_surfaces_mirrors_the_bot_reference() -> None:
     assert {"kind", "title", "hint", "available", "goal", "goal_title", "needs_creative"} <= set(
         first
     )
+
+
+# --- GET /admin/goals ----------------------------------------------------------
+
+
+def test_goals_requires_admin_session() -> None:
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.get("/api/v1/admin/goals")
+        return resp.status_code
+
+    assert asyncio.run(_with_admin(scenario, authed=False)) == 401
+
+
+def test_goals_mirrors_the_bot_reference() -> None:
+    """Тот же список целей запуска, что видит бот (`services.goals.launch_goals`)."""
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/goals")
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    goals = launch_goals()
+    assert len(data["items"]) == len(goals)
+    by_code = {item["code"]: item for item in data["items"]}
+    assert by_code.keys() == {g.code for g in goals}
+    for goal in goals:
+        item = by_code[goal.code]
+        assert item["title"] == goal.title
+        assert item["implemented"] == goal.implemented
 
 
 # --- POST /admin/briefs/{id}/launch -------------------------------------------
