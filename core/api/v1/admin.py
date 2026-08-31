@@ -78,12 +78,19 @@ def _set_admin_cookie(response: Response, operator_id: int) -> None:
 def require_admin(
     admin_session: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
 ) -> int:
-    """FastAPI-зависимость: вернуть operator_id из admin-сессии или 401."""
+    """FastAPI-зависимость: вернуть operator_id из admin-сессии или 401.
+
+    Подпись валидна — не значит «доступ есть навсегда»: отдельно перепроверяем
+    `is_operator` (config/settings.py), чтобы убранный из списка операторов ID
+    не мог продолжать ходить по старой, ещё не истёкшей сессии (spec 2026-08-31,
+    см. докстринг модуля `services/admin_auth`). Проверка по списку в памяти,
+    в БД не ходит.
+    """
     if admin_session:
         operator_id = verify_admin_session(
             admin_session, get_settings().secret_key.get_secret_value()
         )
-        if operator_id is not None:
+        if operator_id is not None and get_settings().is_operator(operator_id):
             return operator_id
     raise HTTPException(status_code=401, detail="admin_auth_required")
 
@@ -104,8 +111,16 @@ async def login(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> OkResponse:
-    """Возвратный вход в админку: Telegram ID + пароль → session-cookie."""
-    ok = await authenticate_operator(session, DEFAULT_ACCOUNT_ID, data.telegram_id, data.password)
+    """Возвратный вход в админку: Telegram ID + пароль → session-cookie.
+
+    `is_operator` проверяется здесь же, ДО/наравне с паролем: пароль в БД мог
+    пережить исключение оператора из `OPERATOR_TELEGRAM_IDS` (уволили — строку
+    никто не чистит). Отказ по любой из двух причин выглядит одинаково —
+    снаружи не должно быть видно, чем вызван 401.
+    """
+    ok = get_settings().is_operator(data.telegram_id) and await authenticate_operator(
+        session, DEFAULT_ACCOUNT_ID, data.telegram_id, data.password
+    )
     if not ok:
         raise HTTPException(status_code=401, detail="Не подходит номер или пароль")
     _set_admin_cookie(response, data.telegram_id)

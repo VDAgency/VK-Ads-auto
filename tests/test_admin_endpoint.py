@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import pytest
 from config.settings import get_settings
 from core.app import create_app
 from db.base import Base
@@ -148,3 +149,47 @@ def test_set_password_too_short_rejected() -> None:
         return resp.status_code
 
     assert asyncio.run(_run(scenario)) == 422
+
+
+def test_login_rejected_when_removed_from_operator_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Пароль в базе верный, но Telegram ID убрали из OPERATOR_TELEGRAM_IDS.
+
+    Например, оператора уволили: возвратный вход паролем всё равно отказан,
+    тем же текстом, что при неверном пароле (spec 2026-08-31).
+    """
+
+    async def scenario(http: AsyncClient) -> tuple[int, int]:
+        http.cookies.set("admin_session", generate_admin_session(555, _SECRET))
+        set_resp = await http.post(
+            "/api/v1/admin/password", json={"password": "пароль_уволенного_оператора"}
+        )
+        http.cookies.clear()
+        # Уволили: ID убран из списка операторов, пароль в базе остался как есть.
+        monkeypatch.setattr(get_settings(), "operator_telegram_ids", frozenset())
+        login_resp = await http.post(
+            "/api/v1/admin/login",
+            json={"telegram_id": 555, "password": "пароль_уволенного_оператора"},
+        )
+        return set_resp.status_code, login_resp.status_code
+
+    set_code, login_code = asyncio.run(_run(scenario))
+    assert set_code == 200
+    assert login_code == 401
+
+
+def test_require_admin_rejects_valid_session_when_removed_from_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Подпись admin-сессии валидна и ещё не истекла, но ID вне списка операторов.
+
+    Доступ отозван немедленно, не дожидаясь TTL сессии (30 суток) — это и есть
+    прицельный способ отзыва из spec 2026-08-31.
+    """
+    client = TestClient(create_app())
+    client.cookies.set("admin_session", generate_admin_session(555, _SECRET))
+    assert client.get("/api/v1/admin/me").status_code == 200  # пока оператор в списке
+
+    monkeypatch.setattr(get_settings(), "operator_telegram_ids", frozenset())
+    assert client.get("/api/v1/admin/me").status_code == 401
