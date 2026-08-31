@@ -3,7 +3,13 @@
 import { useState } from "react";
 
 import { ApiError } from "@/lib/api";
-import { AD_ACCOUNT_ERRORS, adminFetch, HEALTH_RU, type AdAccount } from "@/lib/adminApi";
+import {
+  AD_ACCOUNT_ERRORS,
+  adminFetch,
+  HEALTH_RU,
+  isHealthBad,
+  type AdAccount,
+} from "@/lib/adminApi";
 import { useAdminResource } from "@/lib/useAdminResource";
 
 import { HealthBadge } from "./ui/Badge";
@@ -212,11 +218,22 @@ export function AdAccounts() {
                   id {account.external_id} · токен{" "}
                   {account.token_tail ? `…${account.token_tail}` : "—"}
                 </div>
-                {account.health_error ? <div className="muted">{account.health_error}</div> : null}
+                {/* Ошибку прошлой проверки показываем только при ДЕЙСТВИТЕЛЬНО плохом
+                    состоянии сейчас — иначе (найденный баг) бейдж говорит «жив», а
+                    строкой ниже висит текст неудачи, которую уже исправили. */}
+                {isHealthBad(account.health) && account.health_error ? (
+                  <div className="muted">{account.health_error}</div>
+                ) : null}
                 {account.advertiser_kind === "third_party" ? (
                   <div className="muted">
-                    реклама третьего лица: {account.advertiser_name || "не указан"}
-                    {account.advertiser_inn ? `, ИНН ${account.advertiser_inn}` : ""}
+                    {account.advertiser_name ? (
+                      <>
+                        Реклама третьего лица: {account.advertiser_name}
+                        {account.advertiser_inn ? `, ИНН ${account.advertiser_inn}` : ""}
+                      </>
+                    ) : (
+                      "Реклама третьего лица — рекламодатель не указан."
+                    )}
                   </div>
                 ) : null}
                 {account.balance_rub ? (

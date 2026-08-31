@@ -15,6 +15,11 @@ export const STATUS_RU: Record<string, string> = {
   moderation: "На модерации",
   stopped: "Остановлена",
   failed: "Ошибка",
+  // Легаси-значения статуса кабинета из более старых записей (bot/handlers/stats.py
+  // `_STATUS_HINT` держит их же ради обратной совместимости) — сегодняшние кампании
+  // используют статусы выше, но старые строки в БД могли остаться с этими.
+  active: "Активна",
+  paused: "На паузе",
 };
 
 export const VARIANT_RU: Record<string, string> = {
@@ -164,13 +169,31 @@ export type AdAccount = {
   is_usable: boolean;
 };
 
-/** Человеческие подписи состояний health-check (те же, что в боте). */
+/** Человеческие подписи состояний health-check (те же, что в боте).
+ *
+ * `ok` — не код из `services.ad_accounts` (там всего четыре: `healthy`/
+ * `unauthorized`/`error`/`unknown`), но встречается в данных как синоним
+ * «жив» — без записи здесь бейдж показывал бы сырой код `ok` оператору
+ * (spec 2026-08-31 §«Починить в списке кабинетов»). */
 export const HEALTH_RU: Record<string, string> = {
   healthy: "✅ жив",
+  ok: "✅ жив",
   unauthorized: "⛔ токен не принят",
   error: "⚠️ VK не ответил",
   unknown: "… не проверялся",
 };
+
+/** Состояния health-check, при которых `health_error` действительно относится
+ * к ТЕКУЩЕЙ проверке. Для остальных состояний (включая неизвестные/легаси
+ * значения вроде `ok`) поле может хранить текст ПРОШЛОЙ неудачной проверки —
+ * ядро не гарантирует, что очистит его при следующем успешном прогоне из
+ * старых записей, поэтому фронт обязан сам не показывать чужую по времени
+ * ошибку рядом с сегодняшним «всё хорошо» (найденный баг, spec 2026-08-31). */
+const BAD_HEALTH = new Set(["unauthorized", "error"]);
+
+export function isHealthBad(health: string): boolean {
+  return BAD_HEALTH.has(health);
+}
 
 /** Причины отказа добавления кабинета — по коду `detail` из ядра. */
 export const AD_ACCOUNT_ERRORS: Record<string, string> = {
@@ -340,3 +363,166 @@ export function launchErrorMessage(error: unknown): string {
   }
   return "Запустить не вышло.";
 }
+
+// --- кампании: остановка (зеркало `bot/handlers/stop_campaign.py`) ----------
+
+/** Итог остановки кампании (зеркало `CampaignStopOut` ядра). `external_id`
+ * пуст — на площадке останавливать было нечего (кампания не создавалась в
+ * VK/kotbot), но статус у нас всё равно сменился на `stopped`. */
+export type CampaignStopOut = { campaign_id: number; status: string; external_id: string | null };
+
+/** Человеческий текст по итогу `POST /campaigns/{id}/stop` — те же формулировки,
+ * что бот показывает в `bot/handlers/stop_campaign.py`: успех не имитируем, если
+ * канал отказал (CLAUDE.md §7). */
+export function campaignStopMessage(result: CampaignStopOut): string {
+  if (result.external_id == null) {
+    return (
+      `Кампания №${result.campaign_id} помечена как остановленная.\n` +
+      "На площадке останавливать было нечего: у кампании нет внешнего id (она не " +
+      "создавалась в VK/kotbot)."
+    );
+  }
+  return (
+    `Кампания №${result.campaign_id} остановлена на площадке (id ${result.external_id}). ` +
+    "Показы прекращены, деньги не тратятся."
+  );
+}
+
+/** Ошибка остановки кампании: 404 — номер не найден, 502 — канал отказал (та же
+ * граница, что `CampaignNotFound`/`CampaignStopFailed` в `bot/api_client.py`). */
+export function campaignStopErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 404) {
+    return "Кампания не найдена — возможно, список устарел. Обновите страницу и повторите.";
+  }
+  return (
+    "Канал не принял остановку — кампания могла остаться запущенной. " +
+    "Проверьте канал (VK API / kotbot) и повторите."
+  );
+}
+
+// --- статистика кабинетов (зеркало `bot/handlers/stats.py`) -----------------
+
+export type CabinetItem = {
+  id: string;
+  name: string;
+  status: string;
+  launched_at: string;
+  is_mock: boolean;
+};
+
+export type CabinetsOut = { items: CabinetItem[] };
+
+export type StatsPeriod = "all" | "month" | "week";
+
+export type StatsOut = {
+  cabinet_id: string;
+  period: string;
+  shows: number;
+  clicks: number;
+  spent: number;
+  results: number;
+  ctr: number;
+  cpc: number;
+  cpl: number;
+  is_mock: boolean;
+};
+
+/** Исход синка одного кабинета (зеркало `CabinetSyncOutcome` ядра,
+ * `services.stats_sync.cabinet_sync_outcome`) — три честных состояния, не два:
+ * `"updated"` — молча; `"nothing_to_update"` — нейтральная пометка (кампания вне
+ * `launched`/`moderation`, синк площадку не спрашивал — это норма, не сбой);
+ * `"failed"` — тревожная пометка (площадка не ответила). */
+export type CabinetSyncOutcome = "updated" | "nothing_to_update" | "failed";
+
+export type CabinetSyncOut = {
+  ok: boolean;
+  outcome: CabinetSyncOutcome;
+  synced: number;
+  failed: number;
+  results: Record<string, string>;
+};
+
+/** Метрики кабинета как пары «подпись — значение» — тот же набор и порядок,
+ * что `_render_stats` в `bot/handlers/stats.py`. Числа не округляем повторно:
+ * `ctr`/`cpc`/`cpl` уже округлены в `services.cabinet_stats`. */
+export function humanCabinetStats(stats: StatsOut): [string, string][] {
+  return [
+    ["Показы", String(Math.round(stats.shows))],
+    ["Клики", String(Math.round(stats.clicks))],
+    ["Расход", `${Math.round(stats.spent)} ₽`],
+    ["Результаты", String(Math.round(stats.results))],
+    ["CTR", `${stats.ctr}%`],
+    ["CPC", `${stats.cpc} ₽`],
+    ["CPL", `${stats.cpl} ₽`],
+  ];
+}
+
+// --- каналы доставки (зеркало `GET /admin/channels`) ------------------------
+
+export type UserbotSession = {
+  sender_id: number;
+  authorized: boolean;
+  unreachable: boolean;
+  phone_masked: string | null;
+};
+
+export type UserbotChannel = {
+  configured: boolean;
+  available: boolean;
+  sessions: UserbotSession[];
+};
+
+export type KotbotChannel = { configured: boolean; healthy: boolean };
+
+export type ChannelsOut = { userbot: UserbotChannel; kotbot: KotbotChannel };
+
+// --- Senler: токен сообщества (зеркало `core/api/v1/senler.py`) -------------
+
+export type CommunityTokenOut = {
+  community_id: string;
+  community_name: string;
+  connected: boolean;
+  reason: string;
+};
+
+/** Причины отказа привязки токена сообщества — тот же текст, что бот показывает
+ * в `bot/api_client.py::add_community_token` (`_COMMUNITY_TOKEN_ERRORS` +
+ * ветка 422 `community_unreachable`). */
+export function communityTokenErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 422 && error.detail === "community_unreachable") {
+      return (
+        "VK не подтвердил токен — проверьте, что он не истёк и выпущен именно для " +
+        "сообщества клиента, и попробуйте ещё раз."
+      );
+    }
+    if (error.status === 422) return "Проверьте токен и попробуйте ещё раз.";
+    if (error.status === 500 && error.detail === "encryption_key_missing") {
+      return (
+        "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — без него токен " +
+        "негде хранить. Нужна помощь администратора."
+      );
+    }
+  }
+  return "Внутренняя ошибка сервера, попробуйте ещё раз позже.";
+}
+
+/** Отвязка токена: 404 — активной привязки для сообщества не было (не сбой,
+ * честная информация — тот же случай, что `CommunityTokenNotFound` в боте). */
+export function communityTokenNotFound(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404;
+}
+
+// --- справочник площадок (зеркало команды `/surfaces` бота) -----------------
+
+export type SurfaceOut = {
+  kind: string;
+  title: string;
+  hint: string;
+  available: boolean;
+  goal: string;
+  goal_title: string;
+  needs_creative: boolean;
+};
+
+export type SurfacesOut = { items: SurfaceOut[] };

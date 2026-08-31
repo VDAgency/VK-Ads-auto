@@ -22,6 +22,9 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   moderation: "warn",
   stopped: "neutral",
   failed: "danger",
+  // Легаси-значения статуса кабинета — см. `STATUS_RU` в `lib/adminApi.ts`.
+  active: "accent",
+  paused: "neutral",
 };
 
 export function StatusBadge({ status }: { status: string }) {
@@ -30,6 +33,7 @@ export function StatusBadge({ status }: { status: string }) {
 
 const HEALTH_TONE: Record<string, BadgeTone> = {
   healthy: "accent",
+  ok: "accent", // синоним «жив», встречается в данных — см. `HEALTH_RU`.
   unauthorized: "danger",
   error: "warn",
   unknown: "neutral",
