@@ -782,6 +782,32 @@ async def set_ad_account_health(
     return row
 
 
+async def set_ad_account_tokens(
+    session: AsyncSession,
+    account_id: int,
+    ad_account_id: int,
+    *,
+    token_encrypted: str,
+    refresh_encrypted: str,
+    token_tail: str,
+) -> AdAccount | None:
+    """Заменить токен кабинета после обновления по refresh-токену (B3, план
+    2026-08-25-agency-cabinets.md). `None` — нет такого кабинета у тенанта.
+
+    Здоровье кабинета здесь не трогаем — решает вызывающий код
+    (`services.ad_accounts.refresh_account_token`), он же и пишет его отдельным
+    вызовом `set_ad_account_health`.
+    """
+    row = await get_ad_account(session, account_id, ad_account_id)
+    if row is None:
+        return None
+    row.token_encrypted = token_encrypted
+    row.refresh_encrypted = refresh_encrypted
+    row.token_tail = token_tail
+    await session.flush()
+    return row
+
+
 async def archive_ad_account(
     session: AsyncSession, account_id: int, ad_account_id: int
 ) -> AdAccount | None:

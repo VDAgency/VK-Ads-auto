@@ -17,6 +17,7 @@ from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, AdAccount, Client
 from db.repositories import get_ad_account
+from integrations.vk_oauth import VkOAuthRejected, VkOAuthToken, VkOAuthUnavailable
 from pydantic import SecretStr
 from services.ad_accounts import (
     ADVERTISER_THIRD_PARTY,
@@ -26,6 +27,8 @@ from services.ad_accounts import (
     AccountNotFoundError,
     ClientNotFoundError,
     DuplicateAccountError,
+    TokenRefreshFailedError,
+    TokenRefreshUnavailableError,
     TokenUnavailableError,
     add_account,
     check_health,
@@ -33,6 +36,7 @@ from services.ad_accounts import (
     list_accounts,
     list_accounts_for_client,
     mark_unauthorized,
+    refresh_account_token,
     resolve_token,
     seed_from_env,
     set_account_client,
@@ -54,11 +58,20 @@ IDENTITY = VkIdentity(
 )
 
 
-def _settings(*, key: str | None = None, token: str = "", ttl: int = 15) -> Settings:
+def _settings(
+    *,
+    key: str | None = None,
+    token: str = "",
+    ttl: int = 15,
+    oauth_id: str = "",
+    oauth_secret: str = "",
+) -> Settings:
     return Settings(
         vk_ads_secret_key=SecretStr(Fernet.generate_key().decode() if key is None else key),
         vk_ads_access_token=SecretStr(token),
         ad_account_health_ttl_minutes=ttl,
+        vk_ads_client_id=SecretStr(oauth_id),
+        vk_ads_client_secret=SecretStr(oauth_secret),
     )
 
 
@@ -667,5 +680,180 @@ def test_seed_survives_invalid_env_token() -> None:
             assert await seed_from_env(session, 1, settings=_settings(token=TOKEN)) is None
         finally:
             monkeypatch.undo()
+
+    asyncio.run(_with_db(scenario))
+
+
+# --- обновление токена по ключу обновления (B3) --------------------------------
+
+REFRESHED = VkOAuthToken(
+    access_token=SecretStr("refreshed-access-token-0000000000"),
+    refresh_token=SecretStr("refreshed-refresh-token-0000000000"),
+    expires_at=datetime.now(UTC) + timedelta(hours=24),
+)
+
+
+def _mock_refresh(monkeypatch: pytest.MonkeyPatch, outcome: VkOAuthToken | Exception) -> None:
+    async def refresh(*args: object, **kwargs: object) -> VkOAuthToken:
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(ad_accounts, "refresh_agency_token", refresh)
+
+
+def test_refresh_account_token_replaces_both_secrets() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, refresh_token="old-refresh", settings=cfg)
+        monkeypatch = pytest.MonkeyPatch()
+        _mock_refresh(monkeypatch, REFRESHED)
+        try:
+            refreshed = await refresh_account_token(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert refreshed.health == HEALTH_HEALTHY
+        assert refreshed.token_tail == REFRESHED.access_token.get_secret_value()[-4:]
+        row = await get_ad_account(session, 1, view.id)
+        assert row is not None
+        assert row.token_encrypted is not None
+        assert "refreshed-access-token" not in row.token_encrypted
+        assert "refreshed-refresh-token" not in (row.refresh_encrypted or "")
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_refresh_account_token_retries_once_on_network_failure() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, refresh_token="old-refresh", settings=cfg)
+        calls = {"n": 0}
+
+        async def refresh(*args: object, **kwargs: object) -> VkOAuthToken:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise VkOAuthUnavailable("timeout")
+            return REFRESHED
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(ad_accounts, "refresh_agency_token", refresh)
+        try:
+            refreshed = await refresh_account_token(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert refreshed.health == HEALTH_HEALTHY
+        assert calls["n"] == 2
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_refresh_account_token_does_not_retry_on_rejection() -> None:
+    """Отказ по существу (лимит токенов/просрочен refresh) — повторять бессмысленно."""
+
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, refresh_token="old-refresh", settings=cfg)
+        calls = {"n": 0}
+
+        async def refresh(*args: object, **kwargs: object) -> VkOAuthToken:
+            calls["n"] += 1
+            raise VkOAuthRejected("invalid_grant")
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(ad_accounts, "refresh_agency_token", refresh)
+        try:
+            with pytest.raises(TokenRefreshFailedError) as excinfo:
+                await refresh_account_token(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert calls["n"] == 1
+        assert isinstance(excinfo.value.__cause__, VkOAuthRejected)
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_refresh_account_token_without_refresh_token_is_unavailable() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, settings=cfg)  # без refresh_token
+        with pytest.raises(TokenRefreshUnavailableError):
+            await refresh_account_token(session, 1, view.id, settings=cfg)
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_refresh_account_token_missing_account_raises() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(AccountNotFoundError):
+            await refresh_account_token(session, 1, 999, settings=_settings())
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_check_health_recovers_via_refresh_after_401() -> None:
+    """Токен протух (401), но обновление ключом — успешно: кабинет остаётся healthy,
+    а не молча падает в unauthorized (B3 — мёртвое поле refresh_encrypted теперь читается)."""
+
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, refresh_token="old-refresh", settings=cfg)
+
+        monkeypatch = pytest.MonkeyPatch()
+        _mock_refresh(monkeypatch, REFRESHED)
+
+        calls = {"n": 0}
+
+        async def identity(token: str, **_: object) -> VkIdentity:
+            calls["n"] += 1
+            if token == TOKEN:
+                raise InvalidTokenError("expired")
+            return IDENTITY
+
+        monkeypatch.setattr(ad_accounts, "fetch_identity", identity)
+        try:
+            checked = await check_health(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert checked.health == HEALTH_HEALTHY
+        assert checked.is_usable is True
+        row = await get_ad_account(session, 1, view.id)
+        assert row is not None
+        assert row.token_encrypted is not None
+        assert "refreshed-access-token" not in row.token_encrypted
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_check_health_stays_unauthorized_when_refresh_also_fails() -> None:
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings(oauth_id="app", oauth_secret="secret")
+        view = await add_account(session, 1, TOKEN, refresh_token="old-refresh", settings=cfg)
+
+        monkeypatch = pytest.MonkeyPatch()
+        _mock_refresh(monkeypatch, VkOAuthRejected("invalid_grant"))
+        _fail_identity(monkeypatch, InvalidTokenError("expired"))
+        try:
+            checked = await check_health(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert checked.health == HEALTH_UNAUTHORIZED
+        assert checked.is_usable is False
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_check_health_without_refresh_token_stays_unauthorized() -> None:
+    """Без ключа обновления (старый кабинет) — прежнее поведение, без попыток обновить."""
+
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+        view = await add_account(session, 1, TOKEN, settings=cfg)  # без refresh_token
+        monkeypatch = pytest.MonkeyPatch()
+        _fail_identity(monkeypatch, InvalidTokenError("rejected"))
+        try:
+            checked = await check_health(session, 1, view.id, settings=cfg)
+        finally:
+            monkeypatch.undo()
+        assert checked.health == HEALTH_UNAUTHORIZED
 
     asyncio.run(_with_db(scenario))

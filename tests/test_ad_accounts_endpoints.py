@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 import pytest
 import services.ad_accounts as ad_accounts
+import services.agency_cabinets as agency_cabinets
 from config.settings import Settings, get_settings
 from core.app import create_app
 from cryptography.fernet import Fernet
@@ -19,6 +21,8 @@ from db.base import Base
 from db.models import Account, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
+from integrations.vk_api import VkAgencyClient, VkAgencyClientForbidden, VkApiAdapter
+from integrations.vk_oauth import VkOAuthRejected, VkOAuthToken
 from pydantic import SecretStr
 from services.admin_auth import generate_admin_session
 from services.vk_identity import InvalidTokenError, VkIdentity, VkUnreachableError
@@ -400,3 +404,146 @@ def test_bot_and_web_see_the_same_accounts() -> None:
         assert len(operator_view.json()["items"]) == 1
 
     asyncio.run(_with_api(scenario, authed=True))
+
+
+# --- заведение клиенту кабинета через агентский API (B2/B3) -------------------
+
+_VK_CLIENT = VkAgencyClient(
+    client_id="777",
+    username="new-client@agency_client",
+    ad_account_id="10000002",
+    balance="0",
+    status="active",
+    access_type="full_access",
+)
+
+_ISSUED_TOKEN = VkOAuthToken(
+    access_token=SecretStr("fresh-access-token-000000000000"),
+    refresh_token=SecretStr("fresh-refresh-token-000000000000"),
+    expires_at=datetime.now(UTC) + timedelta(hours=24),
+)
+
+
+def _agency_body(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "client_id": 100,
+        "full_name": "Иван Иванов",
+        "tax_id": "770123456789",
+        **(payload or {}),
+    }
+
+
+def _mock_agency_settings(monkeypatch: pytest.MonkeyPatch, *, confirmed: bool = True) -> None:
+    """Настройки для агентской операции: свой ключ у `agency_cabinets.get_settings`,
+    отдельный от общего `ad_accounts.get_settings` (координата B2: последний тут не
+    участвует — `create_client_cabinet` пробрасывает уже разрешённые настройки в
+    `add_account` явным `settings=`).
+    """
+    settings = Settings(
+        _env_file=None,
+        vk_agency_confirmed=confirmed,
+        vk_ads_secret_key=SecretStr(Fernet.generate_key().decode()),
+        vk_ads_client_id=SecretStr("app-id"),
+        vk_ads_client_secret=SecretStr("app-secret"),
+        vk_ads_access_token=SecretStr("agency-master-token"),
+    )
+    monkeypatch.setattr(agency_cabinets, "get_settings", lambda: settings)
+
+
+async def _fake_create_agency_client(self: object, **_: object) -> VkAgencyClient:
+    return _VK_CLIENT
+
+
+def test_post_agency_cabinet_creates_and_binds_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch)
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", _fake_create_agency_client)
+
+    async def issue(*args: object, **kwargs: object) -> VkOAuthToken:
+        return _ISSUED_TOKEN
+
+    monkeypatch.setattr(agency_cabinets, "request_agency_client_token", issue)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 201, resp.text
+        assert "fresh-access-token" not in resp.text
+        data = resp.json()
+        assert data["client_id"] == 100
+        assert data["client_name"] == "Клиент 1"
+        assert data["advertiser_kind"] == "third_party"
+        assert data["advertiser_name"] == "Иван Иванов"
+        assert data["advertiser_inn"] == "770123456789"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_disabled_flag_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch, confirmed=False)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "agency_disabled"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_missing_tax_id_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/ad-accounts/agency-cabinets", json=_agency_body({"tax_id": ""})
+        )
+        assert resp.status_code == 422
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_unknown_client_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post(
+            "/api/v1/ad-accounts/agency-cabinets", json=_agency_body({"client_id": 999})
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "client_not_found"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_vk_forbidden_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def forbidden(self: object, **_: object) -> VkAgencyClient:
+        raise VkAgencyClientForbidden("agency status not confirmed")
+
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", forbidden)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "vk_agency_not_confirmed"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_token_issuance_failure_returns_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agency_settings(monkeypatch)
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", _fake_create_agency_client)
+
+    async def issue(*args: object, **kwargs: object) -> VkOAuthToken:
+        raise VkOAuthRejected("token limit exceeded")
+
+    monkeypatch.setattr(agency_cabinets, "request_agency_client_token", issue)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 502
+        assert resp.json()["detail"]["error"] == "token_issuance_failed"
+        assert resp.json()["detail"]["vk_client_id"] == "777"
+
+    asyncio.run(_with_api(scenario))
