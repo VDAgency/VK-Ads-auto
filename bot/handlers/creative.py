@@ -17,7 +17,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from services.brief_parser import parse_budget
-from services.launch import DEFAULT_TERM_DAYS
+from services.launch import daily_budget_rub_from_amount
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -570,17 +570,16 @@ _BALANCE_WARNING = (
 
 
 def _daily_budget_rub(card: BriefCard) -> float | None:
-    """Дневной бюджет из брифа (C2) — та же формула, что при реальном запуске
-    кампании (`services.launch.daily_budget_rub`): бриф задаёт бюджет на срок
-    кампании, MVP делит его на `DEFAULT_TERM_DAYS`. Переиспользуем разбор суммы
-    (`services.brief_parser.parse_budget`) и саму константу срока, а не гадаем
-    заново — иначе цифра здесь и бюджет, который площадка реально получит при
-    запуске, могли бы разойтись. `None` — бюджет не указан или «обсудим» (тогда
+    """Дневной бюджет из брифа (C2) — формула ровно одна на весь проект:
+    `services.launch.daily_budget_rub_from_amount` (ревью, «Важное» — раньше
+    здесь жила своя копия формулы, и это значило, что изменившееся округление
+    или знаменатель в `services.launch` тихо разошлись бы с предупреждением
+    здесь). Бот лишь разбирает сырую строку бюджета брифа
+    (`services.brief_parser.parse_budget`) — само деление на срок кампании
+    считает `services.launch`. `None` — бюджет не указан или «обсудим» (тогда
     сравнивать не с чем, предупреждение не показываем)."""
     amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
-    if needs_discussion or not amount:
-        return None
-    return round(amount / DEFAULT_TERM_DAYS, 2)
+    return daily_budget_rub_from_amount(amount, needs_discussion)
 
 
 def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:

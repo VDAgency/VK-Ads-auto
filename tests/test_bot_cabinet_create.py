@@ -328,7 +328,14 @@ def test_create_cabinet_or_report_stops_if_tax_id_disappeared_meanwhile(
         (400, "vk_rejected_client_data", "ФИО", "vk_rejected_client_data"),
         (404, "vk_client_not_found", "минуту", "vk_client_not_found"),
         (503, "vk_unreachable", "минуту", "vk_unreachable"),
-        (409, "duplicate_account", "уже добавлен", "duplicate_account"),
+        # Неопознанная строковая деталь (например, будущий код ядра, которому
+        # ещё не завели свой текст) — честный общий фолбэк, а не выдумка.
+        # Заодно закрепляет ревью: "duplicate_account" сюда больше не входит —
+        # этот код возвращает только ручное добавление кабинета
+        # (`_AD_ACCOUNT_ERRORS`), агентский эндпоинт при дубле отдаёт
+        # структуру `cabinet_duplicate` (см. отдельные тесты половинчатых
+        # отказов ниже), а не эту строку.
+        (409, "some_future_unmapped_code", "получилось", "some_future_unmapped_code"),
     ],
 )
 def test_create_agency_cabinet_maps_each_detail_to_its_own_human_text(
@@ -354,7 +361,7 @@ def test_create_agency_cabinet_maps_each_detail_to_its_own_human_text(
     assert must_not_contain not in reason
 
 
-def test_create_agency_cabinet_half_failure_names_the_vk_client(
+def test_create_agency_cabinet_token_issuance_failed_names_the_vk_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """502 `token_issuance_failed` — половинчатый провал: клиент в VK уже есть,
@@ -383,6 +390,75 @@ def test_create_agency_cabinet_half_failure_names_the_vk_client(
     assert "vk-777" in reason
     assert "token_issuance_failed" not in reason
     assert "администратору" in reason
+
+
+def test_create_agency_cabinet_duplicate_names_the_vk_client_and_does_not_suggest_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """409 `cabinet_duplicate` — клиент в VK уже создан, но кабинет с таким
+    внешним номером у нас уже есть (похоже на дубль). Ревью: текст не должен
+    звать «попробуйте ещё раз» — повтор в лучшем случае бесполезен, в худшем
+    заведёт в VK ещё одного осиротевшего клиента."""
+    _configure(monkeypatch)
+
+    async def scenario() -> str:
+        with respx.mock() as router:
+            router.post(f"{_CORE}/api/v1/ad-accounts/agency-cabinets").mock(
+                return_value=httpx.Response(
+                    409,
+                    json={
+                        "detail": {
+                            "error": "cabinet_duplicate",
+                            "vk_client_id": "vk-101",
+                            "vk_username": None,
+                        }
+                    },
+                )
+            )
+            with pytest.raises(AgencyCabinetRejected) as excinfo:
+                await api_client.create_agency_cabinet(42, "Иван Петров", "770123456789")
+        return excinfo.value.reason
+
+    reason = asyncio.run(scenario())
+    assert "vk-101" in reason
+    assert "cabinet_duplicate" not in reason
+    assert "администратору" in reason
+    assert "попробуйте" not in reason.lower()
+    assert "повторная попытка не поможет" in reason.lower()
+
+
+def test_create_agency_cabinet_client_gone_names_the_vk_client_and_does_not_suggest_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """422 `cabinet_client_gone` — клиент в VK уже создан, но клиент брифа, для
+    которого заводили кабинет, пропал между проверкой и сохранением: привязывать
+    не к кому. Тот же принцип — без «попробуйте ещё раз»."""
+    _configure(monkeypatch)
+
+    async def scenario() -> str:
+        with respx.mock() as router:
+            router.post(f"{_CORE}/api/v1/ad-accounts/agency-cabinets").mock(
+                return_value=httpx.Response(
+                    422,
+                    json={
+                        "detail": {
+                            "error": "cabinet_client_gone",
+                            "vk_client_id": "vk-202",
+                            "vk_username": "ivan.petrov",
+                        }
+                    },
+                )
+            )
+            with pytest.raises(AgencyCabinetRejected) as excinfo:
+                await api_client.create_agency_cabinet(42, "Иван Петров", "770123456789")
+        return excinfo.value.reason
+
+    reason = asyncio.run(scenario())
+    assert "vk-202" in reason
+    assert "cabinet_client_gone" not in reason
+    assert "администратору" in reason
+    assert "попробуйте" not in reason.lower()
+    assert "повторная попытка не поможет" in reason.lower()
 
 
 def test_create_agency_cabinet_success_returns_ad_account_item(
