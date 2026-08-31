@@ -10,10 +10,10 @@ import { CampaignList } from "../campaigns/CampaignList";
 export function CampaignsScreen() {
   return (
     <>
-      <div className="section-title">Кампании</div>
+      <h2 className="section-title">Кампании</h2>
       <CampaignList />
 
-      <div className="section-title">Статистика по кабинетам</div>
+      <h2 className="section-title">Статистика по кабинетам</h2>
       <CabinetStats />
     </>
   );

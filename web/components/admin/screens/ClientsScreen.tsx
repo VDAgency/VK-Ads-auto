@@ -123,7 +123,7 @@ function ClientDetailView({
                 ))}
             </p>
           </div>
-          <div className="section-title">Брифы</div>
+          <h2 className="section-title">Брифы</h2>
           {state.data.briefs.length ? (
             <div className="adm-list">
               {state.data.briefs.map((brief) => (

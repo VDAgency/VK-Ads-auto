@@ -13,16 +13,16 @@ import { SurfacesReference } from "../channels/SurfacesReference";
 export function ChannelsScreen() {
   return (
     <>
-      <div className="section-title">Рекламные кабинеты</div>
+      <h2 className="section-title">Рекламные кабинеты</h2>
       <AdAccounts />
 
-      <div className="section-title">Каналы доставки</div>
+      <h2 className="section-title">Каналы доставки</h2>
       <DeliveryChannels />
 
-      <div className="section-title">Senler</div>
+      <h2 className="section-title">Senler</h2>
       <SenlerSection />
 
-      <div className="section-title">Площадки размещения</div>
+      <h2 className="section-title">Площадки размещения</h2>
       <SurfacesReference />
     </>
   );
