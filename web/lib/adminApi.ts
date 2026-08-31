@@ -1,7 +1,7 @@
 // Тонкая обёртка над apiFetch для операторских эндпоинтов `/api/v1/admin/*`.
 // Своей логики не несёт — только префикс, чтобы он не размазывался по экранам.
 
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
 
 export function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return apiFetch<T>(`/admin${path}`, init);
@@ -95,6 +95,9 @@ export type BriefCard = {
     email: string | null;
     phone: string | null;
     telegram: string | null;
+    /** Числовой id клиента брифа — им сужается список кабинетов (`?client_id=`)
+     *  и подтверждается заведение кабинета клиенту. */
+    id: number | null;
   };
   fields: BriefField[];
   has_creative: boolean;
@@ -103,6 +106,14 @@ export type BriefCard = {
   surface_title?: string;
   /** Нужен ли креатив: продвижение готового поста обходится без него. */
   surface_needs_creative?: boolean;
+  /** Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
+   *  канал сам её не выбирает и не считает. */
+  launch_goal_title?: string;
+  /** Состояние шага «завести клиенту кабинет автоматически» — решает ядро,
+   *  канал только показывает. `available=false` значит «шага нет вовсе». */
+  cabinet_step_available?: boolean;
+  cabinet_step_own_cabinet_exists?: boolean;
+  cabinet_step_blocked_reason?: string | null;
   unknown?: number[];
 };
 
@@ -142,6 +153,9 @@ export type AdAccount = {
   advertiser_kind: string;
   advertiser_name: string | null;
   advertiser_inn: string | null;
+  /** Клиент, за которым закреплён кабинет; `null` — кабинет общий. */
+  client_id: number | null;
+  client_name: string | null;
   status: string;
   health: string;
   health_checked_at: string | null;
@@ -166,3 +180,163 @@ export const AD_ACCOUNT_ERRORS: Record<string, string> = {
   encryption_key_missing:
     "На сервере не задан ключ шифрования VK_ADS_SECRET_KEY — без него токен негде хранить.",
 };
+
+/** Одна цель запуска кампании (зеркало `LaunchGoalOut` ядра, `services.goals.launch_goals()`). */
+export type LaunchGoal = { code: string; title: string; implemented: boolean };
+
+/** Итог запуска кампании (зеркало `CreativeLaunchOut` ядра) — общий для запуска
+ * с креативом (`POST /briefs/{id}/creative`) и без него (`POST /briefs/{id}/launch`). */
+export type LaunchOutcome = { campaign_status: string; campaign_id: number; message: string };
+
+/** Карточка предпросмотра запуска (зеркало `LaunchPreviewOut` ядра) — мастер
+ * запуска обязан показать её и ждать явного подтверждения, прежде чем тратить
+ * деньги клиента (та же роль, что `render_launch_confirmation` в боте). */
+export type LaunchPreview = {
+  client_name: string | null;
+  client_tax_id: string | null;
+  object_url: string;
+  surface_title: string;
+  goal_title: string;
+  budget_text: string;
+  term_text: string;
+  ad_account_id: number;
+  ad_account_title: string;
+  ad_account_external_id: string;
+  ad_account_client_id: number | null;
+  ad_account_client_name: string | null;
+  ad_account_balance_rub: string | null;
+  daily_budget_rub: number | null;
+  balance_below_daily_budget: boolean;
+  client_mismatch: boolean;
+};
+
+/** Причины отказа выбора кабинета при запуске (409-детали ядра) — тот же текст,
+ * что бот показывает в `_cabinet_reject_reason` (bot/api_client.py). */
+export const CABINET_REJECT_ERRORS: Record<string, string> = {
+  ad_account_client_mismatch:
+    "Этот кабинет закреплён за другим клиентом — деньги спишутся не с того счёта. " +
+    "Выберите кабинет, закреплённый за клиентом брифа, либо общий.",
+  advertiser_mismatch:
+    "Конечный рекламодатель кабинета не совпадает с клиентом брифа (разошёлся ИНН). " +
+    "Выберите другой кабинет либо проверьте бриф.",
+  no_ad_account: "Ни одного рекламного кабинета не добавлено — запускать некуда.",
+  ambiguous_ad_account: "Кабинетов несколько — выберите нужный явно.",
+  ad_account_not_found: "Этот кабинет не найден — возможно, его уже удалили. Выберите другой.",
+  ad_account_token_unavailable:
+    "Рекламный кабинет недоступен: токен стёрт или кабинет удалён. Выберите другой кабинет.",
+};
+
+/** Причины отказа запуска/приёма креатива (422-детали ядра) — тот же текст,
+ * что бот показывает в `_creative_reject_reason` (bot/api_client.py). */
+export const LAUNCH_REJECT_ERRORS: Record<string, string> = {
+  goal_not_supported:
+    "Эта цель рекламы ещё не реализована. Доступны «Подписчики» и «Заявки — лид-форма».",
+  senler_not_connected:
+    "К сообществу не подключён чат-бот Senler — заявки будет некому обрабатывать. " +
+    "Проверьте подключение и повторите запуск.",
+  brief_not_found: "Бриф не найден.",
+};
+
+/** Известные отказы `POST /ad-accounts/agency-cabinets` — тот же текст, что
+ * бот показывает в `_agency_cabinet_reject_reason` (bot/api_client.py), без
+ * упоминания команды `/cabinets`: в вебе альтернатива — «выбрать кабинет вручную». */
+const AGENCY_CABINET_ERRORS: Record<string, string> = {
+  agency_disabled:
+    "Автоматическое создание кабинетов пока выключено — агентский доступ VK ещё не " +
+    "подтверждён. Выберите кабинет вручную или обратитесь к администратору.",
+  tax_id_required:
+    "У клиента не указан ИНН — без него кабинет не завести. Дособерите ИНН правкой " +
+    "брифа и повторите.",
+  client_not_found:
+    "Такого клиента не нашли — возможно, бриф изменился. Обновите карточку брифа и " +
+    "попробуйте снова.",
+  encryption_key_missing:
+    "Не получилось создать кабинет из-за технической настройки на сервере. Нужна " +
+    "помощь администратора.",
+  vk_oauth_not_configured: "Доступ агентства к VK ещё не настроен. Обратитесь к администратору.",
+  vk_agency_not_confirmed:
+    "VK не подтвердил агентский статус аккаунта — автоматически кабинет не завести. " +
+    "Выберите кабинет вручную или обратитесь к администратору.",
+  vk_rejected_client_data:
+    "VK отклонил данные клиента при создании кабинета. Проверьте ФИО и ИНН в брифе и " +
+    "попробуйте снова.",
+  vk_client_not_found:
+    "VK не нашёл только что созданного клиента. Попробуйте ещё раз через минуту.",
+  vk_unreachable: "VK сейчас не отвечает. Попробуйте ещё раз через минуту.",
+  vk_oauth_invalid_credentials:
+    "VK не принял данные для собственного доступа агентства. Нужна помощь администратора.",
+  vk_oauth_rejected:
+    "VK отклонил запрос на собственный доступ агентства. Нужна помощь администратора.",
+  vk_oauth_unavailable: "VK сейчас не отвечает. Попробуйте ещё раз через минуту.",
+};
+
+const AGENCY_CABINET_FALLBACK = "Кабинет создать не получилось. Обратитесь к администратору.";
+
+/** Человеческая причина отказа заведения клиенту кабинета автоматически (шаг
+ * «завести кабинет клиенту»). Половинчатые отказы ядра приходят структурой с
+ * `vk_client_id` — операция уже что-то сделала в VK, молчать об этом нельзя. */
+export function agencyCabinetErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const detail = error.detail;
+    if (detail && typeof detail === "object") {
+      const vkClientId = (detail as { vk_client_id?: unknown }).vk_client_id;
+      const note = vkClientId ? ` Номер клиента в VK: ${String(vkClientId)}.` : "";
+      const code = String((detail as { error?: unknown }).error ?? "");
+      if (code === "token_issuance_failed") {
+        return (
+          "Клиента в VK завели, но подключить кабинет к системе не получилось." +
+          note +
+          " Обратитесь к администратору — донастроить нужно вручную."
+        );
+      }
+      if (code === "cabinet_persist_failed") {
+        return (
+          "Кабинет в VK создан, но сохранить его в системе не получилось." +
+          note +
+          " Обратитесь к администратору — донастроить нужно вручную."
+        );
+      }
+      if (code === "cabinet_duplicate") {
+        return (
+          "Клиента в VK завели, но кабинет с таким номером в системе уже есть — похоже " +
+          "на дубль." +
+          note +
+          " Повторная попытка не поможет: обратитесь к администратору."
+        );
+      }
+      if (code === "cabinet_client_gone") {
+        return (
+          "Клиента в VK завели, но клиент, для которого заводили кабинет, за это время " +
+          "пропал — привязывать не к кому." +
+          note +
+          " Повторная попытка не поможет: обратитесь к администратору."
+        );
+      }
+      return AGENCY_CABINET_FALLBACK;
+    }
+    if (typeof detail === "string") return AGENCY_CABINET_ERRORS[detail] ?? AGENCY_CABINET_FALLBACK;
+  }
+  return AGENCY_CABINET_FALLBACK;
+}
+
+/** Человеческая причина отказа запуска/приёма креатива по ошибке API — единая
+ * точка для обоих действий шага подтверждения (с креативом и без). */
+export function launchErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const detail = error.detail;
+    if (detail && typeof detail === "object") {
+      const issues = (detail as { issues?: unknown }).issues;
+      if (Array.isArray(issues) && issues.length) return issues.join(" ");
+      const missing = (detail as { missing?: unknown }).missing;
+      if (Array.isArray(missing) && missing.length) {
+        return `Бриф заполнен не полностью — не хватает полей: ${missing.join(", ")}. Вернитесь к первому шагу и внесите правки.`;
+      }
+    }
+    if (typeof detail === "string") {
+      if (error.status === 409)
+        return CABINET_REJECT_ERRORS[detail] ?? "Рекламный кабинет недоступен.";
+      return LAUNCH_REJECT_ERRORS[detail] ?? "Запустить не вышло.";
+    }
+  }
+  return "Запустить не вышло.";
+}

@@ -750,6 +750,117 @@
   margin-top: var(--space-2);
 }
 
+/* --------------------------------------------------------------------------
+   Мастер запуска — дорожка шагов карточки брифа (spec 2026-08-31-admin-
+   cabinet-design-brief.md §5). Пластика точки/линии — как у `.track` кабинета
+   клиента, но шаг — кликабельная строка (пройденный) или статичный блок
+   (ещё не дошли), а раскрытый шаг несёт содержимое прямо под собой.
+   -------------------------------------------------------------------------- */
+.wiz {
+  display: grid;
+  gap: 0;
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wiz-step {
+  position: relative;
+  padding-bottom: var(--space-4);
+}
+.wiz-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 2.25rem;
+  left: 1.125rem;
+  width: 2px;
+  height: calc(100% - 1.75rem);
+  background: var(--line);
+}
+.wiz-step.is-done:not(:last-child)::before {
+  background: var(--accent);
+}
+.wiz-step__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease-out);
+}
+button.wiz-step__head {
+  cursor: pointer;
+}
+.wiz-step__head--static {
+  cursor: default;
+}
+@media (hover: hover) and (pointer: fine) {
+  button.wiz-step__head:hover {
+    background: var(--surface-sunk);
+  }
+}
+.wiz-step__dot {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 2px solid var(--line-input);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.wiz-step.is-done .wiz-step__dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.wiz-step.is-current .wiz-step__dot {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.wiz-step__label {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.wiz-step__title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--ink);
+}
+.wiz-step.is-todo .wiz-step__title {
+  font-weight: 500;
+  color: var(--muted);
+}
+.wiz-step__value {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.wiz-step__body {
+  margin: var(--space-3) 0 0 3.375rem;
+  padding-bottom: var(--space-2);
+}
+.wiz-offer__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
 @media (max-width: 48rem) {
   .adm-field {
     grid-template-columns: 2rem minmax(0, 1fr);
@@ -761,5 +872,8 @@
   .adm-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .wiz-step__body {
+    margin-left: 0;
   }
 }
