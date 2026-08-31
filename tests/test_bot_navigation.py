@@ -23,6 +23,7 @@ def test_menu_has_expected_commands() -> None:
         "stop_campaign",
         "surfaces",
         "admin",
+        "set_password",
         "link_userbot",
         "userbot_status",
         "link_kotbot",
