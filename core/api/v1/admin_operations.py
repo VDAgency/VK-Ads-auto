@@ -21,7 +21,12 @@ from services.ad_accounts import (
     TokenUnavailableError,
 )
 from services.goals import goal_titles, launch_goals, subscription_targets
-from services.launch_service import BriefNotFoundError, LaunchPreview, launch_preview
+from services.launch_service import (
+    BriefNotFoundError,
+    LaunchPreview,
+    UnsupportedGoalError,
+    launch_preview,
+)
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -168,6 +173,7 @@ async def admin_get_launch_preview(
     brief_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
     ad_account_id: Annotated[int | None, Query()] = None,
+    goal: Annotated[str | None, Query()] = None,
 ) -> LaunchPreviewOut:
     """Карточка предпросмотра запуска без креатива — веб обязан показать её перед
     запуском, ровно как бот показывает карточку подтверждения
@@ -180,16 +186,23 @@ async def admin_get_launch_preview(
 
     `ad_account_id` — кабинет, который выбрал оператор; не передан — берётся
     кабинет по умолчанию (единственный активный), тем же правилом, что и
-    реальный запуск. Коды отказов зеркалят его же: 404 — брифа или указанного
-    кабинета нет, 409 — кабинетов нет вовсе, их несколько (угадывать нельзя)
-    либо токен кабинета сейчас недоступен.
+    реальный запуск. `goal` — цель, которую оператор выбрал на отдельном шаге
+    мастера запуска в сценарии с креативом (код из `GET /admin/goals`); не
+    передан — сводка показывает цель запуска без креатива, как и раньше.
+    Коды отказов зеркалят реальный запуск: 404 — брифа или указанного кабинета
+    нет, 409 — кабинетов нет вовсе, их несколько (угадывать нельзя) либо токен
+    кабинета сейчас недоступен, 422 — переданная цель неизвестна или ещё не
+    реализована (`goal_not_supported`, тот же код, что и у запуска/приёма
+    креатива).
     """
     try:
         preview = await launch_preview(
-            session, _DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id
+            session, _DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id, goal=goal
         )
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
+    except UnsupportedGoalError as exc:
+        raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

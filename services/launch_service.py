@@ -58,6 +58,7 @@ from services.ad_accounts import (
 )
 from services.brief_parser import BriefVariant, Goal, parse_brief, parse_budget
 from services.brief_view import field_value, get_brief_card, tax_id
+from services.goals import launch_goal_title
 from services.launch import (
     LaunchResult,
     balance_below_daily_budget,
@@ -384,6 +385,7 @@ async def launch_preview(
     brief_id: int,
     *,
     ad_account_id: int | None = None,
+    goal: str | None = None,
     settings: Settings | None = None,
 ) -> LaunchPreview:
     """Сводка перед запуском без креатива — только чтение, кампанию не создаёт и
@@ -397,7 +399,7 @@ async def launch_preview(
     `TokenUnavailableError`, `NotConfiguredError`) значат то же самое, что и при
     запуске: маппинг в HTTP — дело роутера.
 
-    Данные клиента/объекта/площадки/цели и сырой текст бюджета/срока берутся из
+    Данные клиента/объекта/площадки и сырой текст бюджета/срока берутся из
     `services.brief_view.get_brief_card` — той же карточки, что показывает бот
     (`services.brief_view.field_value`/`tax_id` — публичные версии приватных
     `_field_value`/`_tax_id` бота, см. их докстринги). Предупреждение о балансе —
@@ -407,8 +409,20 @@ async def launch_preview(
     `ad_account_client_mismatch` выше, читающая версия того же правила, что
     жёстко проверяет `_check_ad_account_matches_brief` при реальном запуске.
 
-    Бросает `BriefNotFoundError`, если брифа нет у тенанта.
+    `goal` — цель, которую оператор явно выбрал на отдельном шаге мастера запуска
+    (сценарий с креативом: «Подписчики»/«Сообщения»/«Заявки — лид-форма»/«Заявка
+    через Senler», те же коды, что отдаёт `services.goals.launch_goals()`).
+    Не передан — сводка показывает цель запуска без креатива
+    (`card.launch_goal_title`, правило `services.goals.NO_CREATIVE_GOAL`), как и
+    раньше. Передан — сводка показывает именно её (`services.goals.
+    launch_goal_title`), а не всегда «Подписчики». Проверяется тем же
+    `_validate_goal`, что и реальный запуск — неизвестный или ещё не
+    реализованный код бросает `UnsupportedGoalError` вместо молчаливой подмены.
+
+    Бросает `BriefNotFoundError`, если брифа нет у тенанта, `UnsupportedGoalError`,
+    если передан нереализованный или неизвестный `goal`.
     """
+    _validate_goal(goal)
     cfg = settings or get_settings()
     card = await get_brief_card(session, account_id, brief_id)
     if card is None:
@@ -434,7 +448,7 @@ async def launch_preview(
         client_tax_id=tax_id(card) or None,
         object_url=field_value(card, "Ссылка на страницу VK", "Ссылка на объект продвижения"),
         surface_title=card.surface_title,
-        goal_title=card.launch_goal_title,
+        goal_title=launch_goal_title(goal) if goal is not None else card.launch_goal_title,
         budget_text=budget_text,
         term_text=field_value(card, "Срок / период"),
         ad_account_id=ad_account.id,

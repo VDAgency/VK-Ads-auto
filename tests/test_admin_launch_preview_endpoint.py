@@ -28,6 +28,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from services.ad_accounts import add_account
 from services.admin_auth import generate_admin_session
+from services.goals import NO_CREATIVE_GOAL, launch_goal_title
 from services.vk_identity import VkIdentity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -280,3 +281,58 @@ def test_launch_preview_no_ad_account_returns_409() -> None:
         return resp.status_code
 
     assert asyncio.run(_with_admin(scenario)) == 409
+
+
+def test_launch_preview_without_goal_shows_no_creative_goal() -> None:
+    """Без `goal` сводка ведёт себя как раньше: цель запуска без креатива."""
+
+    async def scenario(
+        client: AsyncClient, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[str, Any]:
+        ad_account_id = await _add_cabinet(maker, client_id=BRIEF_CLIENT_ID)
+        resp = await client.get(
+            "/api/v1/admin/briefs/1/launch-preview", params={"ad_account_id": ad_account_id}
+        )
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    assert data["goal_title"] == launch_goal_title(NO_CREATIVE_GOAL)
+
+
+def test_launch_preview_with_explicit_goal_shows_that_goal() -> None:
+    """Оператор выбрал цель на отдельном шаге — сводка обязана показать именно её,
+    а не всегда «Подписчики» (сценарий с креативом)."""
+
+    async def scenario(
+        client: AsyncClient, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[str, Any]:
+        ad_account_id = await _add_cabinet(maker, client_id=BRIEF_CLIENT_ID)
+        resp = await client.get(
+            "/api/v1/admin/briefs/1/launch-preview",
+            params={"ad_account_id": ad_account_id, "goal": "messages"},
+        )
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    assert data["goal_title"] == launch_goal_title("messages")
+    assert data["goal_title"] != launch_goal_title(NO_CREATIVE_GOAL)
+
+
+def test_launch_preview_unknown_goal_returns_422_not_500() -> None:
+    """Несуществующая/нереализованная цель — понятный отказ, не молчаливая подмена."""
+
+    async def scenario(client: AsyncClient, maker: async_sessionmaker[AsyncSession]) -> Any:
+        ad_account_id = await _add_cabinet(maker, client_id=BRIEF_CLIENT_ID)
+        resp = await client.get(
+            "/api/v1/admin/briefs/1/launch-preview",
+            params={"ad_account_id": ad_account_id, "goal": "not_a_real_goal"},
+        )
+        return resp
+
+    resp = asyncio.run(_with_admin(scenario))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "goal_not_supported"
