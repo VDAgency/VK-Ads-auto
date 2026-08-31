@@ -13,7 +13,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 import core.api.v1.senler as senler_endpoint
+import httpx
 import pytest
+import respx
+import services.channels_status as channels_status_module
 from config.settings import Settings, get_settings
 from core.app import create_app
 from cryptography.fernet import Fernet
@@ -182,3 +185,115 @@ def test_delete_reports_not_found_when_nothing_matches() -> None:
         assert resp.json()["detail"] == "not_found"
 
     asyncio.run(_with_admin(scenario))
+
+
+# --- GET /admin/channels -------------------------------------------------------
+#
+# Просмотр состояния юзербота и kotbot — веб-зеркало бот-команд `/userbot_status`
+# и `/kotbot` (`services.channels_status`). Внешний сервис не настроен или не
+# отвечает — эндпоинт обязан честно описать это, а не упасть 500.
+
+
+def _channel_settings(userbot_url: str = "", kotbot_url: str = "") -> Settings:
+    return Settings(_env_file=None, userbot_base_url=userbot_url, kotbot_base_url=kotbot_url)
+
+
+def test_channels_requires_admin_session() -> None:
+    async def scenario(client: AsyncClient, maker: async_sessionmaker[AsyncSession]) -> int:
+        resp = await client.get("/api/v1/admin/channels")
+        return resp.status_code
+
+    assert asyncio.run(_with_admin(scenario, authed=False)) == 401
+
+
+def test_channels_not_configured_is_reported_honestly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(channels_status_module, "get_settings", lambda: _channel_settings())
+
+    async def scenario(
+        client: AsyncClient, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[str, Any]:
+        resp = await client.get("/api/v1/admin/channels")
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    assert data["userbot"] == {"configured": False, "available": False, "sessions": []}
+    assert data["kotbot"] == {"configured": False, "healthy": False}
+
+
+def test_channels_unreachable_service_is_honest_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    userbot_url = "http://userbot:9000"
+    kotbot_url = "http://kotbot:8002"
+    monkeypatch.setattr(
+        channels_status_module,
+        "get_settings",
+        lambda: _channel_settings(userbot_url, kotbot_url),
+    )
+
+    async def scenario(
+        client: AsyncClient, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[str, Any]:
+        with respx.mock() as router:
+            router.get(f"{userbot_url}/sessions").mock(return_value=httpx.Response(500))
+            router.get(f"{kotbot_url}/health").mock(side_effect=httpx.ConnectError("boom"))
+            resp = await client.get("/api/v1/admin/channels")
+        assert resp.status_code == 200, resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    # Настроен, но не отвечает — не «не настроен» и не «всё хорошо».
+    assert data["userbot"] == {"configured": True, "available": False, "sessions": []}
+    assert data["kotbot"] == {"configured": True, "healthy": False}
+
+
+def test_channels_healthy_reports_masked_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    userbot_url = "http://userbot:9000"
+    kotbot_url = "http://kotbot:8002"
+    monkeypatch.setattr(
+        channels_status_module,
+        "get_settings",
+        lambda: _channel_settings(userbot_url, kotbot_url),
+    )
+
+    async def scenario(
+        client: AsyncClient, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[str, Any]:
+        with respx.mock() as router:
+            router.get(f"{userbot_url}/sessions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "sessions": [
+                            {
+                                "sender_id": 555,
+                                "authorized": True,
+                                "phone": "79871658054",
+                                "state": "ok",
+                            },
+                            {"sender_id": 556, "authorized": False, "state": "unreachable"},
+                        ]
+                    },
+                )
+            )
+            router.get(f"{kotbot_url}/health").mock(
+                return_value=httpx.Response(200, json={"healthy": True, "strategies": {}})
+            )
+            resp = await client.get("/api/v1/admin/channels")
+        assert resp.status_code == 200, resp.text
+        assert "79871658054" not in resp.text
+        body: dict[str, Any] = resp.json()
+        return body
+
+    data = asyncio.run(_with_admin(scenario))
+    assert data["userbot"]["configured"] is True
+    assert data["userbot"]["available"] is True
+    sessions = {s["sender_id"]: s for s in data["userbot"]["sessions"]}
+    assert sessions[555]["authorized"] is True
+    assert sessions[555]["unreachable"] is False
+    assert sessions[555]["phone_masked"] == "+7987…054"
+    assert sessions[556]["authorized"] is False
+    assert sessions[556]["unreachable"] is True
+    assert sessions[556]["phone_masked"] is None
+    assert data["kotbot"] == {"configured": True, "healthy": True}
