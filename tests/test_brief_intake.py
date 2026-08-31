@@ -22,6 +22,22 @@ VALID_INDIVIDUAL = {
     "target_type": "личная страница",
     "email": "ivan@example.com",
     "phone": "+79990000001",
+    "tax_id": "770700000000",
+}
+
+VALID_COMMUNITY = {
+    "full_name": "Анна Петрова",
+    "object_url": "https://vk.com/romashka",
+    "audience_description": "женщины 25-45",
+    "geo": "вся Россия",
+    "budget": "50000",
+    "term": "месяц",
+    "niche": "доставка цветов",
+    "org_type": "ИП",
+    "product_description": "доставка букетов за 2 часа",
+    "email": "anna@example.com",
+    "phone": "+79990000002",
+    "tax_id": "770700000000",
 }
 
 
@@ -71,3 +87,38 @@ def test_intake_missing_required_raises() -> None:
 
     with pytest.raises(BriefValidationError):
         asyncio.run(_with_db(scenario))
+
+
+def test_intake_missing_tax_id_raises_individual() -> None:
+    # Приём нового брифа обязан требовать ИНН — без него кабинет клиенту не
+    # завести (решение 2026-08-25). Разбор уже сохранённых брифов (запуск
+    # кампании, `launch_service.py`) этой проверке не подчиняется, см.
+    # `services/brief_parser.py::parse_brief(require_tax_id=...)`.
+    async def scenario(session: AsyncSession) -> None:
+        payload = {k: v for k, v in VALID_INDIVIDUAL.items() if k != "tax_id"}
+        await intake_brief(session, 1, BriefVariant.INDIVIDUAL, payload)
+
+    with pytest.raises(BriefValidationError) as exc:
+        asyncio.run(_with_db(scenario))
+    assert "tax_id" in exc.value.missing
+
+
+def test_intake_missing_tax_id_raises_community() -> None:
+    # Обязательность — «везде»: и у бизнес-варианта тоже (не только у физлица).
+    async def scenario(session: AsyncSession) -> None:
+        payload = {k: v for k, v in VALID_COMMUNITY.items() if k != "tax_id"}
+        await intake_brief(session, 1, BriefVariant.COMMUNITY, payload)
+
+    with pytest.raises(BriefValidationError) as exc:
+        asyncio.run(_with_db(scenario))
+    assert "tax_id" in exc.value.missing
+
+
+def test_intake_accepts_community_brief_with_tax_id() -> None:
+    async def scenario(session: AsyncSession) -> tuple[int, str]:
+        brief = await intake_brief(session, 1, BriefVariant.COMMUNITY, VALID_COMMUNITY)
+        return brief.id, brief.variant
+
+    brief_id, variant = asyncio.run(_with_db(scenario))
+    assert brief_id >= 1
+    assert variant == "community"

@@ -345,12 +345,24 @@ _COMMON_REQUIRED = (
 _COMMUNITY_REQUIRED = ("niche", "org_type", "product_description")
 
 
-def _collect_missing(raw: Mapping[str, str], variant: BriefVariant) -> list[str]:
+def _collect_missing(
+    raw: Mapping[str, str], variant: BriefVariant, *, require_tax_id: bool
+) -> list[str]:
     required = list(_COMMON_REQUIRED)
     if variant is BriefVariant.INDIVIDUAL:
         required.append("target_type")
     if variant is BriefVariant.COMMUNITY:
         required.extend(_COMMUNITY_REQUIRED)
+    # ИНН обязателен у ОБОИХ вариантов (решение 2026-08-25: без него нельзя
+    # завести клиенту рекламный кабинет — закон о рекламе требует указывать
+    # конечного рекламодателя). Флаг, а не безусловное добавление в
+    # `_COMMON_REQUIRED`: этот же список проверяет и `parse_brief` уже
+    # сохранённых брифов при запуске кампании (`launch_service.py`), а у части
+    # старых брифов физлица ИНН не спрашивали вовсе — им нельзя внезапно
+    # отказывать в запуске. Обязательность включает только приём НОВОГО брифа
+    # (`services/briefs.py::intake_brief`, `require_tax_id=True`).
+    if require_tax_id:
+        required.append("tax_id")
     missing = [key for key in required if not _clean(raw.get(key))]
     # Идентификация кабинета — по email, поэтому email И телефон обязательны
     # (решение 2026-07-17, spec кабинета §4.1). Telegram — опционально.
@@ -361,17 +373,23 @@ def _collect_missing(raw: Mapping[str, str], variant: BriefVariant) -> list[str]
     return missing
 
 
-def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
+def parse_brief(
+    raw: Mapping[str, str], variant: BriefVariant, *, require_tax_id: bool = False
+) -> ParsedBrief:
     """Разобрать сырой бриф в `ParsedBrief`. Бросает `BriefValidationError` при нехватке.
 
     `raw` — отображение «внутренний id поля -> строковое значение» (как ячейка формы).
     `variant` определяет набор обязательных полей и наличие бизнес-секции.
+    `require_tax_id` — требовать ИНН как обязательное поле. По умолчанию `False`:
+    так разбираются уже сохранённые брифы (карточка оператора, запуск кампании,
+    `launch_service.py`), включая старые записи без ИНН. Приём нового брифа
+    (`services/briefs.py::intake_brief`) зовёт с `require_tax_id=True`.
     """
     # Локальный импорт: `services.goals` сам импортирует `Goal`/`TargetType` отсюда
     # же, импорт наверху файла закольцевал бы модули друг на друга.
     from services.goals import goal_for_target_type
 
-    missing = _collect_missing(raw, variant)
+    missing = _collect_missing(raw, variant, require_tax_id=require_tax_id)
     if missing:
         raise BriefValidationError(missing)
 
@@ -430,8 +448,8 @@ def parse_brief(raw: Mapping[str, str], variant: BriefVariant) -> ParsedBrief:
         materials=materials,
         competitors=split_competitors(get("competitors")),
         extra=get("extra") or None,
-        # ИНН спрашивают ОБА макета: у физлица — «если есть, для оформления
-        # документов», поэтому поле не бизнес-только.
+        # ИНН спрашивают ОБА макета (обязателен на приёме нового брифа, см.
+        # `require_tax_id` выше), поэтому поле не бизнес-только.
         tax_id=get("tax_id") or None,
         company=biz("company"),
         niche=biz("niche"),
