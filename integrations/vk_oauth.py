@@ -1,5 +1,10 @@
 """VK Ads OAuth2 — агентский доступ поверх `POST /api/v2/oauth2/token.json`.
 
+⚠️ Контракт (гранты, поля тела/ответа, коды ошибок) сверен с живой документацией
+VK, но боевым вызовом ЕЩЁ НЕ проверен — `vk_agency_confirmed` выключен, до
+подтверждения агентского аккаунта (та же пометка, что у соседних модулей,
+см. `integrations/vk_api.py`, ресурс агентских клиентов).
+
 ⚠️ Хост API — `ads.vk.com` (тот же, что в `integrations/vk_api.py` и
 `services/vk_identity.py`), а НЕ `ads.vk.ru` — это домен только веб-интерфейса
 (см. `docs/superpowers/plans/2026-08-25-agency-cabinets.md` §A1, где хостом

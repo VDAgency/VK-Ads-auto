@@ -110,9 +110,16 @@ class AgencyCabinetPersistError(AgencyCabinetError):
     в `__cause__`, либо по подклассу — `AgencyCabinetDuplicateError` и
     `AgencyCabinetClientGoneError` ниже разведены отдельно, потому что от них
     ожидаются разные действия оператора. Сюда, необёрнутым базовым классом,
-    попадают лишь оставшиеся причины: VK не подтвердил свежевыпущенный токен
-    живым запросом (`InvalidTokenError`/`VkUnreachableError`) либо пропал
-    ключ шифрования на середине операции (`NotConfiguredError`).
+    попадают все остальные причины: VK не подтвердил свежевыпущенный токен
+    живым запросом (`InvalidTokenError`/`VkUnreachableError`), пропал ключ
+    шифрования на середине операции (`NotConfiguredError`) — и, начиная с
+    ревью ветки §2, вообще любой другой необработанный отказ этого шага
+    (например, `IntegrityError` от гонки двух параллельных созданий: проверка
+    дубля и вставка в `add_account` не атомарны). Перехват здесь намеренно
+    исчерпывающий: важно не что именно сломалось при сохранении, а то, что
+    клиент в VK и токен уже существуют и их номер нельзя потерять — тип
+    причины не входит в число случаев, требующих особого действия оператора,
+    и потому не разводится отдельным подклассом.
     """
 
     def __init__(self, vk_client_id: str, vk_username: str | None) -> None:
@@ -233,6 +240,19 @@ async def create_client_cabinet(
     `vk_ads_client_secret` в любом случае бросается до сети — см. проверку
     ниже, до выпуска собственного токена.
 
+    ⚠️ Повтор `adapter.create_agency_client` на `VkAgencyClientUnavailable`
+    неидемпотентен (ревью ветки §5): `VkAgencyClientUnavailable` покрывает и
+    «сеть точно не дошла», и «дошла, VK создал клиента, но ответ потерялся
+    или пришёл битым» — во втором случае повтор заводит второго клиента в
+    VK, а этот метод такого не различает. Дедупликация через
+    `VkApiAdapter.list_agency_clients` сюда сознательно НЕ подключена — см. её
+    докстринг (`integrations/vk_api.py`), почему это решение отложено до
+    боевой проверки агентского доступа, а не реализовано вслепую.
+
+    ⚠️ Контракт `AgencyCabinetAdapter.create_agency_client` (через
+    `VkApiAdapter`) сверен с документацией VK, но боевым вызовом ЕЩЁ НЕ
+    проверен — `vk_agency_confirmed` выключен, живого теста не было.
+
     Половинчатые состояния — «клиент в VK уже есть, а кабинета у нас нет» —
     не имитируются успехом: `AgencyTokenIssuanceFailedError` (клиент заведён,
     токен не выпущен) и вся семья `AgencyCabinetPersistError` (токен выпущен,
@@ -319,6 +339,19 @@ async def create_client_cabinet(
         # его обнаружить сам через свою собственную проверку.
         raise AgencyCabinetClientGoneError(vk_client.client_id, vk_client.username) from exc
     except (InvalidTokenError, VkUnreachableError, NotConfiguredError) as exc:
+        raise AgencyCabinetPersistError(vk_client.client_id, vk_client.username) from exc
+    except Exception as exc:  # noqa: BLE001 — полусостояние: класть причину, а не тип
+        # Исчерпывающий перехват намеренно (ревью ветки §2): проверка дубля и
+        # вставка в `add_account` не атомарны (частичный уникальный индекс на
+        # таблице), поэтому настоящая гонка двух параллельных созданий может
+        # дать сырой `IntegrityError` вместо `DuplicateAccountError` — и любой
+        # другой сбой БД на этом шаге тоже. Ловить типы по одному здесь
+        # бессмысленно: важно не что именно сломалось при сохранении, а то,
+        # что клиент в VK и токен уже существуют и их номер нельзя терять —
+        # значит любой необработанный отказ этого шага обязан остаться
+        # `AgencyCabinetPersistError` с `vk_client_id`/`vk_username`, а не
+        # голым исключением, которое роутер не опознает и бот покажет общим
+        # текстом без номера клиента VK.
         raise AgencyCabinetPersistError(vk_client.client_id, vk_client.username) from exc
 
     logger.info(

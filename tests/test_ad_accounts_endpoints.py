@@ -22,7 +22,12 @@ from db.models import Account, Client
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from integrations.vk_api import VkAgencyClient, VkAgencyClientForbidden, VkApiAdapter
-from integrations.vk_oauth import VkOAuthRejected, VkOAuthToken
+from integrations.vk_oauth import (
+    VkOAuthInvalidCredentials,
+    VkOAuthRejected,
+    VkOAuthToken,
+    VkOAuthUnavailable,
+)
 from pydantic import SecretStr
 from services.admin_auth import generate_admin_session
 from services.vk_identity import InvalidTokenError, VkIdentity, VkUnreachableError
@@ -559,5 +564,67 @@ def test_post_agency_cabinet_token_issuance_failure_returns_502(
         assert resp.status_code == 502
         assert resp.json()["detail"]["error"] == "token_issuance_failed"
         assert resp.json()["detail"]["vk_client_id"] == "777"
+
+    asyncio.run(_with_api(scenario))
+
+
+# --- ревью ветки §3: отказы выпуска СОБСТВЕННОГО токена агентства ----------------
+#
+# Шаг ДО создания клиента в VK (`_build_agency_adapter` внутри
+# `create_client_cabinet`) — раньше эти три исключения не перехватывались ни
+# одним блоком роутера, кроме `VkOAuthNotConfigured` (пустые учётные данные),
+# и наружу уходила голая внутренняя ошибка (500 без опознанного кода).
+
+
+def test_post_agency_cabinet_own_token_invalid_credentials_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        raise VkOAuthInvalidCredentials("invalid_client")
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "vk_oauth_invalid_credentials"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_own_token_rejected_returns_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        raise VkOAuthRejected("token limit exceeded")
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "vk_oauth_rejected"
+
+    asyncio.run(_with_api(scenario))
+
+
+def test_post_agency_cabinet_own_token_unavailable_after_retry_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_agency_settings(monkeypatch)
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        raise VkOAuthUnavailable("still down")
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    async def scenario(client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/ad-accounts/agency-cabinets", json=_agency_body())
+        assert resp.status_code == 503
+        assert resp.json()["detail"] == "vk_oauth_unavailable"
 
     asyncio.run(_with_api(scenario))

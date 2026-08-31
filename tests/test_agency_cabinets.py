@@ -725,3 +725,41 @@ def test_persist_failure_client_gone_is_typed_and_carries_vk_client() -> None:
         assert isinstance(excinfo.value, AgencyCabinetPersistError)
 
     asyncio.run(_with_db(scenario))
+
+
+def test_persist_failure_unexpected_error_is_still_typed_and_carries_vk_client() -> None:
+    """Ревью ветки §2: перехват на шаге сохранения обязан быть исчерпывающим,
+    не только для пяти перечисленных типов. Живой сценарий — проверка дубля и
+    вставка в `add_account` не атомарны (частичный уникальный индекс), и
+    настоящая гонка двух параллельных созданий даёт сырой `IntegrityError`
+    вместо `DuplicateAccountError`; здесь это смоделировано любым
+    непредвиденным исключением, не входящим в старый список — важно, что
+    номер клиента VK всё равно не теряется."""
+
+    async def scenario(session: AsyncSession) -> None:
+        monkeypatch = pytest.MonkeyPatch()
+        _issue_ok(monkeypatch)
+
+        async def broken_add_account(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("db exploded mid-insert")
+
+        monkeypatch.setattr(agency_cabinets, "add_account", broken_add_account)
+        adapter = FakeAgencyAdapter([VK_CLIENT])
+        try:
+            with pytest.raises(AgencyCabinetPersistError) as excinfo:
+                await create_client_cabinet(
+                    session,
+                    1,
+                    100,
+                    full_name="Иван Иванов",
+                    tax_id="770123456789",
+                    settings=_settings(),
+                    agency_adapter=adapter,
+                )
+        finally:
+            monkeypatch.undo()
+        assert excinfo.value.vk_client_id == "777"
+        assert excinfo.value.vk_username == "new-client@agency_client"
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+    asyncio.run(_with_db(scenario))

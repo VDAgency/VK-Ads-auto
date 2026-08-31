@@ -28,6 +28,15 @@ def _configure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("bot.api_client.get_settings", lambda: SimpleNamespace(core_base_url=_CORE))
 
 
+def _confirmed(monkeypatch: pytest.MonkeyPatch, *, value: bool = True) -> None:
+    """Мок предохранителя `vk_agency_confirmed`, который `offer_cabinet_creation`
+    читает первым делом (ревью ветки §1) — тесты явно управляют им, а не
+    полагаются на реальные настройки окружения процесса."""
+    monkeypatch.setattr(
+        creative, "get_settings", lambda: SimpleNamespace(vk_agency_confirmed=value)
+    )
+
+
 def _account(**over: Any) -> AdAccountItem:
     base: dict[str, Any] = {
         "id": 1,
@@ -110,9 +119,13 @@ class _FakeState:
 # --- offer_cabinet_creation: когда показывать шаг --------------------------------
 
 
-def test_offer_cabinet_creation_shows_card_when_client_has_no_own_cabinet() -> None:
+def test_offer_cabinet_creation_shows_card_when_client_has_no_own_cabinet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Только общие кабинеты (или их нет вовсе) — карточка создания показана,
-    а не сразу выбор кабинета."""
+    а не сразу выбор кабинета. Предохранитель `vk_agency_confirmed` включён —
+    иначе шаг не показывается вовсе (см. тесты ниже, ревью ветки §1)."""
+    _confirmed(monkeypatch)
     message = _FakeMessage()
     card = _card()
     accounts = [_account(client_id=None)]  # общий кабинет, не клиента
@@ -130,8 +143,31 @@ def test_offer_cabinet_creation_shows_card_when_client_has_no_own_cabinet() -> N
     assert "cabcreate_skip:creative:7" in datas
 
 
-def test_offer_cabinet_creation_skips_when_client_already_has_own_cabinet() -> None:
+def test_offer_cabinet_creation_skips_entirely_when_agency_not_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Предохранитель `vk_agency_confirmed` выключен (боевая проверка ещё не
+    пройдена — сегодняшний дефолт) — шаг C1 не показывается вовсе, даже когда
+    у клиента нет своего кабинета и не хватает ИНН: ни карточки, ни
+    предупреждения про ИНН, поток идёт как раньше (ревью ветки §1)."""
+    _confirmed(monkeypatch, value=False)
+    message = _FakeMessage()
+    card = _card(fields=[])  # ИНН тоже не хватает — предупреждения быть не должно
+    accounts = [_account(client_id=None)]
+
+    shown = asyncio.run(
+        creative.offer_cabinet_creation(message, card, accounts, action="creative")  # type: ignore[arg-type]
+    )
+
+    assert shown is False
+    assert message.answers == []
+
+
+def test_offer_cabinet_creation_skips_when_client_already_has_own_cabinet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """У клиента уже есть кабинет, закреплённый именно за ним — шаг не нужен."""
+    _confirmed(monkeypatch)
     message = _FakeMessage()
     card = _card()
     accounts = [_account(id=2, client_id=42, client_name="Иван Петров")]
@@ -144,9 +180,12 @@ def test_offer_cabinet_creation_skips_when_client_already_has_own_cabinet() -> N
     assert message.answers == []
 
 
-def test_offer_cabinet_creation_warns_without_blocking_when_tax_id_missing() -> None:
+def test_offer_cabinet_creation_warns_without_blocking_when_tax_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ревью: без ИНН создание не предлагается вовсе, но поток не блокируется —
     оператор всё ещё может продолжить с общим кабинетом."""
+    _confirmed(monkeypatch)
     message = _FakeMessage()
     card = _card(fields=[])  # ни одного поля — ИНН неизвестен
     accounts = [_account(client_id=None)]
@@ -161,7 +200,10 @@ def test_offer_cabinet_creation_warns_without_blocking_when_tax_id_missing() -> 
     assert "не завести" in text
 
 
-def test_offer_cabinet_creation_warns_without_blocking_when_name_missing() -> None:
+def test_offer_cabinet_creation_warns_without_blocking_when_name_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _confirmed(monkeypatch)
     message = _FakeMessage()
     card = _card(client_name=None)
     accounts: list[AdAccountItem] = []
@@ -175,8 +217,11 @@ def test_offer_cabinet_creation_warns_without_blocking_when_name_missing() -> No
     assert "имя" in text.lower()
 
 
-def test_offer_cabinet_creation_skips_when_brief_has_no_client() -> None:
+def test_offer_cabinet_creation_skips_when_brief_has_no_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`client_id=None` на брифе — заводить кабинет решительно не для кого."""
+    _confirmed(monkeypatch)
     message = _FakeMessage()
     card = _card(client_id=None)
     accounts: list[AdAccountItem] = []
@@ -224,7 +269,14 @@ def test_create_cabinet_or_report_success_continues_with_fresh_data(
         captured.update(client_id=client_id, full_name=full_name, tax_id=tax_id, niche=niche)
         return _account(id=9, client_id=42, client_name="Иван Петров")
 
+    # Двухфазно (ревью ветки §4): первый вызов — перепроверка ДО обращения в
+    # ядро, у клиента своего кабинета ещё нет; второй — уже после создания.
+    list_calls = {"n": 0}
+
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        list_calls["n"] += 1
+        if list_calls["n"] == 1:
+            return [_account(id=1, client_id=None, title="Общий")]
         return [_account(id=9, client_id=42, client_name="Иван Петров")]
 
     monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
@@ -245,6 +297,38 @@ def test_create_cabinet_or_report_success_continues_with_fresh_data(
         "niche": None,
     }
     assert any("создан" in text.lower() for text, _ in message.answers)
+    assert list_calls["n"] == 2
+
+
+def test_create_cabinet_or_report_skips_create_when_cabinet_already_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Повторное нажатие «Создать кабинет» (двойной тап/долгая операция уже
+    завершилась с прошлого раза): перепроверка находит, что у клиента кабинет
+    уже есть, и в VK второй раз не идёт — иначе завела бы второго реального
+    клиента агентства (ревью ветки §4)."""
+
+    async def fake_get_brief(brief_id: int) -> BriefCard:
+        return _card(brief_id=brief_id)
+
+    async def fail_create(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("create_agency_cabinet не должен вызываться повторно")
+
+    async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(id=9, client_id=42, client_name="Иван Петров")]
+
+    monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
+    monkeypatch.setattr(api_client, "create_agency_cabinet", fail_create)
+    monkeypatch.setattr(api_client, "list_ad_accounts", fake_list)
+    message = _FakeMessage()
+
+    result = asyncio.run(creative.create_cabinet_or_report(message, 7))  # type: ignore[arg-type]
+
+    assert result is not None
+    card, accounts = result
+    assert card.brief_id == 7
+    assert [a.id for a in accounts] == [9]
+    assert any("уже есть" in text for text, _ in message.answers)
 
 
 def test_create_cabinet_or_report_shows_human_text_not_error_code(
@@ -262,8 +346,12 @@ def test_create_cabinet_or_report_shows_human_text_not_error_code(
             "обратитесь к администратору."
         )
 
+    async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(client_id=None, title="Общий")]  # своего кабинета ещё нет
+
     monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
     monkeypatch.setattr(api_client, "create_agency_cabinet", fake_create)
+    monkeypatch.setattr(api_client, "list_ad_accounts", fake_list)
     message = _FakeMessage()
 
     result = asyncio.run(creative.create_cabinet_or_report(message, 7))  # type: ignore[arg-type]
@@ -281,8 +369,12 @@ def test_create_cabinet_or_report_core_unavailable(monkeypatch: pytest.MonkeyPat
     async def fake_create(*args: Any, **kwargs: Any) -> Any:
         raise api_client.CoreUnavailable("down")
 
+    async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(client_id=None, title="Общий")]  # своего кабинета ещё нет
+
     monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
     monkeypatch.setattr(api_client, "create_agency_cabinet", fake_create)
+    monkeypatch.setattr(api_client, "list_ad_accounts", fake_list)
     message = _FakeMessage()
 
     result = asyncio.run(creative.create_cabinet_or_report(message, 7))  # type: ignore[arg-type]
@@ -328,6 +420,12 @@ def test_create_cabinet_or_report_stops_if_tax_id_disappeared_meanwhile(
         (400, "vk_rejected_client_data", "ФИО", "vk_rejected_client_data"),
         (404, "vk_client_not_found", "минуту", "vk_client_not_found"),
         (503, "vk_unreachable", "минуту", "vk_unreachable"),
+        # Три кода ниже — выпуск собственного токена агентства, шаг до создания
+        # клиента в VK (ревью ветки §3): раньше их не перехватывал ни один
+        # блок роутера, кроме vk_oauth_not_configured.
+        (500, "vk_oauth_invalid_credentials", "Ключи", "vk_oauth_invalid_credentials"),
+        (502, "vk_oauth_rejected", "администратора", "vk_oauth_rejected"),
+        (503, "vk_oauth_unavailable", "минуту", "vk_oauth_unavailable"),
         # Неопознанная строковая деталь (например, будущий код ядра, которому
         # ещё не завели свой текст) — честный общий фолбэк, а не выдумка.
         # Заодно закрепляет ревью: "duplicate_account" сюда больше не входит —
@@ -504,6 +602,7 @@ def test_start_creative_shows_cabinet_create_card_before_goal(
 ) -> None:
     """`creative.start_creative`: у клиента нет своего кабинета — показывается
     карточка создания, а не сразу выбор цели."""
+    _confirmed(monkeypatch)
     monkeypatch.setattr(creative, "Message", _FakeMessage)
 
     async def fake_get_brief(brief_id: int) -> BriefCard:
@@ -524,6 +623,34 @@ def test_start_creative_shows_cabinet_create_card_before_goal(
     assert "нет своего рекламного кабинета" in text
     datas = [b.callback_data for row in markup.inline_keyboard for b in row]
     assert "cabcreate:creative:7" in datas
+
+
+def test_start_creative_skips_cabinet_card_when_agency_not_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Флаг выключен (сегодняшний дефолт) — `start_creative` идёт прямо к
+    выбору цели, как до появления шага C1, без карточки создания и без
+    предупреждения (ревью ветки §1)."""
+    _confirmed(monkeypatch, value=False)
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+
+    async def fake_get_brief(brief_id: int) -> BriefCard:
+        return _card(brief_id=brief_id)
+
+    async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        return [_account(client_id=None, title="Общий")]
+
+    monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
+    monkeypatch.setattr(api_client, "list_ad_accounts", fake_list)
+    callback = _FakeCallback("creative:7")
+    state = _FakeState()
+
+    asyncio.run(creative.start_creative(callback, state))
+
+    assert state.state == LaunchCampaign.choosing_goal
+    text, _markup = callback.message.answers[-1]
+    assert "нет своего рекламного кабинета" not in text
+    assert "Выберите цель рекламы" in text
 
 
 def test_skip_cabinet_create_continues_to_goal_selection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -564,7 +691,14 @@ def test_confirm_cabinet_create_continues_to_goal_selection(
     ) -> Any:
         return _account(id=9, client_id=42, client_name="Иван Петров", title="Иван Петров")
 
+    # Двухфазно (ревью ветки §4): первый вызов — перепроверка ДО обращения в
+    # ядро, у клиента своего кабинета ещё нет; второй — уже после создания.
+    list_calls = {"n": 0}
+
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        list_calls["n"] += 1
+        if list_calls["n"] == 1:
+            return [_account(id=1, client_id=None, title="Общий")]
         return [_account(id=9, client_id=42, client_name="Иван Петров", title="Иван Петров")]
 
     monkeypatch.setattr(api_client, "get_brief", fake_get_brief)
@@ -585,6 +719,7 @@ def test_launch_without_creative_offers_cabinet_creation_when_client_has_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`brief_card.launch_without_creative`: тот же шаг C1, тот же гейт."""
+    _confirmed(monkeypatch)
     monkeypatch.setattr(brief_card, "Message", _FakeMessage)
 
     async def fake_get_brief(brief_id: int) -> BriefCard:
@@ -618,7 +753,14 @@ def test_confirm_cabinet_create_for_launch_continues_to_launch_confirmation(
     ) -> Any:
         return _account(id=9, client_id=42, client_name="Иван Петров", title="Иван Петров")
 
+    # Двухфазно (ревью ветки §4): первый вызов — перепроверка ДО обращения в
+    # ядро, у клиента своего кабинета ещё нет; второй — уже после создания.
+    list_calls = {"n": 0}
+
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
+        list_calls["n"] += 1
+        if list_calls["n"] == 1:
+            return [_account(id=1, client_id=None, title="Общий")]
         return [_account(id=9, client_id=42, client_name="Иван Петров", title="Иван Петров")]
 
     monkeypatch.setattr(api_client, "get_brief", fake_get_brief)

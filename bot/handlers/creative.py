@@ -16,6 +16,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from config.settings import get_settings
 from services.brief_parser import parse_budget
 from services.launch import daily_budget_rub_from_amount
 
@@ -101,6 +102,9 @@ _CABINET_CREATE_HINT = "Можно создать кабинет сейчас л
 # здесь заблокировал бы вообще все запуски, пока агентский статус VK не подтверждён
 # (общие кабинеты — единственный работающий путь сегодня, `vk_agency_confirmed`
 # по умолчанию выключен, docs/superpowers/plans/2026-08-25-agency-cabinets.md).
+# Само предупреждение показывается только когда `vk_agency_confirmed` включён —
+# `offer_cabinet_creation` ниже выходит раньше, чем добраться сюда, иначе оно
+# сыпалось бы на каждом запуске (ревью ветки: сегодня почти все кабинеты общие).
 _NO_TAX_ID_FOR_CABINET = (
     "ℹ️ У клиента не указан ИНН, поэтому отдельный кабинет пока не завести — так "
     "требует закон о рекламе. Дособерите ИНН правкой брифа, тогда кабинет можно "
@@ -112,6 +116,9 @@ _NO_NAME_FOR_CABINET = (
     "кабинетом, если он есть."
 )
 _CABINET_CREATED = "✅ Кабинет создан и подключён."
+_CABINET_ALREADY_EXISTS = (
+    "ℹ️ У клиента уже есть свой кабинет — используем его, повторно в VK не идём."
+)
 
 
 def _own_cabinet_missing(accounts: list[AdAccountItem], client_id: int | None) -> bool:
@@ -181,7 +188,18 @@ async def offer_cabinet_creation(
     не хватает: тогда честно предупреждаем (`_cabinet_prereq_issue`), но поток
     продолжается обычным выбором кабинета — строгий отказ здесь заблокировал бы
     все запуски, пока агентский статус VK не подтверждён.
+
+    Ранний выход, если `vk_agency_confirmed` выключен (CLAUDE.md §1.4): бот
+    читает то же окружение, что и ядро (`config.settings.get_settings`), а
+    операция всё равно откажет `AgencyDisabledError`, если до неё дойти. Без
+    этого выхода шаг C1 показывался бы на каждом запуске — сегодня почти все
+    кабинеты общие (привязка к клиентам появилась совсем недавно), значит
+    практически весь трафик получал бы лишнюю карточку (или ложное
+    предупреждение про недостающий ИНН) вместо прежнего прямого перехода к
+    выбору кабинета (ревью ветки).
     """
+    if not get_settings().vk_agency_confirmed:
+        return False
     if not _own_cabinet_missing(accounts, card.client_id):
         return False
     issue = _cabinet_prereq_issue(card)
@@ -204,6 +222,15 @@ async def create_cabinet_or_report(
     показана оператору; вызывающая сторона ничего больше не делает (карточка
     предложения остаётся в чате с кнопкой «Выбрать кабинет вручную» — повторное
     нажатие никуда не делось).
+
+    Перед вызовом ядра список кабинетов клиента запрашивается заново и
+    перепроверяется через `_own_cabinet_missing` (ревью ветки §4): клавиатура
+    после успеха из чата не убирается, а сама операция — три последовательных
+    запроса в VK, так что повторное нажатие вполне реально. Если кабинет у
+    клиента уже появился (с прошлого нажатия, которое успело завершиться), в
+    VK второй раз не идём — иначе завели бы второго клиента агентства с
+    отдельным токеном; вместо этого честно сообщаем и продолжаем с уже
+    существующим кабинетом, как будто он и был результатом этого нажатия.
     """
     try:
         card = await api_client.get_brief(brief_id)
@@ -221,6 +248,15 @@ async def create_cabinet_or_report(
         # в ядро с заведомо отказным запросом.
         await message.answer(issue or _UNAVAILABLE)
         return None
+
+    try:
+        precheck_accounts = await api_client.list_ad_accounts(client_id=card.client_id)
+    except CoreUnavailable:
+        await message.answer(_UNAVAILABLE)
+        return None
+    if not _own_cabinet_missing(precheck_accounts, card.client_id):
+        await message.answer(_CABINET_ALREADY_EXISTS)
+        return card, precheck_accounts
 
     try:
         await api_client.create_agency_cabinet(

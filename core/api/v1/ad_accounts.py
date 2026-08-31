@@ -21,7 +21,12 @@ from integrations.vk_api import (
     VkAgencyClientUnavailable,
     VkAgencyClientValidationError,
 )
-from integrations.vk_oauth import VkOAuthNotConfigured
+from integrations.vk_oauth import (
+    VkOAuthInvalidCredentials,
+    VkOAuthNotConfigured,
+    VkOAuthRejected,
+    VkOAuthUnavailable,
+)
 from pydantic import BaseModel, Field
 from services.ad_accounts import (
     ADVERTISER_OWNER,
@@ -199,6 +204,15 @@ async def create_agency_cabinet_response(
     сохранением) разведены отдельно от общего `cabinet_persist_failed` (502),
     у каждого своё действие оператора и оба несут `vk_client_id`/
     `vk_username` уже созданного в VK клиента, чтобы было за что зацепиться.
+
+    Три кода ниже (`vk_oauth_invalid_credentials`/`vk_oauth_rejected`/
+    `vk_oauth_unavailable`) закрывают ревью ветки §3: приходят из выпуска
+    СОБСТВЕННОГО токена агентства (`_build_agency_adapter` внутри
+    `create_client_cabinet`, шаг ДО создания клиента в VK) — до них раньше не
+    доходил ни один блок, кроме `VkOAuthNotConfigured` (пустые учётные
+    данные), и наружу уходила голая внутренняя ошибка. В VK на этом шаге ещё
+    ничего не создано, полусостояния нет — `vk_client_id`/`vk_username` в
+    ответе не несём, текст просто зовёт администратора.
     """
     try:
         view = await create_client_cabinet(
@@ -219,6 +233,12 @@ async def create_agency_cabinet_response(
         raise HTTPException(status_code=500, detail="encryption_key_missing") from None
     except VkOAuthNotConfigured:
         raise HTTPException(status_code=500, detail="vk_oauth_not_configured") from None
+    except VkOAuthInvalidCredentials:
+        raise HTTPException(status_code=500, detail="vk_oauth_invalid_credentials") from None
+    except VkOAuthRejected:
+        raise HTTPException(status_code=502, detail="vk_oauth_rejected") from None
+    except VkOAuthUnavailable:
+        raise HTTPException(status_code=503, detail="vk_oauth_unavailable") from None
     except VkAgencyClientForbidden:
         raise HTTPException(status_code=403, detail="vk_agency_not_confirmed") from None
     except VkAgencyClientValidationError:
