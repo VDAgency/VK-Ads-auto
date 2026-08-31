@@ -73,9 +73,12 @@ def test_instruction_page_served() -> None:
     response = client.get("/instrukciya-vk-cabinet.html")
     assert response.status_code == 200
     # Ключевые ориентиры инструкции по созданию кабинета VK Реклама.
-    assert "ID кабинета" in response.text
+    assert "Создайте новый кабинет" in response.text
     assert "Рекламодатель" in response.text
     assert "ads.vk.ru" in response.text
+    # Поле «ID кабинета VK Реклама» убрано из брифа 2026-08-19, и инструкция больше
+    # не должна вести клиента к нему: шаг с копированием ID приводил в тупик.
+    assert "ID кабинета" not in response.text
 
 
 def test_health_still_works_with_static_mount() -> None:
