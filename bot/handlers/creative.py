@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from services.brief_parser import parse_budget
 from services.goals import launch_goals
-from services.launch import daily_budget_rub_from_amount
+from services.launch import balance_below_daily_budget
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -589,19 +589,6 @@ _BALANCE_WARNING = (
 )
 
 
-def _daily_budget_rub(card: BriefCard) -> float | None:
-    """Дневной бюджет из брифа (C2) — формула ровно одна на весь проект:
-    `services.launch.daily_budget_rub_from_amount` (ревью, «Важное» — раньше
-    здесь жила своя копия формулы, и это значило, что изменившееся округление
-    или знаменатель в `services.launch` тихо разошлись бы с предупреждением
-    здесь). Бот лишь разбирает сырую строку бюджета брифа
-    (`services.brief_parser.parse_budget`) — само деление на срок кампании
-    считает `services.launch`. `None` — бюджет не указан или «обсудим» (тогда
-    сравнивать не с чем, предупреждение не показываем)."""
-    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
-    return daily_budget_rub_from_amount(amount, needs_discussion)
-
-
 def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     """Строка баланса кабинета для карточки подтверждения запуска (C2).
 
@@ -609,6 +596,12 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     та же логика, что в /cabinets (`bot/handlers/ad_accounts.py:_account_line`).
     Предупреждаем, если баланса меньше дневного бюджета брифа, но НЕ блокируем
     запуск (план 2026-08-25, «Баланс» в таблице решений) — решение оператора.
+
+    Само правило сравнения — `services.launch.balance_below_daily_budget`
+    (перенос, ревью: раньше решение жило здесь же, локальной проверкой; теперь
+    оно одно на оба канала). Бот лишь разбирает сырую строку бюджета брифа
+    (`services.brief_parser.parse_budget`) — сравнение и деление на срок
+    кампании считает `services.launch`.
     """
     if not account.balance_rub:
         return None
@@ -617,8 +610,8 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     except ValueError:
         return None
     line = f"💳 Баланс кабинета: {_escape(account.balance_rub)} ₽"
-    daily_budget = _daily_budget_rub(card)
-    if daily_budget is not None and balance < daily_budget:
+    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
+    if balance_below_daily_budget(balance, amount, needs_discussion):
         line += "\n" + _BALANCE_WARNING
     return line
 

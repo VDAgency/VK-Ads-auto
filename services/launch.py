@@ -45,6 +45,22 @@ def daily_budget_rub_from_amount(amount: int | None, needs_discussion: bool) -> 
     return round(amount / DEFAULT_TERM_DAYS, 2)
 
 
+def balance_below_daily_budget(
+    balance_rub: float, amount: int | None, needs_discussion: bool
+) -> bool:
+    """Баланс кабинета меньше дневного бюджета брифа (C2, перенос из
+    `bot/handlers/creative.py:_balance_line`) — не блокирует запуск, только
+    предупреждает, решение остаётся за оператором.
+
+    `amount`/`needs_discussion` — уже разобранный бюджет брифа
+    (`services.brief_parser.parse_budget`); сама формула дневного лимита —
+    одна на весь проект, `daily_budget_rub_from_amount` выше. `False` — бюджет
+    не задан или ещё обсуждается: сравнивать не с чем.
+    """
+    daily_budget = daily_budget_rub_from_amount(amount, needs_discussion)
+    return daily_budget is not None and balance_rub < daily_budget
+
+
 def daily_budget_rub(spec: CampaignSpec) -> float | None:
     """Дневной лимит бюджета из спеки. `None` — бюджет не задан или обсуждается.
 
