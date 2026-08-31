@@ -108,3 +108,46 @@ def target_title(kind: str) -> str:
         if target.kind == kind:
             return target.title
     return kind
+
+
+@dataclass(frozen=True)
+class LaunchGoal:
+    """Одна цель запуска кампании (`services.brief_parser.Goal`) для интерфейса
+    выбора при загрузке креатива: код, название и реализована ли она.
+
+    Не путать с `goal_titles()`/`GOAL_*` из `integrations.vk_surfaces` выше —
+    это другой словарь (группировка площадок подписки по цели вовлечения), у
+    него частично совпадающие, но не тождественные коды («leads» ≠ «lead_form»,
+    «subscription» ≠ «subscribers»). `LaunchGoal` — про то, какую цель оператор
+    явно выбирает при запуске кампании, и использует коды `Goal`.
+    """
+
+    code: str
+    title: str
+    implemented: bool
+
+
+def launch_goals() -> tuple[LaunchGoal, ...]:
+    """Цели запуска кампании — единый список для бота и веб-кабинета
+    (CLAUDE.md §1.3: список не должен жить в обработчике канала).
+
+    Нереализованная цель показывается в интерфейсе, но выбрать её нельзя — тот,
+    кто рисует кнопку, обязан вести на отдельный алерт «скоро», а не подменять
+    её молча. Сейчас реализованы все четыре: «Сообщения» прошли боевой зонд
+    2026-08-23, «Заявка через Senler» — 2026-08-24 (оба `verified=True` в
+    `integrations.vk_surfaces`).
+    """
+    return (
+        LaunchGoal(Goal.SUBSCRIBERS.value, "Подписчики", True),
+        LaunchGoal(Goal.MESSAGES.value, "Сообщения в сообщество", True),
+        LaunchGoal(Goal.LEAD_FORM.value, "Заявки — лид-форма", True),
+        LaunchGoal(Goal.SENLER.value, "Заявка через Senler", True),
+    )
+
+
+def launch_goal_title(code: str) -> str:
+    """Человеческое название цели запуска по коду; неизвестный код — как есть."""
+    for goal in launch_goals():
+        if goal.code == code:
+            return goal.title
+    return code

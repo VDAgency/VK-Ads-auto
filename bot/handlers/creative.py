@@ -18,6 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from config.settings import get_settings
 from services.brief_parser import parse_budget
+from services.goals import launch_goals
 from services.launch import daily_budget_rub_from_amount
 
 from bot import api_client
@@ -63,26 +64,27 @@ _NO_LIVE_CABINETS = (
     "Откройте /cabinets, проверьте кабинеты и обновите токен."
 )
 
-# Цели рекламы: (код, подпись, реализована ли). Нереализованные показываем
-# «серыми» — оператор видит план, но выбрать не может: кнопка ведёт на «goal:soon»,
-# а не на реальный код цели. «Сообщения» прошли боевой зонд 2026-08-23
-# (integrations.vk_surfaces.VK_MESSAGES.verified=True) и включены. «Заявка через
-# Senler» технически работает тем же пакетом VK, что и «Сообщения»
-# (integrations.vk_surfaces.VK_SENLER) и включена в services/launch_service.
-# SUPPORTED_GOALS — собственный боевой прогон под именем Senler тоже проведён
-# 2026-08-24 (Surface.verified=True): площадка больше не «скоро» ни здесь, ни в
-# каталоге площадок подписки.
+# Цели рекламы: код, подпись кнопки, реализована ли. Список и названия — из
+# services.goals.launch_goals() (единый источник для бота и веб-кабинета,
+# CLAUDE.md §1.3: список не должен жить в обработчике канала); эмодзи — уже
+# кнопочная разметка, чисто бот-презентация, поэтому остаётся здесь. Нереализованную
+# цель показываем «серой» — оператор видит план, но выбрать не может: кнопка ведёт
+# на «goal:soon», а не на реальный код цели.
+_GOAL_EMOJI: dict[str, str] = {
+    "subscribers": "👥 ",
+    "messages": "✉️ ",
+    "lead_form": "📝 ",
+    "senler": "🤖 ",
+}
 GOALS: list[tuple[str, str, bool]] = [
-    ("subscribers", "👥 Подписчики", True),
-    ("messages", "✉️ Сообщения в сообщество", True),
-    ("lead_form", "📝 Заявки — лид-форма", True),
-    ("senler", "🤖 Заявка через Senler", True),
+    (goal.code, _GOAL_EMOJI.get(goal.code, "") + goal.title, goal.implemented)
+    for goal in launch_goals()
 ]
 
 # Те же цели без эмодзи и без разметки кнопок — для карточки подтверждения запуска
 # (Т3, spec 2026-08-25-cabinet-client-binding-design §2: «цель по-русски»). Считаем
-# из GOALS, а не дублируем текстом, чтобы подписи не могли разойтись.
-GOAL_LABELS: dict[str, str] = {code: label.split(" ", 1)[1] for code, label, _ in GOALS}
+# из launch_goals(), а не дублируем текстом, чтобы подписи не могли разойтись.
+GOAL_LABELS: dict[str, str] = {goal.code: goal.title for goal in launch_goals()}
 
 
 # --- C1: предложение завести клиенту кабинет автоматически ---------------------
