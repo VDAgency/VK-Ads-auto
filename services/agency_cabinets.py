@@ -13,16 +13,25 @@
 готовыми параметрами: их извлечение из брифа и подтверждение оператором —
 дело вызывающего кода (карточка подтверждения, волна C плана).
 
-Кто вызывает `/agency/clients.json` от имени агентства: тот же токен, что
-бутстрапит единственный на сегодня «общий» кабинет оператора
-(`Settings.vk_ads_access_token`, см. `services.ad_accounts.seed_from_env`) —
-это и есть собственный VK Ads аккаунт агентства (план 2026-08-25, раздел
-«Контекст»: агентский статус получила Анастасия на СВОЙ кабинет). Отдельного
-реестра «какой AdAccount — мастер-агентский» в системе нет и добавлять его
-здесь не стали (см. отчёт задачи): `resolve_default_account` для этой роли не
-подходит — он требует РОВНО ОДИН активный кабинет тенанта и начинает падать
-`AmbiguousAdAccountError`, как только появляется первый клиентский кабинет,
-а появляться они будут постоянно, в этом весь смысл фичи.
+Кто вызывает `/agency/clients.json` от имени агентства: пара ключей
+приложения `vk_ads_client_id`/`vk_ads_client_secret` (те же, что выпускают
+токены на кабинеты клиентов), причём выпуск СВОЕГО токена — тоже штатный
+запрос, `integrations.vk_oauth.request_own_account_token`
+(`grant_type=client_credentials`, «Client Credentials Grant — доступ к данным
+собственного аккаунта» в документации VK). Это правка после ревью: первая
+версия брала для этого `Settings.vk_ads_access_token` — тот же токен, что
+бутстрапит «общий» кабинет оператора при посеве (`services.ad_accounts.
+seed_from_env`), — рассуждая, что раз агентский статус получен на собственный
+кабинет Анастасии, его токен и годится. Формально верно, но по сути это
+возврат ручного шага: токен из окружения кто-то должен сначала добыть в
+интерфейсе VK и вписать в `.env`, а раз он долгоживущий — рано или поздно
+протухнет молча. Именно ручные шаги на нового клиента эта фича и убирает, так
+что решение отклонено: токен собственного аккаунта теперь получается внутри
+самой операции (`_build_agency_adapter`) и нигде не хранится дольше одного
+вызова `create_client_cabinet` — ни в переменной модуля, ни в БД, ни в
+`.env`. `Settings.vk_ads_access_token` при этом не тронут: он по-прежнему
+нужен `seed_from_env` для разового посева уже существующего кабинета — это
+отдельная история, не про заведение новых клиентских.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from integrations.vk_oauth import (
     VkOAuthNotConfigured,
     VkOAuthUnavailable,
     request_agency_client_token,
+    request_own_account_token,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +126,24 @@ async def _retry_once(operation: Callable[[], Awaitable[T]], *, retry_on: type[E
         return await operation()
 
 
+async def _build_agency_adapter(oauth_client_id: str, oauth_client_secret: str) -> VkApiAdapter:
+    """Собственный токен агентства (`grant_type=client_credentials`,
+    `integrations.vk_oauth.request_own_account_token`) — только на время этой
+    операции. Никакого долгоживущего токена в окружении: ключи приложения уже
+    настроены (`vk_ads_client_id`/`vk_ads_client_secret`), выпуск занимает один
+    запрос и не требует ручного шага. Токен нигде не кэшируется дольше одного
+    вызова `create_client_cabinet` — вызывающая функция строит адаптер один раз
+    и переиспользует его инстанс на обе свои сетевые попытки (создание клиента
+    может сработать с первой или со второй попытки, токен для обеих один и тот
+    же), но не хранит его после возврата.
+    """
+    own_token = await _retry_once(
+        lambda: request_own_account_token(oauth_client_id, oauth_client_secret),
+        retry_on=VkOAuthUnavailable,
+    )
+    return VkApiAdapter(own_token.access_token)
+
+
 def _cabinet_name(full_name: str, niche: str | None) -> str:
     """Имя кабинета для VK: ФИО (или название компании) — основа; ниша
     дописывается, только если она известна (решение заказчика, план §4).
@@ -162,13 +190,17 @@ async def create_client_cabinet(
     (`VkOAuthNotConfigured`) — чтобы не тратить операцию VK впустую там, где
     заведомо нечем будет сохранить результат.
 
-    Сеть: у создания клиента и у выпуска токена — по одной повторной попытке
-    при `VkAgencyClientUnavailable`/`VkOAuthUnavailable` (план §3, «ровно две
-    попытки, не больше»); отказ по существу (`VkAgencyClientForbidden`,
-    `VkAgencyClientValidationError`, `VkOAuthInvalidCredentials`,
-    `VkOAuthRejected`, …) не повторяется и улетает наверх как есть — это
-    типизированные исключения `integrations.vk_api`/`integrations.vk_oauth`,
-    ловите их отдельно там, где нужен свой текст для оператора.
+    Сеть: у выпуска собственного токена агентства, у создания клиента и у
+    выпуска токена клиенту — по одной повторной попытке при
+    `VkOAuthUnavailable`/`VkAgencyClientUnavailable` (план §3, «ровно две
+    попытки, не больше»); отказ по существу (`VkOAuthNotConfigured`,
+    `VkOAuthInvalidCredentials`, `VkOAuthRejected`, `VkAgencyClientForbidden`,
+    `VkAgencyClientValidationError`, …) не повторяется и улетает наверх как
+    есть — это типизированные исключения `integrations.vk_oauth`/
+    `integrations.vk_api`, ловите их отдельно там, где нужен свой текст для
+    оператора. `VkOAuthNotConfigured` за пустые `vk_ads_client_id`/
+    `vk_ads_client_secret` в любом случае бросается до сети — см. проверку
+    ниже, до выпуска собственного токена.
 
     Половинчатые состояния — «клиент в VK уже есть, а кабинета у нас нет» —
     не имитируются успехом: `AgencyTokenIssuanceFailedError` (клиент заведён,
@@ -177,8 +209,9 @@ async def create_client_cabinet(
     токен — он никуда, кроме зашифрованной колонки, не попадает.
 
     `agency_adapter` — для тестов и для явного выбора площадки; по умолчанию
-    строится `VkApiAdapter` на `settings.vk_ads_access_token` — собственном
-    токене агентства (см. модульную документацию, почему именно он).
+    строится `VkApiAdapter` на собственном токене агентства, выпущенном на
+    время операции (`_build_agency_adapter`, `grant_type=client_credentials`)
+    — см. модульную документацию, почему не токен из окружения.
     """
     cfg = settings or get_settings()
 
@@ -202,7 +235,7 @@ async def create_client_cabinet(
     if not oauth_client_id.strip() or not oauth_client_secret.strip():
         raise VkOAuthNotConfigured("vk_ads_client_id/vk_ads_client_secret are not configured")
 
-    adapter = agency_adapter or VkApiAdapter(cfg.vk_ads_access_token)
+    adapter = agency_adapter or await _build_agency_adapter(oauth_client_id, oauth_client_secret)
     name = _cabinet_name(full_name, niche)
 
     vk_client = await _retry_once(

@@ -26,6 +26,7 @@ from integrations.vk_oauth import (
     delete_agency_tokens,
     refresh_agency_token,
     request_agency_client_token,
+    request_own_account_token,
 )
 
 TOKEN_RESPONSE = {
@@ -107,6 +108,91 @@ def test_both_agency_refs_is_a_value_error() -> None:
                 "cid", "csecret", agency_client_id="1", agency_client_name="u"
             )
         )
+
+
+# --- Выпуск токена собственного аккаунта (agency_cabinets, правка после ревью) --
+#
+# `grant_type=client_credentials` — «Client Credentials Grant» из документации
+# VK, доступ к данным СОБСТВЕННОГО аккаунта. Именно им агентство удостоверяет
+# себя перед `/agency/clients.json`, вместо долгоживущего токена из окружения
+# (см. services/agency_cabinets.py). Ни ссылки на клиента, ни выбора между
+# id/username здесь нет — только пара ключей приложения.
+
+
+@respx.mock
+def test_own_account_token_sends_client_credentials_grant() -> None:
+    route = respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
+    token = _run(request_own_account_token("cid", "csecret"))
+    assert isinstance(token, VkOAuthToken)
+    assert token.access_token.get_secret_value() == "issued-access-token"
+    assert token.refresh_token.get_secret_value() == "issued-refresh-token"
+    sent = route.calls.last.request.content.decode()
+    assert "grant_type=client_credentials" in sent
+    assert "client_id=cid" in sent
+    assert "client_secret=csecret" in sent
+    # Никакой ссылки на клиента — в отличие от agency_client_credentials.
+    assert "agency_client_id" not in sent
+    assert "agency_client_name" not in sent
+
+
+@respx.mock
+def test_own_account_token_sends_form_encoded_body() -> None:
+    route = respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
+    _run(request_own_account_token("cid", "csecret"))
+    request = route.calls.last.request
+    assert request.headers["Content-Type"] == "application/x-www-form-urlencoded"
+
+
+def test_own_account_token_empty_client_id_is_not_configured() -> None:
+    with pytest.raises(VkOAuthNotConfigured):
+        _run(request_own_account_token("", "csecret"))
+
+
+def test_own_account_token_empty_client_secret_is_not_configured() -> None:
+    with pytest.raises(VkOAuthNotConfigured):
+        _run(request_own_account_token("cid", ""))
+
+
+def test_own_account_token_not_configured_checked_before_network_call() -> None:
+    # Ни одного respx-мока не зарегистрировано: сеть не должна затрагиваться вовсе.
+    with pytest.raises(VkOAuthNotConfigured):
+        _run(request_own_account_token("", ""))
+
+
+@respx.mock
+def test_own_account_token_invalid_credentials() -> None:
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(401, json={"error": "invalid_client"}))
+    with pytest.raises(VkOAuthInvalidCredentials):
+        _run(request_own_account_token("bad-cid", "bad-csecret"))
+
+
+@respx.mock
+def test_own_account_token_rejected_by_substance() -> None:
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+    with pytest.raises(VkOAuthRejected):
+        _run(request_own_account_token("cid", "csecret"))
+
+
+@respx.mock
+def test_own_account_token_server_error_is_unavailable() -> None:
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(503))
+    with pytest.raises(VkOAuthUnavailable):
+        _run(request_own_account_token("cid", "csecret"))
+
+
+@respx.mock
+def test_own_account_token_network_failure_is_unavailable() -> None:
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("down"))
+    with pytest.raises(VkOAuthUnavailable):
+        _run(request_own_account_token("cid", "csecret"))
+
+
+@respx.mock
+def test_own_account_token_secret_not_leaked_into_error() -> None:
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("boom"))
+    with pytest.raises(VkOAuthUnavailable) as err:
+        _run(request_own_account_token("cid", "super-secret-client-secret"))
+    assert "super-secret-client-secret" not in str(err.value)
 
 
 # --- Обновление токена -------------------------------------------------------

@@ -48,6 +48,7 @@ TOKEN_URL = f"{VK_OAUTH_BASE}/oauth2/token.json"
 TOKEN_DELETE_URL = f"{VK_OAUTH_BASE}/oauth2/token/delete.json"
 
 GRANT_AGENCY_CLIENT = "agency_client_credentials"
+GRANT_OWN_ACCOUNT = "client_credentials"
 GRANT_REFRESH_TOKEN = "refresh_token"
 
 # VK держит 3 rps; это не браузерный флоу, ждать дольше нескольких секунд смысла
@@ -242,6 +243,43 @@ async def request_agency_client_token(
     _raise_for_status(response)
     token = _parse_token(_json_object(response))
     logger.info("VK agency client token issued, expires_at=%s", token.expires_at.isoformat())
+    return token
+
+
+async def request_own_account_token(
+    client_id: str,
+    client_secret: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> VkOAuthToken:
+    """Выпустить токен СОБСТВЕННОГО аккаунта агентства (`grant_type=client_credentials`).
+
+    Ни клиента, ни ссылки на него здесь нет — только `client_id`/`client_secret`
+    приложения. Живая документация VK называет этот грант «Client Credentials
+    Grant — доступ к данным собственного аккаунта» — им, а не долгоживущим
+    токеном из окружения, агентство удостоверяет само себя перед агентским
+    эндпоинтом (`POST /agency/clients.json`, см. `services.agency_cabinets`):
+    одна и та же пара ключей приложения покрывает и это, и выпуск токенов на
+    кабинеты клиентов (`request_agency_client_token` выше), так что вставлять
+    в `.env` токен вручную не нужно вовсе.
+
+    Бросает `VkOAuthNotConfigured` (пустые учётные данные приложения),
+    `VkOAuthInvalidCredentials` (неверные `client_id`/`client_secret`),
+    `VkOAuthRejected` (VK отверг запрос по существу) или `VkOAuthUnavailable`
+    (сеть/5xx/битый ответ) — та же карта, что у `request_agency_client_token`,
+    минус `ValueError`: идентифицировать здесь некого, кроме самого приложения.
+    """
+    _require_configured(client_id, client_secret)
+
+    data = {
+        "grant_type": GRANT_OWN_ACCOUNT,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    response = await _post_form(TOKEN_URL, data, client=client)
+    _raise_for_status(response)
+    token = _parse_token(_json_object(response))
+    logger.info("VK own account token issued, expires_at=%s", token.expires_at.isoformat())
     return token
 
 

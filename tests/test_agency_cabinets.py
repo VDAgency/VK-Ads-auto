@@ -25,6 +25,7 @@ from integrations.vk_api import (
     VkAgencyClient,
     VkAgencyClientForbidden,
     VkAgencyClientUnavailable,
+    VkApiAdapter,
 )
 from integrations.vk_oauth import (
     VkOAuthNotConfigured,
@@ -70,6 +71,14 @@ TOKEN = VkOAuthToken(
     expires_at=datetime.now(UTC) + timedelta(hours=24),
 )
 
+# Токен СОБСТВЕННОГО аккаунта агентства (`grant_type=client_credentials`) — им
+# по умолчанию (без `agency_adapter=`) строится вызывающий адаптер.
+OWN_TOKEN = VkOAuthToken(
+    access_token=SecretStr("own-account-token-00000000000000"),
+    refresh_token=SecretStr("own-account-refresh-00000000000000"),
+    expires_at=datetime.now(UTC) + timedelta(hours=24),
+)
+
 
 class FakeAgencyAdapter:
     """Двойник `AgencyCabinetAdapter`: считает вызовы, отдаёт заготовленные ответы/ошибки
@@ -101,14 +110,15 @@ def _settings(
     key: str | None = None,
     oauth_id: str = "app-id",
     oauth_secret: str = "app-secret",
-    access_token: str = "agency-master-token",
 ) -> Settings:
+    # `vk_ads_access_token` намеренно не участвует (правка после ревью): агентство
+    # удостоверяет себя парой ключей приложения через `client_credentials`, а не
+    # долгоживущим токеном из окружения — см. модульный докстринг agency_cabinets.py.
     return Settings(
         vk_agency_confirmed=confirmed,
         vk_ads_secret_key=SecretStr(Fernet.generate_key().decode() if key is None else key),
         vk_ads_client_id=SecretStr(oauth_id),
         vk_ads_client_secret=SecretStr(oauth_secret),
-        vk_ads_access_token=SecretStr(access_token),
     )
 
 
@@ -226,6 +236,122 @@ def test_missing_niche_leaves_name_as_full_name_only() -> None:
         assert adapter.calls[0]["client_name"] == "Иван Иванов"
 
     asyncio.run(_with_db(scenario))
+
+
+# --- удостоверение агентства собственным токеном (правка после ревью) ------------
+
+
+def test_default_adapter_authenticates_with_own_account_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Без `agency_adapter=` вызывающий сам получает токен собственного аккаунта
+    (`grant_type=client_credentials`) — не берёт его из окружения."""
+
+    _issue_ok(monkeypatch)
+    own_token_calls: list[tuple[str, str]] = []
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        own_token_calls.append((client_id, client_secret))
+        return OWN_TOKEN
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    create_calls: list[str] = []
+
+    async def fake_create_agency_client(self: VkApiAdapter, **kwargs: object) -> VkAgencyClient:
+        # Адаптер обязан быть построен на токене СОБСТВЕННОГО аккаунта, не на
+        # токене клиента и не на чём-либо из окружения.
+        create_calls.append(self._token.get_secret_value())
+        return VK_CLIENT
+
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", fake_create_agency_client)
+
+    async def scenario(session: AsyncSession) -> None:
+        view = await create_client_cabinet(
+            session,
+            1,
+            100,
+            full_name="Иван Иванов",
+            tax_id="770123456789",
+            settings=_settings(oauth_id="app-id", oauth_secret="app-secret"),
+        )
+        assert view.client_id == 100
+
+    asyncio.run(_with_db(scenario))
+    assert own_token_calls == [("app-id", "app-secret")]
+    assert create_calls == [OWN_TOKEN.access_token.get_secret_value()]
+
+
+def test_default_adapter_retries_own_account_token_once_on_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _issue_ok(monkeypatch)
+    calls = {"n": 0}
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise VkOAuthUnavailable("timeout")
+        return OWN_TOKEN
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    async def fake_create_agency_client(self: VkApiAdapter, **kwargs: object) -> VkAgencyClient:
+        return VK_CLIENT
+
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", fake_create_agency_client)
+
+    async def scenario(session: AsyncSession) -> None:
+        view = await create_client_cabinet(
+            session,
+            1,
+            100,
+            full_name="Иван Иванов",
+            tax_id="770123456789",
+            settings=_settings(),
+        )
+        assert view.client_id == 100
+
+    asyncio.run(_with_db(scenario))
+    assert calls["n"] == 2
+
+
+def test_default_adapter_does_not_retry_own_account_token_on_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Отказ по существу (неверные ключи приложения) — повторять бессмысленно,
+    и до создания клиента в VK дело даже не доходит."""
+
+    calls = {"n": 0}
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        calls["n"] += 1
+        raise VkOAuthRejected("invalid_client")
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
+
+    create_calls: list[str] = []
+
+    async def fake_create_agency_client(self: VkApiAdapter, **kwargs: object) -> VkAgencyClient:
+        create_calls.append("called")
+        return VK_CLIENT
+
+    monkeypatch.setattr(VkApiAdapter, "create_agency_client", fake_create_agency_client)
+
+    async def scenario(session: AsyncSession) -> None:
+        with pytest.raises(VkOAuthRejected):
+            await create_client_cabinet(
+                session,
+                1,
+                100,
+                full_name="Иван Иванов",
+                tax_id="770123456789",
+                settings=_settings(),
+            )
+
+    asyncio.run(_with_db(scenario))
+    assert calls["n"] == 1
+    assert create_calls == []
 
 
 # --- предохранители ---------------------------------------------------------------

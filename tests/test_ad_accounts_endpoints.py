@@ -423,6 +423,15 @@ _ISSUED_TOKEN = VkOAuthToken(
     expires_at=datetime.now(UTC) + timedelta(hours=24),
 )
 
+# Токен СОБСТВЕННОГО аккаунта агентства (`grant_type=client_credentials`) —
+# им, а не токеном из окружения, теперь строится вызывающий адаптер (правка
+# после ревью, см. services/agency_cabinets.py).
+_OWN_TOKEN = VkOAuthToken(
+    access_token=SecretStr("own-account-token-00000000000000"),
+    refresh_token=SecretStr("own-account-refresh-00000000000000"),
+    expires_at=datetime.now(UTC) + timedelta(hours=24),
+)
+
 
 def _agency_body(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
@@ -437,7 +446,8 @@ def _mock_agency_settings(monkeypatch: pytest.MonkeyPatch, *, confirmed: bool = 
     """Настройки для агентской операции: свой ключ у `agency_cabinets.get_settings`,
     отдельный от общего `ad_accounts.get_settings` (координата B2: последний тут не
     участвует — `create_client_cabinet` пробрасывает уже разрешённые настройки в
-    `add_account` явным `settings=`).
+    `add_account` явным `settings=`). `vk_ads_access_token` не задан — он тут больше
+    ни при чём: удостоверение агентства строится ключами приложения (ниже).
     """
     settings = Settings(
         _env_file=None,
@@ -445,9 +455,13 @@ def _mock_agency_settings(monkeypatch: pytest.MonkeyPatch, *, confirmed: bool = 
         vk_ads_secret_key=SecretStr(Fernet.generate_key().decode()),
         vk_ads_client_id=SecretStr("app-id"),
         vk_ads_client_secret=SecretStr("app-secret"),
-        vk_ads_access_token=SecretStr("agency-master-token"),
     )
     monkeypatch.setattr(agency_cabinets, "get_settings", lambda: settings)
+
+    async def issue_own(client_id: str, client_secret: str, **_: object) -> VkOAuthToken:
+        return _OWN_TOKEN
+
+    monkeypatch.setattr(agency_cabinets, "request_own_account_token", issue_own)
 
 
 async def _fake_create_agency_client(self: object, **_: object) -> VkAgencyClient:
