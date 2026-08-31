@@ -1334,3 +1334,48 @@ async def list_clients(operator_telegram_id: int) -> list[ClientItem]:
         )
         for item in payload.get("items", [])
     ]
+
+
+# --- пароль оператора: возвратный вход в веб-кабинет (spec 2026-08-31) ------
+
+
+class WeakPassword(RuntimeError):
+    """Ядро отклонило пароль как слишком слабый (422) — причина уже человекочитаема
+
+    (`core/api/v1/admin.py::set_password` формирует её текстом, а не машинным
+    кодом, в отличие от `AdAccountRejected`/`_AD_ACCOUNT_ERRORS` выше).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+_WEAK_PASSWORD_FALLBACK = "Пароль слишком короткий — используйте не меньше 10 символов."
+
+
+async def set_operator_password(operator_telegram_id: int, password: str) -> None:
+    """`POST /admin/password`: задать/сменить пароль оператора для входа в веб-кабинет.
+
+    Защищён `require_admin` — своей веб-сессии у бота нет, поэтому авторизуемся
+    тем же приёмом, что `list_clients`: подписываем одноразовый admin-cookie
+    секретом, общим с ядром (`_admin_auth_cookies`).
+
+    422 (пароль короче 10 символов) → `WeakPassword` с уже человекочитаемой
+    причиной ядра; сеть и прочие отказы — `CoreUnavailable`.
+    """
+    url = f"{_base_url()}/api/v1/admin/password"
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, cookies=_admin_auth_cookies(operator_telegram_id)
+        ) as client:
+            response = await client.post(url, json={"password": password})
+    except (httpx.HTTPError, httpx.TransportError) as exc:
+        raise CoreUnavailable(str(exc)) from exc
+    if response.status_code == 422:
+        reason = _WEAK_PASSWORD_FALLBACK
+        with contextlib.suppress(ValueError):
+            reason = str(response.json().get("detail") or reason)
+        raise WeakPassword(reason)
+    if response.status_code >= 400:
+        raise CoreUnavailable(f"core {response.status_code}")

@@ -20,6 +20,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("stop_campaign", "Остановить кампанию"),
     ("surfaces", "Куда привлекаем подписчиков"),
     ("admin", "Ссылка на веб-админку"),
+    ("set_password", "Задать пароль веб-кабинета"),
     ("link_userbot", "Подключить юзер-бота"),
     ("userbot_status", "Состояние юзер-бота"),
     ("link_kotbot", "Подключить kotbot"),

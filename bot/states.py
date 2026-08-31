@@ -83,6 +83,16 @@ class UnlinkCommunityToken(StatesGroup):
     entering_reference = State()  # короткий адрес сообщества или его числовой id
 
 
+class SetPassword(StatesGroup):
+    """Сценарий «задать пароль входа в веб-кабинет» (`/set_password`).
+
+    Пароль приходит сообщением, которое удаляется сразу после приёма — тот же
+    приём, что у `AddAdAccount.entering_token`.
+    """
+
+    entering_password = State()  # ввод пароля (сообщение сразу удаляется)
+
+
 class LaunchCampaign(StatesGroup):
     """Сценарий запуска: кабинет → цель → креатив (spec 2026-07-27 §9).
 
