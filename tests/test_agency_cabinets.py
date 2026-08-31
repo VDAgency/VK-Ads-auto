@@ -34,8 +34,10 @@ from integrations.vk_oauth import (
     VkOAuthUnavailable,
 )
 from pydantic import SecretStr
-from services.ad_accounts import ADVERTISER_THIRD_PARTY, ClientNotFoundError
+from services.ad_accounts import ADVERTISER_THIRD_PARTY, ClientNotFoundError, DuplicateAccountError
 from services.agency_cabinets import (
+    AgencyCabinetClientGoneError,
+    AgencyCabinetDuplicateError,
     AgencyCabinetPersistError,
     AgencyDisabledError,
     AgencyMissingTaxIdError,
@@ -648,5 +650,78 @@ def test_persist_failure_after_token_issuance_is_typed() -> None:
             monkeypatch.undo()
         assert excinfo.value.vk_client_id == "777"
         assert isinstance(excinfo.value.__cause__, InvalidTokenError)
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_persist_failure_duplicate_account_is_typed_and_carries_vk_client() -> None:
+    """`add_account` находит уже активный кабинет с тем же внешним id VK — это
+    другая история, чем «клиент пропал» (ниже), и должна различаться."""
+
+    async def scenario(session: AsyncSession) -> None:
+        cfg = _settings()
+        monkeypatch = pytest.MonkeyPatch()
+        _issue_ok(monkeypatch)
+        # Кабинет с тем же external_id уже существует (тем же мокнутым
+        # `fetch_identity` из автоиспользуемой фикстуры — IDENTITY.external_id).
+        await ad_accounts.add_account(session, 1, "already-here-token", settings=cfg)
+        adapter = FakeAgencyAdapter([VK_CLIENT])
+        try:
+            with pytest.raises(AgencyCabinetDuplicateError) as excinfo:
+                await create_client_cabinet(
+                    session,
+                    1,
+                    100,
+                    full_name="Иван Иванов",
+                    tax_id="770123456789",
+                    settings=cfg,
+                    agency_adapter=adapter,
+                )
+        finally:
+            monkeypatch.undo()
+        assert excinfo.value.vk_client_id == "777"
+        assert excinfo.value.vk_username == "new-client@agency_client"
+        assert isinstance(excinfo.value.__cause__, DuplicateAccountError)
+        # Половинчатый провал — тоже `AgencyCabinetPersistError`: код,
+        # который ловит общий базовый класс, не должен сломаться.
+        assert isinstance(excinfo.value, AgencyCabinetPersistError)
+
+    asyncio.run(_with_db(scenario))
+
+
+def test_persist_failure_client_gone_is_typed_and_carries_vk_client() -> None:
+    """Клиент существовал на ранней проверке, но исчез к моменту сохранения
+    (гонка/удаление) — `add_account` находит это сам через свою же проверку."""
+
+    async def scenario(session: AsyncSession) -> None:
+        monkeypatch = pytest.MonkeyPatch()
+        _issue_ok(monkeypatch)
+
+        # Ранняя проверка в create_client_cabinet идёт через СВОЙ импорт
+        # get_client (agency_cabinets.get_client) — его не трогаем, клиент 100
+        # для неё по-прежнему существует. А внутри add_account клиент ищется
+        # через ОТДЕЛЬНЫЙ импорт (ad_accounts.get_client) — вот его и подменяем,
+        # чтобы смоделировать «исчез между проверкой и сохранением».
+        async def vanished(session_: AsyncSession, account_id_: int, client_id_: int) -> None:
+            return None
+
+        monkeypatch.setattr(ad_accounts, "get_client", vanished)
+        adapter = FakeAgencyAdapter([VK_CLIENT])
+        try:
+            with pytest.raises(AgencyCabinetClientGoneError) as excinfo:
+                await create_client_cabinet(
+                    session,
+                    1,
+                    100,
+                    full_name="Иван Иванов",
+                    tax_id="770123456789",
+                    settings=_settings(),
+                    agency_adapter=adapter,
+                )
+        finally:
+            monkeypatch.undo()
+        assert excinfo.value.vk_client_id == "777"
+        assert isinstance(excinfo.value.__cause__, ClientNotFoundError)
+        assert isinstance(excinfo.value, AgencyCabinetPersistError)
 
     asyncio.run(_with_db(scenario))

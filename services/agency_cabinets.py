@@ -57,6 +57,7 @@ from services.ad_accounts import (
     ADVERTISER_THIRD_PARTY,
     AdAccountView,
     ClientNotFoundError,
+    DuplicateAccountError,
     add_account,
 )
 from services.secret_box import NotConfiguredError, SecretBox
@@ -98,18 +99,48 @@ class AgencyTokenIssuanceFailedError(AgencyCabinetError):
 
 class AgencyCabinetPersistError(AgencyCabinetError):
     """Клиент заведён и токен выпущен, но сохранить кабинет как `AdAccount` не
-    удалось (VK не подтвердил свежевыпущенный токен живым запросом, либо
-    пропал ключ шифрования на середине операции) — тоже половинчатое
-    состояние. Причина в `__cause__`; `vk_client_id`/`vk_username` — тот же
-    смысл, что у `AgencyTokenIssuanceFailedError`. Токен, который не удалось
-    сохранить, нигде не оседает — повторный запуск операции выпустит новый
-    (в пределах лимита VK на пять живых токенов клиента).
+    удалось — половинчатое состояние. Причина в `__cause__`; `vk_client_id`/
+    `vk_username` — тот же смысл, что у `AgencyTokenIssuanceFailedError`: за
+    что зацепиться оператору, чтобы найти и прибрать уже созданного в VK
+    клиента (токен, который не удалось сохранить, нигде не оседает —
+    повторный запуск операции выпустит новый, в пределах лимита VK на пять
+    живых токенов клиента).
+
+    Базовый класс для этой группы отказов; конкретную причину смотрите либо
+    в `__cause__`, либо по подклассу — `AgencyCabinetDuplicateError` и
+    `AgencyCabinetClientGoneError` ниже разведены отдельно, потому что от них
+    ожидаются разные действия оператора. Сюда, необёрнутым базовым классом,
+    попадают лишь оставшиеся причины: VK не подтвердил свежевыпущенный токен
+    живым запросом (`InvalidTokenError`/`VkUnreachableError`) либо пропал
+    ключ шифрования на середине операции (`NotConfiguredError`).
     """
 
     def __init__(self, vk_client_id: str, vk_username: str | None) -> None:
         self.vk_client_id = vk_client_id
         self.vk_username = vk_username
         super().__init__(f"VK client {vk_client_id} cabinet could not be persisted")
+
+
+class AgencyCabinetDuplicateError(AgencyCabinetPersistError):
+    """Тот же половинчатый смысл, что у `AgencyCabinetPersistError`, но
+    причина конкретна: `add_account` отклонил сохранение, потому что кабинет
+    с таким внешним id VK уже есть у тенанта (`DuplicateAccountError` в
+    `__cause__`) — совпадение либо гонка двух параллельных созданий. Не
+    «клиент пропал»: оператору нужно найти существующий дубль кабинета и
+    решить вручную, что делать со свежесозданным клиентом/токеном в VK —
+    другое действие, чем при `AgencyCabinetClientGoneError`.
+    """
+
+
+class AgencyCabinetClientGoneError(AgencyCabinetPersistError):
+    """Тот же половинчатый смысл, что у `AgencyCabinetPersistError`, но
+    причина конкретна: клиент, для которого заводили кабинет, исчез между
+    ранней проверкой (`get_client` в начале операции) и сохранением —
+    `add_account` отклонил его отсутствием (`ClientNotFoundError` в
+    `__cause__`). Клиент и токен в VK уже созданы и осиротели: привязывать
+    их больше не к кому, а найденный `vk_client_id`/`vk_username` — то немногое,
+    за что оператор может зацепиться, чтобы прибрать их вручную.
+    """
 
 
 async def _retry_once(operation: Callable[[], Awaitable[T]], *, retry_on: type[Exception]) -> T:
@@ -204,9 +235,12 @@ async def create_client_cabinet(
 
     Половинчатые состояния — «клиент в VK уже есть, а кабинета у нас нет» —
     не имитируются успехом: `AgencyTokenIssuanceFailedError` (клиент заведён,
-    токен не выпущен) и `AgencyCabinetPersistError` (токен выпущен, но
-    сохранить не удалось) несут `vk_client_id`/`vk_username`, но никогда сам
-    токен — он никуда, кроме зашифрованной колонки, не попадает.
+    токен не выпущен) и вся семья `AgencyCabinetPersistError` (токен выпущен,
+    но сохранить не удалось: `AgencyCabinetDuplicateError` — совпал внешний
+    id VK с уже активным кабинетом тенанта; `AgencyCabinetClientGoneError` —
+    клиент исчез между ранней проверкой и сохранением; базовый класс — любая
+    другая причина на этом шаге) несут `vk_client_id`/`vk_username`, но
+    никогда сам токен — он никуда, кроме зашифрованной колонки, не попадает.
 
     `agency_adapter` — для тестов и для явного выбора площадки; по умолчанию
     строится `VkApiAdapter` на собственном токене агентства, выпущенном на
@@ -274,6 +308,16 @@ async def create_client_cabinet(
             client_id=client_id,
             settings=cfg,
         )
+    except DuplicateAccountError as exc:
+        # Совпал внешний id VK с уже активным кабинетом тенанта — не то же
+        # самое, что «клиент пропал» (ниже): другой текст, другое действие
+        # оператора, поэтому отдельный подкласс, а не общий персист-отказ.
+        raise AgencyCabinetDuplicateError(vk_client.client_id, vk_client.username) from exc
+    except ClientNotFoundError as exc:
+        # Клиент исчез между ранней проверкой (в начале функции) и этим
+        # сохранением — узкое окно (гонка/удаление), но `add_account` умеет
+        # его обнаружить сам через свою собственную проверку.
+        raise AgencyCabinetClientGoneError(vk_client.client_id, vk_client.username) from exc
     except (InvalidTokenError, VkUnreachableError, NotConfiguredError) as exc:
         raise AgencyCabinetPersistError(vk_client.client_id, vk_client.username) from exc
 
@@ -287,6 +331,8 @@ async def create_client_cabinet(
 
 
 __all__ = [
+    "AgencyCabinetClientGoneError",
+    "AgencyCabinetDuplicateError",
     "AgencyCabinetError",
     "AgencyCabinetPersistError",
     "AgencyDisabledError",

@@ -37,6 +37,8 @@ from services.ad_accounts import (
     set_account_client,
 )
 from services.agency_cabinets import (
+    AgencyCabinetClientGoneError,
+    AgencyCabinetDuplicateError,
     AgencyCabinetPersistError,
     AgencyDisabledError,
     AgencyMissingTaxIdError,
@@ -191,7 +193,12 @@ async def create_agency_cabinet_response(
     привязанным к клиенту. Коды ответов разведены по причинам отказа так же
     подробно, как у ручного добавления (`create_ad_account_response`), плюс
     агентские: предохранитель выключен, ИНН не указан, VK не подтвердил
-    агентский статус, половинчатый провал на полпути.
+    агентский статус, половинчатый провал на полпути — причём последний не
+    один общий код: `cabinet_duplicate` (409, кабинет с таким внешним id VK
+    уже есть) и `cabinet_client_gone` (422, клиент исчез между проверкой и
+    сохранением) разведены отдельно от общего `cabinet_persist_failed` (502),
+    у каждого своё действие оператора и оба несут `vk_client_id`/
+    `vk_username` уже созданного в VK клиента, чтобы было за что зацепиться.
     """
     try:
         view = await create_client_cabinet(
@@ -229,6 +236,31 @@ async def create_agency_cabinet_response(
                 "vk_username": exc.vk_username,
             },
         ) from None
+    except AgencyCabinetDuplicateError as exc:
+        # Подкласс `AgencyCabinetPersistError` — обязан идти раньше базового
+        # класса, иначе тот перехватит его первым. Отдельный код и текст:
+        # оператору нужно искать уже существующий дубль кабинета, а не
+        # разбираться с исчезнувшим клиентом.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "cabinet_duplicate",
+                "vk_client_id": exc.vk_client_id,
+                "vk_username": exc.vk_username,
+            },
+        ) from None
+    except AgencyCabinetClientGoneError as exc:
+        # Тоже подкласс `AgencyCabinetPersistError`, тоже должен идти раньше
+        # него. Клиент исчез на середине операции — другое действие
+        # оператора, чем при дубле кабинета.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "cabinet_client_gone",
+                "vk_client_id": exc.vk_client_id,
+                "vk_username": exc.vk_username,
+            },
+        ) from None
     except AgencyCabinetPersistError as exc:
         raise HTTPException(
             status_code=502,
@@ -238,8 +270,6 @@ async def create_agency_cabinet_response(
                 "vk_username": exc.vk_username,
             },
         ) from None
-    except DuplicateAccountError:
-        raise HTTPException(status_code=409, detail="duplicate_account") from None
     await session.commit()
     return to_out(view)
 
