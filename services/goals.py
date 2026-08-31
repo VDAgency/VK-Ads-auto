@@ -151,3 +151,12 @@ def launch_goal_title(code: str) -> str:
         if goal.code == code:
             return goal.title
     return code
+
+
+# Правило: запуск без креатива всегда идёт под целью «подписчики» — объявлением
+# служит сам пост, клип или трек, а ни одна площадка без креатива не относится к
+# лид-форме/сообщениям/Senler (`goal_for_target_type` выше — этим трём целям
+# отвечают только свои явные `target_type`). Отдаётся картой брифа
+# (`BriefCardOut.launch_goal_title`), чтобы каналы не разбирали бриф сами
+# (CLAUDE.md §1.3), а не решали это правило локально, как раньше.
+NO_CREATIVE_GOAL: str = Goal.SUBSCRIBERS.value
