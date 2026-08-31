@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AdminShell } from "@/components/admin/AdminShell";
 import { ChangePasswordModal } from "@/components/admin/ChangePasswordModal";
@@ -10,7 +10,7 @@ import { CampaignsScreen } from "@/components/admin/screens/CampaignsScreen";
 import { ChannelsScreen } from "@/components/admin/screens/ChannelsScreen";
 import { ClientsScreen } from "@/components/admin/screens/ClientsScreen";
 import { OverviewScreen } from "@/components/admin/screens/OverviewScreen";
-import { adminFetch, type AdminMe, type Flash } from "@/lib/adminApi";
+import { adminFetch, onSessionExpired, type AdminMe, type Flash } from "@/lib/adminApi";
 import { parseRoute, routeHash, type Route } from "@/lib/adminRoute";
 
 import "./admin.css";
@@ -24,7 +24,9 @@ const FLASH_AUTO_HIDE_MS = 4000;
 export default function AdminPage() {
   const [auth, setAuth] = useState<Auth>("checking");
   const [operatorId, setOperatorId] = useState<number | null>(null);
-  const [tokenError, setTokenError] = useState("");
+  // Показывается на экране входа — либо магик-линк не сработал, либо сессия
+  // закончилась и оператора вернуло сюда (см. подписку на `onSessionExpired` ниже).
+  const [loginNotice, setLoginNotice] = useState("");
   const [route, setRoute] = useState<Route>({ screen: "overview" });
   const [flash, setFlash] = useState<Flash>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -33,6 +35,25 @@ export default function AdminPage() {
     const me = await adminFetch<AdminMe>("/me");
     setOperatorId(me.operator_id);
     setAuth("ok");
+  }, []);
+
+  // Единообразная реакция на «сессия больше не действует» (spec: 401 от любого
+  // запроса `/api/v1/admin/*` — не только по сроку, но и если оператора убрали
+  // из списка на сервере). Реагируем только из состояния «ok»: на экране входа
+  // (пароль не подошёл, магик-линк истёк) это событие тоже долетает через тот
+  // же `adminFetch`, но там уже есть своё, более точное сообщение — не перебиваем.
+  const authRef = useRef(auth);
+  useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
+
+  useEffect(() => {
+    return onSessionExpired(() => {
+      if (authRef.current !== "ok") return;
+      setOperatorId(null);
+      setAuth("need");
+      setLoginNotice("Нужно войти заново — доступ пришлось подтвердить снова.");
+    });
   }, []);
 
   // Магик-линк из бота (`?token=`) продолжает работать как раньше: меняем его
@@ -51,7 +72,7 @@ export default function AdminPage() {
           await enterApp();
         } catch {
           setAuth("need");
-          setTokenError(
+          setLoginNotice(
             "Ссылка недействительна или истекла. Войдите по паролю или запросите новую в боте: /admin.",
           );
         }
@@ -100,7 +121,7 @@ export default function AdminPage() {
   }
 
   if (auth !== "ok") {
-    return <LoginScreen tokenError={tokenError} onLoggedIn={() => void enterApp()} />;
+    return <LoginScreen notice={loginNotice} onLoggedIn={() => void enterApp()} />;
   }
 
   return (

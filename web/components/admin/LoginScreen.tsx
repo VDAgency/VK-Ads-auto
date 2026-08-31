@@ -18,10 +18,13 @@ import { PasswordField } from "./ui/PasswordField";
  * обрабатывается до этого компонента, в `page.tsx` — здесь только пароль.
  */
 export function LoginScreen({
-  tokenError,
+  notice,
   onLoggedIn,
 }: {
-  tokenError: string;
+  /** Сообщение над формой: магик-линк не сработал либо сессия закончилась
+   * (`onSessionExpired` в `page.tsx`) — оба случая показываются тут же, чтобы
+   * оператор понимал, почему его вернуло на вход, а не гадал. */
+  notice: string;
   onLoggedIn: () => void;
 }) {
   const [telegramId, setTelegramId] = useState("");
@@ -62,7 +65,7 @@ export function LoginScreen({
     setBusy(false);
   }
 
-  const shownError = error || tokenError;
+  const shownError = error || notice;
 
   return (
     <main className="adm-auth">

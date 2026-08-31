@@ -3,8 +3,27 @@
 
 import { apiFetch, ApiError } from "@/lib/api";
 
+/** Подписчики на «сессия оператора больше не действует» — единая точка вместо
+ * того, чтобы каждый экран сам ловил 401 и рисовал свою ошибку загрузки
+ * (найденный баг: истёкшая сессия показывала «Не удалось загрузить рекламные
+ * кабинеты» вместо понятного возврата на вход). `page.tsx` — единственный
+ * подписчик: решает, показывать ли экран входа, сам он не разбирает, откуда
+ * пришёл 401. */
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
 export function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  return apiFetch<T>(`/admin${path}`, init);
+  return apiFetch<T>(`/admin${path}`, init).catch((error: unknown) => {
+    if (error instanceof ApiError && error.status === 401) {
+      for (const listener of sessionExpiredListeners) listener();
+    }
+    throw error;
+  });
 }
 
 export const STATUS_RU: Record<string, string> = {
