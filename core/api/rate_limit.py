@@ -33,6 +33,14 @@ class SlidingWindowLimiter:
         hits.append(current)
         return True
 
+    def reset(self) -> None:
+        """Сбросить накопленные попытки.
+
+        Нужен тестам: лимитер — модульный синглтон, без сброса тесты из разных
+        файлов делят один и тот же счётчик по IP (см. `tests/conftest.py`).
+        """
+        self._hits.clear()
+
 
 # 30 запросов в минуту на IP — приём брифа (см. plan PR#4).
 _brief_limiter = SlidingWindowLimiter(max_requests=30, window_seconds=60.0)
