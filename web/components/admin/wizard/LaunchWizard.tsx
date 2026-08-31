@@ -14,11 +14,14 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   adminFetch,
+  STATUS_RU,
   type AdAccount,
   type BriefCard,
   type Flash,
   type LaunchGoal,
+  type LaunchOutcome,
 } from "@/lib/adminApi";
+import { routeHash } from "@/lib/adminRoute";
 
 import { CabinetStep } from "./CabinetStep";
 import { ConfirmStep } from "./ConfirmStep";
@@ -33,11 +36,15 @@ export function LaunchWizard({
   card,
   onCardUpdate,
   onFlash,
+  onBack,
 }: {
   brief_id: number;
   card: BriefCard;
   onCardUpdate: (card: BriefCard) => void;
   onFlash: (flash: Flash) => void;
+  /** К списку брифов — используется на экране успеха и на экране «кампания
+   * уже есть», чтобы не запускать вторую случайно (см. `confirmedRelaunch`). */
+  onBack: () => void;
 }) {
   const needsCreative = card.surface_needs_creative !== false;
   const steps: WizardStepId[] = needsCreative
@@ -51,6 +58,20 @@ export function LaunchWizard({
   const [picked, setPicked] = useState<PickedFile | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+
+  // Найденный баг: повторное нажатие «Запустить» после успеха создавало вторую
+  // кампанию по тому же брифу — кнопка оставалась на экране и снова активной.
+  // `justLaunched` заменяет весь шаг подтверждения на итог: кнопки «Запустить»
+  // после успеха больше нет вовсе, а не просто заблокирована.
+  const [justLaunched, setJustLaunched] = useState<LaunchOutcome | null>(null);
+
+  // Открыли бриф, по которому кампания уже есть (`card.campaign_status` от
+  // ядра — своей логики «можно ли запускать» здесь не изобретаем): по
+  // умолчанию мастер это показывает, а не молча предлагает пройти шаги заново.
+  // Запуск ещё одной кампании возможен только через отдельное явное действие.
+  const [confirmedRelaunch, setConfirmedRelaunch] = useState(false);
+  const existingCampaignStatus = card.campaign_status;
+  const alreadyLaunched = Boolean(existingCampaignStatus) && !justLaunched && !confirmedRelaunch;
 
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -80,6 +101,72 @@ export function LaunchWizard({
   };
 
   const currentIndex = steps.indexOf(currentStep);
+
+  if (justLaunched) {
+    return (
+      <div className="adm-panel" role="status">
+        <p className="wiz-offer__title">Кампания запущена</p>
+        <p>{justLaunched.message}</p>
+        <div className="adm-actions">
+          <button className="btn btn--primary" type="button" onClick={onBack}>
+            К списку брифов
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => {
+              window.location.hash = routeHash.campaigns();
+            }}
+          >
+            Открыть кампании
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (alreadyLaunched) {
+    return (
+      <div className="adm-panel">
+        <p className="wiz-offer__title">По этому брифу уже есть кампания</p>
+        <p>
+          Статус:{" "}
+          {existingCampaignStatus
+            ? (STATUS_RU[existingCampaignStatus] ?? existingCampaignStatus)
+            : ""}
+          . Повторный запуск создаст ещё одну кампанию по тому же брифу и спишет деньги клиента ещё
+          раз.
+        </p>
+        <div className="adm-actions">
+          <button
+            className="btn btn--primary"
+            type="button"
+            onClick={() => {
+              window.location.hash = routeHash.campaigns();
+            }}
+          >
+            Открыть кампании
+          </button>
+          <button className="btn" type="button" onClick={onBack}>
+            К списку брифов
+          </button>
+          <button
+            className="btn btn--ghost"
+            type="button"
+            onClick={() => {
+              const confirmed = window.confirm(
+                "Точно запустить ещё одну кампанию по этому брифу? Прошлая кампания останется " +
+                  "как есть, деньги спишутся ещё раз.",
+              );
+              if (confirmed) setConfirmedRelaunch(true);
+            }}
+          >
+            Всё равно запустить ещё одну
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -151,8 +238,9 @@ export function LaunchWizard({
             body={body}
             onFlash={onFlash}
             onChangeCabinet={() => setCurrentStep("cabinet")}
-            onLaunched={(message) => {
-              onFlash({ text: message, ok: true, persistent: true });
+            onLaunched={(outcome) => {
+              setJustLaunched(outcome);
+              onFlash({ text: outcome.message, ok: true, persistent: true });
               void refreshCard();
             }}
           />

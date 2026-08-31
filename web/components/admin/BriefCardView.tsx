@@ -70,7 +70,18 @@ export function BriefCardView({
           </span>
         </div>
 
-        <LaunchWizard brief_id={id} card={card} onCardUpdate={setCard} onFlash={onFlash} />
+        {/* `key` привязан к брифу: без него смена брифа по прямой навигации
+            хэшем (минуя возврат к списку) могла бы оставить состояние мастера
+            (выбранный кабинет, «кампания уже запущена» и т. п.) от прошлого
+            брифа — риск недопустим именно здесь, где на кону деньги клиента. */}
+        <LaunchWizard
+          key={id}
+          brief_id={id}
+          card={card}
+          onCardUpdate={setCard}
+          onFlash={onFlash}
+          onBack={onBack}
+        />
       </div>
     </>
   );
