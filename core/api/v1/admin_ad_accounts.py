@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from db.session import get_session
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.api.v1.ad_accounts import (
@@ -33,9 +33,14 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(requir
 @router.get("/ad-accounts")
 async def admin_get_ad_accounts(
     session: Annotated[AsyncSession, Depends(get_session)],
+    client_id: Annotated[int | None, Query()] = None,
 ) -> AdAccountsOut:
-    """Список рекламных кабинетов для веб-админки."""
-    return await list_ad_accounts_response(session)
+    """Список рекламных кабинетов для веб-админки; `client_id` сужает до пригодных
+    этому клиенту (общие плюс закреплённые за ним), ровно как у операторского
+    оригинала (`GET /api/v1/ad-accounts`) — тот же хелпер `list_ad_accounts_response`,
+    своей логики фильтрации здесь нет (CLAUDE.md §1.3).
+    """
+    return await list_ad_accounts_response(session, client_id)
 
 
 @router.post("/ad-accounts", status_code=201)
