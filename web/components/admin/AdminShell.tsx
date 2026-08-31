@@ -57,7 +57,9 @@ export function AdminShell({
       <header className="adm-header">
         <div className="adm-header__inner">
           <span className="adm-brand">
-            Ads<span className="adm-brand__dot">·</span>auto
+            <span className="adm-brand__name">
+              Ads<span className="adm-brand__dot">·</span>auto
+            </span>
             <span className="adm-brand__role">панель оператора</span>
           </span>
           <div className="adm-header__actions">
