@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import {
   adminFetch,
+  isHealthBad,
   type AdAccount,
   type BriefListItem,
   type CampaignRow,
@@ -55,7 +56,7 @@ function buildAttention(
   }
 
   for (const account of adAccounts ?? []) {
-    if (account.health === "unauthorized" || account.health === "error") {
+    if (isHealthBad(account.health)) {
       items.push({
         id: `ad-account-${account.id}`,
         text: `Кабинет «${account.title}» — ${
@@ -132,7 +133,7 @@ export function OverviewScreen({ onNavigate }: { onNavigate: (hash: string) => v
     return (
       <>
         <SkeletonTiles count={4} />
-        <div className="section-title">Требует внимания</div>
+        <h2 className="section-title">Требует внимания</h2>
         <SkeletonRows count={3} />
       </>
     );
@@ -174,7 +175,7 @@ export function OverviewScreen({ onNavigate }: { onNavigate: (hash: string) => v
         </button>
       </div>
 
-      <div className="section-title">Требует внимания</div>
+      <h2 className="section-title">Требует внимания</h2>
       {attention.length ? (
         <div className="adm-list">
           {attention.map((item) => (
