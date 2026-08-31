@@ -63,10 +63,9 @@ function CabinetStatsDetail({ cabinet, onBack }: { cabinet: CabinetItem; onBack:
             {state.outcome === "nothing_to_update" ? (
               <p className="note">Новых данных пока нет — показаны последние сохранённые цифры.</p>
             ) : null}
-            <dl className="adm-fields" style={{ marginTop: "1rem" }}>
+            <dl className="adm-fields adm-fields--plain" style={{ marginTop: "1rem" }}>
               {humanCabinetStats(state.data).map(([label, value]) => (
                 <div className="adm-field" key={label}>
-                  <dt className="adm-field__n">—</dt>
                   <dd className="adm-field__label">{label}</dd>
                   <dd className="adm-field__value">{value}</dd>
                 </div>

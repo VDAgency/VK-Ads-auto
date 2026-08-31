@@ -24,20 +24,17 @@ import { SkeletonRows } from "../ui/Skeleton";
 import { readFileBase64 } from "./fileUtils";
 import type { PickedFile } from "./types";
 
-const BALANCE_WARNING =
-  "Баланс меньше дневного бюджета из брифа — это не сбой, а повод пополнить кабинет. " +
-  "Пополнить может только сам агентский аккаунт в интерфейсе VK, не менеджер. На запуск " +
-  "это не влияет — решение остаётся за вами.";
-
-/** Конечный рекламодатель кабинета — та же логика, что в списке кабинетов и в
- * карточке подтверждения бота (`bot/handlers/creative.py::_advertiser_line`).
- * Берётся из уже выбранного на шаге «Кабинет» объекта — `launch-preview` эти
- * поля не отдаёт (только название и id кабинета). */
+/** Конечный рекламодатель кабинета — та же логика, что в списке кабинетов
+ * (`AdAccounts.tsx`) и в карточке подтверждения бота
+ * (`bot/handlers/creative.py::_advertiser_line`). Берётся из уже выбранного на
+ * шаге «Кабинет» объекта — `launch-preview` эти поля не отдаёт (только
+ * название и id кабинета). Отсутствие имени называется прямо — раньше строка
+ * была голым «не указан» без объяснения, что именно не указано (найденный баг). */
 function advertiserLine(account: AdAccount): string {
   if (account.advertiser_kind === "third_party") {
-    const name = account.advertiser_name || "не указан";
+    if (!account.advertiser_name) return "Реклама третьего лица — рекламодатель не указан.";
     const inn = account.advertiser_inn ? `, ИНН ${account.advertiser_inn}` : "";
-    return `${name}${inn}`;
+    return `Реклама третьего лица: ${account.advertiser_name}${inn}`;
   }
   return "владелец кабинета (реклама от своего имени)";
 }
@@ -75,7 +72,11 @@ export function ConfirmStep({
   body: string;
   onFlash: (flash: Flash) => void;
   onChangeCabinet: () => void;
-  onLaunched: (message: string) => void;
+  /** Итог запуска целиком, не только текст — родитель прячет кнопку «Запустить»
+   * насовсем после успеха (не «серая», а её нет), а не просто блокирует её на
+   * время запроса (найденный баг: повторное нажатие после успеха создавало
+   * вторую кампанию по тому же брифу). */
+  onLaunched: (outcome: LaunchOutcome) => void;
 }) {
   const [state, retry] = useAdminResource<LaunchPreview>(
     `/briefs/${brief_id}/launch-preview?ad_account_id=${account.id}`,
@@ -121,7 +122,7 @@ export function ConfirmStep({
           body: JSON.stringify({ ad_account_id: account.id }),
         });
       }
-      onLaunched(result.message);
+      onLaunched(result);
     } catch (error) {
       onFlash({ text: launchErrorMessage(error), ok: false });
     } finally {
@@ -131,40 +132,34 @@ export function ConfirmStep({
 
   return (
     <div>
-      <dl className="adm-fields">
+      <dl className="adm-fields adm-fields--plain">
         <div className="adm-field">
-          <dt className="adm-field__n">—</dt>
           <dd className="adm-field__label">Клиент</dd>
           <dd className="adm-field__value">
             {preview.client_name || "не указан"} · ИНН {preview.client_tax_id || "не указан"}
           </dd>
         </div>
         <div className="adm-field">
-          <dt className="adm-field__n">—</dt>
           <dd className="adm-field__label">Объект рекламы</dd>
           <dd className="adm-field__value">{preview.object_url || "не указан"}</dd>
         </div>
         {preview.surface_title ? (
           <div className="adm-field">
-            <dt className="adm-field__n">—</dt>
             <dd className="adm-field__label">Площадка</dd>
             <dd className="adm-field__value">{preview.surface_title}</dd>
           </div>
         ) : null}
         <div className="adm-field">
-          <dt className="adm-field__n">—</dt>
           <dd className="adm-field__label">Цель</dd>
           <dd className="adm-field__value">{goal}</dd>
         </div>
         <div className="adm-field">
-          <dt className="adm-field__n">—</dt>
           <dd className="adm-field__label">Бюджет · срок</dd>
           <dd className="adm-field__value">
             {preview.budget_text || "не указан"} · {preview.term_text || "не указан"}
           </dd>
         </div>
         <div className="adm-field">
-          <dt className="adm-field__n">—</dt>
           <dd className="adm-field__label">Кабинет</dd>
           <dd className="adm-field__value">
             {preview.ad_account_title} (id {preview.ad_account_external_id})
@@ -182,7 +177,6 @@ export function ConfirmStep({
         </div>
         {needsCreative ? (
           <div className="adm-field">
-            <dt className="adm-field__n">—</dt>
             <dd className="adm-field__label">Креатив</dd>
             <dd className="adm-field__value">
               {picked ? picked.file.name : "—"}
@@ -209,7 +203,12 @@ export function ConfirmStep({
         ) : null}
       </dl>
 
-      {preview.balance_below_daily_budget ? <p className="note">{BALANCE_WARNING}</p> : null}
+      {preview.balance_below_daily_budget ? (
+        <p className="adm-warn">
+          <strong>Баланс кабинета</strong> меньше дневного бюджета из брифа. Кампанию это не
+          остановит, но кабинет стоит пополнить.
+        </p>
+      ) : null}
 
       {preview.client_mismatch ? (
         <>

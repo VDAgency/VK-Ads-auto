@@ -33,10 +33,18 @@
   padding: var(--space-3) var(--space-6);
   min-height: 3.5rem;
 }
+/* Имя сервиса — та же надпись, что на лендинге (`lp-brand`): «Ads·auto» одним
+   плотным словом. Раньше `Ads`/точка/`auto` были тремя элементами внутри
+   `inline-flex` с `gap`, и зазор между ними читался как «Ads · auto» —
+   разнобой с лендингом, который DESIGN.md прямо называет дефектом. Имя
+   вынесено в отдельный `<span>`, чтобы `gap` контейнера относился только к
+   промежутку до бейджа роли, а не разъезжался внутри самого слова. */
 .adm-brand {
   display: inline-flex;
   align-items: baseline;
   gap: var(--space-2);
+}
+.adm-brand__name {
   font-size: var(--fs-base);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -368,6 +376,11 @@
   padding: var(--space-6);
   margin-bottom: var(--space-4);
 }
+/* Форма-карточка внутри широкой рабочей области (например, отправка брифа
+   в «Клиентах») — колонка формы, а не во всю доступную ширину `--w-wide`. */
+.adm-card--narrow {
+  max-width: var(--w-form);
+}
 .adm-card__head {
   display: flex;
   flex-wrap: wrap;
@@ -452,6 +465,30 @@
 .adm-field__value.is-empty {
   color: var(--muted);
   font-weight: 400;
+}
+/* Сводка подтверждения запуска и предложение завести кабинет переиспользуют
+   разметку полей брифа для ряда «подпись — значение», но номера там нет и
+   означать он ничего не может — раньше на его месте стояло тире, которое в
+   раскладке с реальными номерами читалось как визуальный шум (найденный баг).
+   Модификатор просто убирает первую колонку. */
+.adm-fields--plain .adm-field {
+  grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+}
+
+/* Предупреждение перед тратой денег (например, баланс кабинета ниже дневного
+   бюджета) — заметнее нейтральной `.note`, но без фона тревоги: запуск это
+   не блокирует, решение остаётся за оператором. */
+.adm-warn {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+}
+.adm-warn strong {
+  color: var(--warn);
 }
 
 .adm-actions {
@@ -868,6 +905,12 @@ button.wiz-step__head {
   }
   .adm-field__value {
     grid-column: 2;
+  }
+  .adm-fields--plain .adm-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .adm-fields--plain .adm-field__value {
+    grid-column: 1;
   }
   .adm-row {
     flex-direction: column;

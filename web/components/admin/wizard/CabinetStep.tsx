@@ -127,19 +127,16 @@ export function CabinetStep({
           Заведём его в вашем агентстве VK Рекламы — и реклама клиента будет идти именно с него,
           отдельно от общих кабинетов.
         </p>
-        <dl className="adm-fields">
+        <dl className="adm-fields adm-fields--plain">
           <div className="adm-field">
-            <dt className="adm-field__n">—</dt>
             <dd className="adm-field__label">Рекламодатель</dd>
             <dd className="adm-field__value">{fullName}</dd>
           </div>
           <div className="adm-field">
-            <dt className="adm-field__n">—</dt>
             <dd className="adm-field__label">ИНН</dd>
             <dd className="adm-field__value">{taxIdFromCard(card) || "не указан"}</dd>
           </div>
           <div className="adm-field">
-            <dt className="adm-field__n">—</dt>
             <dd className="adm-field__label">Кабинет назовём</dd>
             <dd className="adm-field__value">«{fullName}»</dd>
           </div>
