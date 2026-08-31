@@ -26,13 +26,20 @@ class Account(Base):
 
 
 class Operator(TenantMixin, Base):
-    """Оператор — пользователь, ставящий задачи; принадлежит Account."""
+    """Оператор — пользователь, ставящий задачи; принадлежит Account.
+
+    Пароль веб-админки (spec 2026-08-31) — только хеш, по образцу `Client`
+    (§`services.password`); `None` — пароль ещё не задан, вход возможен только
+    по одноразовой ссылке из Telegram-бота.
+    """
 
     __tablename__ = "operator"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     full_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
+    password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class IntegrationConfig(TenantMixin, Base):
