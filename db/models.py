@@ -40,6 +40,9 @@ class Operator(TenantMixin, Base):
     full_name: Mapped[str | None] = mapped_column(String(255), default=None)
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sessions_valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
 
 class IntegrationConfig(TenantMixin, Base):
@@ -141,6 +144,9 @@ class Client(TenantMixin, Base):
     is_self: Mapped[bool] = mapped_column(default=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     password_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sessions_valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

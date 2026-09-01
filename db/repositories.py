@@ -241,6 +241,19 @@ async def set_client_password(
     return client
 
 
+async def revoke_client_sessions(session: AsyncSession, account_id: int, client_id: int) -> bool:
+    """Отозвать доступ клиенту: и сессии, и magic-ссылки. False — клиента нет."""
+    result = cast(
+        CursorResult[tuple[int, ...]],
+        await session.execute(
+            update(Client)
+            .where(Client.account_id == account_id, Client.id == client_id)
+            .values(sessions_valid_from=datetime.now(UTC))
+        ),
+    )
+    return bool(result.rowcount)
+
+
 async def find_operator_by_telegram_id(
     session: AsyncSession, account_id: int, telegram_id: int
 ) -> Operator | None:
@@ -253,6 +266,31 @@ async def find_operator_by_telegram_id(
         Operator.account_id == account_id, Operator.telegram_id == telegram_id
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_operator_sessions_valid_from(
+    session: AsyncSession, account_id: int, telegram_id: int
+) -> datetime | None:
+    """Граница отзыва сессий оператора. None — отзыва не было (проверка не применяется)."""
+    stmt = select(Operator.sessions_valid_from).where(
+        Operator.account_id == account_id, Operator.telegram_id == telegram_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def revoke_operator_sessions(
+    session: AsyncSession, account_id: int, telegram_id: int
+) -> bool:
+    """Отозвать все сессии оператора. False — такого оператора нет."""
+    result = cast(
+        CursorResult[tuple[int, ...]],
+        await session.execute(
+            update(Operator)
+            .where(Operator.account_id == account_id, Operator.telegram_id == telegram_id)
+            .values(sessions_valid_from=datetime.now(UTC))
+        ),
+    )
+    return bool(result.rowcount)
 
 
 async def set_operator_password_hash(
