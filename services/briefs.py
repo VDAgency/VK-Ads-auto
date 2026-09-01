@@ -84,7 +84,7 @@ async def intake_brief(
     """
     invite = None
     if token is not None:
-        invite = await find_brief_invite_by_token(session, token)
+        invite = await find_brief_invite_by_token(session, account_id, token)
         if invite is None:
             raise InviteTokenError("not_found")
         if invite.status not in ("sent", "failed"):
@@ -126,7 +126,9 @@ async def intake_brief(
     if invite is not None:
         # Атомарный переход sent→received защищает от гонки двойного POST.
         # Имя клиента из брифа пишем в инвайт — для списка «Пришли за неделю».
-        await mark_invite_received_if_sent(session, invite.id, contact_name=parsed.full_name)
+        await mark_invite_received_if_sent(
+            session, account_id, invite.id, contact_name=parsed.full_name
+        )
 
     await session.commit()
     await session.refresh(brief)

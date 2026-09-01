@@ -51,7 +51,7 @@ async def _run(
                 session, 1, 10, token, "individual", "email", "ivan@example.com", "email"
             )
             if invite_sent:
-                await mark_invite_sent(session, invite.id)
+                await mark_invite_sent(session, 1, invite.id)
         await session.commit()
 
     async def _override() -> Any:
@@ -76,7 +76,7 @@ async def _run(
     contact_name: str | None = None
     if token is not None:
         async with maker() as session:
-            found = await find_brief_invite_by_token(session, token)
+            found = await find_brief_invite_by_token(session, 1, token)
             invite_status = found.status if found else None
             contact_name = found.contact_name if found else None
     await engine.dispose()

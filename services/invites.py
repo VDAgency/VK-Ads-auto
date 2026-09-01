@@ -84,15 +84,15 @@ async def create_invite(
     result: DeliveryResult = await router.route(contact).send(contact, invite_text)
 
     if result.ok:
-        await mark_invite_sent(session, invite.id, contact_name=result.recipient_name)
+        await mark_invite_sent(session, account_id, invite.id, contact_name=result.recipient_name)
         status = "sent"
     else:
         # supersede предыдущего failed того же контакта — до пометки текущего failed,
         # чтобы не задеть только что созданную строку.
         previous = await find_last_failed_invite(session, account_id, operator.id, contact.value)
         if previous is not None and previous.id != invite.id:
-            await mark_invite_superseded(session, previous.id)
-        await mark_invite_failed(session, invite.id, result.error or "unknown")
+            await mark_invite_superseded(session, account_id, previous.id)
+        await mark_invite_failed(session, account_id, invite.id, result.error or "unknown")
         status = "failed"
 
     return InviteResult(

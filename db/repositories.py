@@ -381,10 +381,17 @@ async def create_brief_invite(
 
 async def find_brief_invite_by_token(
     session: AsyncSession,
+    account_id: int,
     token: str,
 ) -> BriefInvite | None:
-    """Найти инвайт по токену. Скоуп тенанта не нужен — токен уникален глобально."""
-    stmt = select(BriefInvite).where(BriefInvite.token == token)
+    """Найти инвайт по токену.
+
+    Токен и сам по себе уникален глобально, но скоуп по тенанту обязателен как
+    инвариант мульти-тенантности (CLAUDE.md §1.3) — на нём не экономят.
+    """
+    stmt = select(BriefInvite).where(
+        BriefInvite.account_id == account_id, BriefInvite.token == token
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -414,7 +421,7 @@ async def find_last_failed_invite(
 
 
 async def mark_invite_sent(
-    session: AsyncSession, invite_id: int, contact_name: str | None = None
+    session: AsyncSession, account_id: int, invite_id: int, contact_name: str | None = None
 ) -> None:
     """Пометить инвайт доставленным (channel: telegram/email/manual).
 
@@ -423,7 +430,7 @@ async def mark_invite_sent(
     """
     await session.execute(
         update(BriefInvite)
-        .where(BriefInvite.id == invite_id)
+        .where(BriefInvite.account_id == account_id, BriefInvite.id == invite_id)
         .values(
             status="sent",
             delivered_at=datetime.now(UTC),
@@ -435,19 +442,24 @@ async def mark_invite_sent(
 
 async def mark_invite_failed(
     session: AsyncSession,
+    account_id: int,
     invite_id: int,
     error: str,
 ) -> None:
     """Пометить инвайт failed с кодом ошибки (напр. username_not_occupied)."""
     await session.execute(
-        update(BriefInvite).where(BriefInvite.id == invite_id).values(status="failed", error=error)
+        update(BriefInvite)
+        .where(BriefInvite.account_id == account_id, BriefInvite.id == invite_id)
+        .values(status="failed", error=error)
     )
 
 
-async def mark_invite_superseded(session: AsyncSession, invite_id: int) -> None:
+async def mark_invite_superseded(session: AsyncSession, account_id: int, invite_id: int) -> None:
     """Пометить старый failed-инвайт заменённым — не показываем оператору дальше."""
     await session.execute(
-        update(BriefInvite).where(BriefInvite.id == invite_id).values(status="superseded")
+        update(BriefInvite)
+        .where(BriefInvite.account_id == account_id, BriefInvite.id == invite_id)
+        .values(status="superseded")
     )
 
 
@@ -585,7 +597,7 @@ async def list_recent_received_invites(
 
 
 async def mark_invite_received_if_sent(
-    session: AsyncSession, invite_id: int, contact_name: str | None = None
+    session: AsyncSession, account_id: int, invite_id: int, contact_name: str | None = None
 ) -> bool:
     """Атомарный переход `sent → received` (защита от двойного POST /briefs).
 
@@ -597,7 +609,11 @@ async def mark_invite_received_if_sent(
     """
     stmt = (
         update(BriefInvite)
-        .where(BriefInvite.id == invite_id, BriefInvite.status == "sent")
+        .where(
+            BriefInvite.account_id == account_id,
+            BriefInvite.id == invite_id,
+            BriefInvite.status == "sent",
+        )
         .values(status="received", received_at=datetime.now(UTC))
     )
     if contact_name:
