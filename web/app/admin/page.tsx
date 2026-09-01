@@ -10,6 +10,7 @@ import { CampaignsScreen } from "@/components/admin/screens/CampaignsScreen";
 import { ChannelsScreen } from "@/components/admin/screens/ChannelsScreen";
 import { ClientsScreen } from "@/components/admin/screens/ClientsScreen";
 import { OverviewScreen } from "@/components/admin/screens/OverviewScreen";
+import { ApiError } from "@/lib/api";
 import { adminFetch, onSessionExpired, type AdminMe, type Flash } from "@/lib/adminApi";
 import { parseRoute, routeHash, type Route } from "@/lib/adminRoute";
 
@@ -120,6 +121,32 @@ export default function AdminPage() {
     location.href = "/admin.html";
   }
 
+  async function handleLogoutAll() {
+    const confirmed = window.confirm(
+      "Выйти на всех устройствах? Текущее устройство тоже выйдет — " + "войти нужно будет заново.",
+    );
+    if (!confirmed) return;
+    try {
+      await adminFetch("/logout-all", { method: "POST" });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Сессия уже недействительна на сервере — тот же исход, что при успехе.
+        window.location.reload();
+        return;
+      }
+      // Причину (сеть или отказ сервера) не различаем — важно не соврать про неё,
+      // а честно сказать главное: действие не выполнено, доступ на других
+      // устройствах остаётся, чужие сессии живы (spec: тихий отказ хуже громкого).
+      window.alert(
+        "Не удалось выйти на всех устройствах: не получилось связаться с сервером " +
+          "или сервер ответил ошибкой. " +
+          "Доступ на других устройствах НЕ отозван — повторите попытку.",
+      );
+      return;
+    }
+    window.location.reload();
+  }
+
   if (auth !== "ok") {
     return <LoginScreen notice={loginNotice} onLoggedIn={() => void enterApp()} />;
   }
@@ -130,6 +157,7 @@ export default function AdminPage() {
         active={route.screen}
         operatorId={operatorId as number}
         onChangePassword={() => setShowChangePassword(true)}
+        onLogoutAll={() => void handleLogoutAll()}
         onLogout={() => void logout()}
       >
         {route.screen === "overview" ? <OverviewScreen onNavigate={navigate} /> : null}

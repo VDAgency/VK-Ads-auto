@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 
-import { contactLine, STATUS_RU, type ClientDetail, type ClientRow } from "@/lib/adminApi";
+import { ApiError } from "@/lib/api";
+import {
+  adminFetch,
+  contactLine,
+  STATUS_RU,
+  type ClientDetail,
+  type ClientRow,
+} from "@/lib/adminApi";
 import { useAdminResource } from "@/lib/useAdminResource";
 
 import { SendBrief } from "../SendBrief";
@@ -100,6 +107,32 @@ function ClientDetailView({
   onOpenBrief: (briefId: number) => void;
 }) {
   const [state, retry] = useAdminResource<ClientDetail>(`/clients/${id}`, [id]);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState("");
+  const [revoked, setRevoked] = useState(false);
+
+  async function handleRevoke() {
+    const confirmed = window.confirm(
+      "Отозвать доступ клиенту? Он выйдет из кабинета на всех устройствах, " +
+        "а выданные ему ссылки перестанут работать. Понадобится новая ссылка " +
+        "или вход по паролю.",
+    );
+    if (!confirmed) return;
+
+    setRevokeError("");
+    setRevoking(true);
+    try {
+      await adminFetch(`/clients/${id}/revoke-access`, { method: "POST" });
+      setRevoked(true);
+    } catch (err) {
+      if (err instanceof ApiError && typeof err.detail === "string") {
+        setRevokeError(err.detail);
+      } else {
+        setRevokeError("Не получилось связаться с сервером. Проверьте связь и попробуйте снова.");
+      }
+    }
+    setRevoking(false);
+  }
 
   return (
     <>
@@ -122,6 +155,19 @@ function ClientDetailView({
                   </span>
                 ))}
             </p>
+            <button
+              className="btn"
+              type="button"
+              disabled={revoking || revoked}
+              onClick={() => void handleRevoke()}
+            >
+              {revoked ? "Доступ отозван" : "Отозвать доступ"}
+            </button>
+            {revokeError ? (
+              <div className="result show err" role="status">
+                {revokeError}
+              </div>
+            ) : null}
           </div>
           <h2 className="section-title">Брифы</h2>
           {state.data.briefs.length ? (
