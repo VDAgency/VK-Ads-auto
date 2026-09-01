@@ -17,6 +17,19 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
 
+# Непривилегированный пользователь (аудит 2026-09-01, CKV_DOCKER_3). UID фиксирован:
+# владельца на томах выставляет другой контейнер (init-permissions в compose), и
+# совпасть они обязаны по номеру, а не по имени.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /secrets /home/app/.cache/uv \
+    && chown -R app:app /app /secrets /home/app
+
+ENV UV_CACHE_DIR=/home/app/.cache/uv
+
+USER app
+
 EXPOSE 8001
 
-CMD ["uv", "run", "uvicorn", "userbot.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# --no-sync: под непривилегированным пользователем `uv run` не может писать в
+# окружение проекта; без флага он попытается пересинхронизировать его при старте.
+CMD ["uv", "run", "--no-sync", "uvicorn", "userbot.main:app", "--host", "0.0.0.0", "--port", "8001"]
