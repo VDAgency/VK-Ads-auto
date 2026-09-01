@@ -16,6 +16,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from config.settings import get_settings
+from db.repositories import (
+    get_operator_sessions_valid_from,
+    get_or_create_operator,
+    revoke_operator_sessions,
+)
 from db.session import get_session
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel
@@ -75,7 +80,8 @@ def _set_admin_cookie(response: Response, operator_id: int) -> None:
     )
 
 
-def require_admin(
+async def require_admin(
+    session: Annotated[AsyncSession, Depends(get_session)],
     admin_session: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
 ) -> int:
     """FastAPI-зависимость: вернуть operator_id из admin-сессии или 401.
@@ -85,14 +91,27 @@ def require_admin(
     не мог продолжать ходить по старой, ещё не истёкшей сессии (spec 2026-08-31,
     см. докстринг модуля `services/admin_auth`). Проверка по списку в памяти,
     в БД не ходит.
+
+    С аудита 2026-09-01 проверяется ещё и граница отзыва (`sessions_valid_from`).
+    Из-за неё зависимость ходит в БД — раньше не ходила принципиально. Обмен
+    осознанный: без чтения границы отзыв сессий невозможен в принципе, а операторов
+    в системе единицы.
     """
-    if admin_session:
-        operator_id = verify_admin_session(
-            admin_session, get_settings().secret_key.get_secret_value()
+    if not admin_session:
+        raise HTTPException(status_code=401, detail="admin_auth_required")
+    settings = get_settings()
+    operator_id = verify_admin_session(admin_session, settings.secret_key.get_secret_value())
+    if operator_id is None or not settings.is_operator(operator_id):
+        raise HTTPException(status_code=401, detail="admin_auth_required")
+    valid_from = await get_operator_sessions_valid_from(session, DEFAULT_ACCOUNT_ID, operator_id)
+    if valid_from is not None and (
+        verify_admin_session(
+            admin_session, settings.secret_key.get_secret_value(), valid_from=valid_from
         )
-        if operator_id is not None and get_settings().is_operator(operator_id):
-            return operator_id
-    raise HTTPException(status_code=401, detail="admin_auth_required")
+        is None
+    ):
+        raise HTTPException(status_code=401, detail="admin_auth_required")
+    return operator_id
 
 
 @router.post("/authenticate", dependencies=[Depends(cabinet_auth_rate_limit)])
@@ -134,6 +153,29 @@ async def logout(response: Response) -> OkResponse:
     return OkResponse()
 
 
+@router.post("/logout-all")
+async def logout_all(
+    operator_id: Annotated[int, Depends(require_admin)],
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OkResponse:
+    """Отозвать все сессии оператора, включая текущую.
+
+    Новую cookie НЕ выдаём: оператор просил выйти везде, а «везде» включает
+    устройство, с которого он нажал кнопку.
+
+    Строку оператора материализуем лениво (`get_or_create_operator`) перед отзывом:
+    оператор мог до этого входить только по magic-link из бота и ещё не иметь
+    строки в БД — без неё `revoke_operator_sessions` обновит 0 строк, граница
+    останется `None`, и "выйти на всех устройствах" молча ничего не отзовёт.
+    """
+    await get_or_create_operator(session, DEFAULT_ACCOUNT_ID, operator_id)
+    await revoke_operator_sessions(session, DEFAULT_ACCOUNT_ID, operator_id)
+    await session.commit()
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return OkResponse()
+
+
 @router.get("/me")
 async def me(operator_id: Annotated[int, Depends(require_admin)]) -> AdminMe:
     """Проверка сессии: вернуть operator_id (для дашборда)."""
@@ -145,6 +187,7 @@ async def set_password(
     data: AdminPasswordIn,
     operator_id: Annotated[int, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    response: Response,
 ) -> OkResponse:
     """Поставить/сменить пароль оператора текущей admin-сессии."""
     try:
@@ -155,4 +198,8 @@ async def set_password(
             detail="Пароль короче десяти символов — так его слишком просто подобрать",
         ) from exc
     await session.commit()
+    # Граница поднята — прежние сессии мертвы, включая ту, из которой пришёл запрос.
+    # Поэтому сразу выдаём новую: сменивший пароль остаётся в системе на этом
+    # устройстве, а все остальные выпадают.
+    _set_admin_cookie(response, operator_id)
     return OkResponse()
