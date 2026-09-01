@@ -99,7 +99,7 @@ def test_create_invite_email_ok() -> None:
             session, 1, 555, BriefVariant.INDIVIDUAL, contact, BASE_URL, _ok_router()
         )
         await session.commit()
-        invite = await find_brief_invite_by_token(session, result.token)
+        invite = await find_brief_invite_by_token(session, 1, result.token)
         assert invite is not None
         return result.status, result.channel, invite.status
 
@@ -148,7 +148,7 @@ def test_create_invite_stores_recipient_name() -> None:
             session, 1, 555, BriefVariant.INDIVIDUAL, contact, BASE_URL, router
         )
         await session.commit()
-        invite = await find_brief_invite_by_token(session, result.token)
+        invite = await find_brief_invite_by_token(session, 1, result.token)
         assert invite is not None
         return invite.contact_name
 

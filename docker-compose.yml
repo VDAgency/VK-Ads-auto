@@ -21,8 +21,12 @@ services:
       # Загруженные креативы (persistent). Каталог из CREATIVES_DIR (по умолч. /data/creatives).
       - creatives:/data/creatives
     depends_on:
-      - postgres
-      - redis
+      init-permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
     healthcheck:
       test:
         - CMD
@@ -36,7 +40,10 @@ services:
   bot:
     build: .
     restart: unless-stopped
-    command: ["uv", "run", "python", "-m", "bot.main"]
+    # --no-sync: это переопределение command имеет приоритет над CMD в Dockerfile,
+    # где флаг уже стоит; без него под непривилегированным app `uv run`
+    # попытается пересинхронизировать окружение и упадёт по правам (аудит 2026-09-01).
+    command: ["uv", "run", "--no-sync", "python", "-m", "bot.main"]
     env_file:
       - path: .env
         required: false
@@ -44,9 +51,14 @@ services:
       # Бот ходит за данными во внутренний API ядра (сервис `api` в этой сети).
       CORE_BASE_URL: http://api:8000
     depends_on:
-      - api
-      - redis
-      - userbot
+      init-permissions:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      redis:
+        condition: service_started
+      userbot:
+        condition: service_started
 
   # Сервис доставки в Telegram (Telethon). Порт наружу не публикуется — только
   # внутри compose-сети (ядро ходит по http://userbot:8001). Сессия — в ./secrets.
@@ -60,6 +72,9 @@ services:
         required: false
     volumes:
       - ./secrets:/secrets
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -90,6 +105,9 @@ services:
     volumes:
       - ./secrets:/secrets
       - creatives:/data/creatives:ro
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -99,6 +117,28 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # Одноразовая подготовка прав на хранилищах (аудит 2026-09-01). Единственный
+  # контейнер, которому нужен root: остальные работают от app (UID 10001) и без
+  # этого шага не смогли бы писать в тома, созданные когда-то от root.
+  # Идемпотентен: отрабатывает одинаково и на существующем сервере с данными, и
+  # на пустой машине. Завершается — поэтому restart: "no".
+  init-permissions:
+    image: alpine:3
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        chown -R 10001:10001 /data/creatives /secrets
+        chmod 700 /secrets
+        chown -R 70:70 /backups
+        echo "permissions ready"
+    volumes:
+      - creatives:/data/creatives
+      - ./secrets:/secrets
+      - pgbackups:/backups
 
   postgres:
     image: postgres:16-alpine
@@ -136,7 +176,10 @@ services:
     volumes:
       - pgbackups:/backups
     depends_on:
-      - postgres
+      init-permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
 
   redis:
     image: redis:7-alpine

@@ -36,6 +36,17 @@ RUN uv sync --frozen --no-dev
 # Строго ПОСЛЕ `COPY . .`: иначе исходники из контекста затрут собранный фронт.
 COPY --from=web /web/out /app/web/out
 
+# Непривилегированный пользователь (аудит 2026-09-01, CKV_DOCKER_3). UID фиксирован:
+# владельца на томах выставляет другой контейнер (init-permissions в compose), и
+# совпасть они обязаны по номеру, а не по имени.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /data/creatives /home/app/.cache/uv \
+    && chown -R app:app /app /data/creatives /home/app
+
+ENV UV_CACHE_DIR=/home/app/.cache/uv
+
+USER app
+
 EXPOSE 8000
 
 # По умолчанию запускается ядро; бот переопределяет command в docker-compose.
@@ -45,6 +56,8 @@ EXPOSE 8000
 # --forwarded-allow-ips="*" допустим только потому, что порт 8000 публикуется на
 # loopback (docker-compose.yml): подделать заголовок может лишь тот, кто уже внутри
 # compose-сети или на самом сервере.
-CMD ["uv", "run", "uvicorn", "core.app:app", \
+# --no-sync: под непривилегированным пользователем `uv run` не может писать в
+# окружение проекта; без флага он попытается пересинхронизировать его при старте.
+CMD ["uv", "run", "--no-sync", "uvicorn", "core.app:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--proxy-headers", "--forwarded-allow-ips=*"]

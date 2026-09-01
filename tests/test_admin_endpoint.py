@@ -47,14 +47,20 @@ async def _run(scenario: Callable[[AsyncClient], Awaitable[T]]) -> T:
 
 
 def test_authenticate_sets_cookie_and_me_returns_operator() -> None:
-    client = TestClient(create_app())
-    token = generate_admin_link(555, _SECRET)
-    resp = client.post("/api/v1/admin/authenticate", json={"token": token})
-    assert resp.status_code == 200
-    assert "admin_session" in resp.cookies
-    me = client.get("/api/v1/admin/me")
-    assert me.status_code == 200
-    assert me.json()["operator_id"] == 555
+    # /me теперь ходит в БД (граница отзыва) — приложение поднимаем через _run
+    # с sqlite-подменой get_session, как остальные DB-зависимые тесты файла.
+    async def scenario(http: AsyncClient) -> tuple[int, bool, int, dict[str, Any]]:
+        token = generate_admin_link(555, _SECRET)
+        resp = await http.post("/api/v1/admin/authenticate", json={"token": token})
+        has_cookie = "admin_session" in resp.cookies
+        me = await http.get("/api/v1/admin/me")
+        return resp.status_code, has_cookie, me.status_code, me.json()
+
+    status_code, has_cookie, me_status, me_body = asyncio.run(_run(scenario))
+    assert status_code == 200
+    assert has_cookie
+    assert me_status == 200
+    assert me_body["operator_id"] == 555
 
 
 def test_authenticate_invalid_token_rejected() -> None:
@@ -76,12 +82,18 @@ def test_link_token_not_accepted_as_session_cookie() -> None:
 
 
 def test_logout_clears_session() -> None:
-    client = TestClient(create_app())
-    client.cookies.set("admin_session", generate_admin_session(555, _SECRET))
-    assert client.get("/api/v1/admin/me").status_code == 200
-    client.post("/api/v1/admin/logout")
-    client.cookies.clear()
-    assert client.get("/api/v1/admin/me").status_code == 401
+    # /me ходит в БД — та же причина, что и выше: sqlite-подмена через _run.
+    async def scenario(http: AsyncClient) -> tuple[int, int]:
+        http.cookies.set("admin_session", generate_admin_session(555, _SECRET))
+        before = await http.get("/api/v1/admin/me")
+        await http.post("/api/v1/admin/logout")
+        http.cookies.clear()
+        after = await http.get("/api/v1/admin/me")
+        return before.status_code, after.status_code
+
+    before_code, after_code = asyncio.run(_run(scenario))
+    assert before_code == 200
+    assert after_code == 401
 
 
 def test_password_without_session_rejected() -> None:
@@ -186,10 +198,17 @@ def test_require_admin_rejects_valid_session_when_removed_from_allowlist(
 
     Доступ отозван немедленно, не дожидаясь TTL сессии (30 суток) — это и есть
     прицельный способ отзыва из spec 2026-08-31.
-    """
-    client = TestClient(create_app())
-    client.cookies.set("admin_session", generate_admin_session(555, _SECRET))
-    assert client.get("/api/v1/admin/me").status_code == 200  # пока оператор в списке
 
-    monkeypatch.setattr(get_settings(), "operator_telegram_ids", frozenset())
-    assert client.get("/api/v1/admin/me").status_code == 401
+    /me ходит в БД — sqlite-подмена через _run, как и в соседних тестах файла.
+    """
+
+    async def scenario(http: AsyncClient) -> tuple[int, int]:
+        http.cookies.set("admin_session", generate_admin_session(555, _SECRET))
+        before = await http.get("/api/v1/admin/me")  # пока оператор в списке
+        monkeypatch.setattr(get_settings(), "operator_telegram_ids", frozenset())
+        after = await http.get("/api/v1/admin/me")
+        return before.status_code, after.status_code
+
+    before_code, after_code = asyncio.run(_run(scenario))
+    assert before_code == 200
+    assert after_code == 401

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from config.settings import get_settings
@@ -20,6 +21,7 @@ from db.repositories import (
     find_client_by_email,
     get_client,
     list_client_briefs,
+    revoke_client_sessions,
     set_client_password,
 )
 from db.session import get_session
@@ -106,6 +108,24 @@ class CabinetView(BaseModel):
     report: ClientReportView
 
 
+def _identify(
+    secret: str, session_cookie: str | None, token: str | None, *, valid_from: datetime | None
+) -> int | None:
+    """Определить клиента по session-cookie или magic-ссылке.
+
+    `valid_from` прокидывается в обе проверки: отзыв доступа обязан гасить и сессию,
+    и ссылку. Гасить только сессию — значит не отзывать ничего: утёкшая ссылка
+    продолжила бы пускать в кабинет.
+    """
+    if session_cookie:
+        client_id = verify_session(session_cookie, secret, valid_from=valid_from)
+        if client_id is not None:
+            return client_id
+    if token:
+        return verify_token(token, secret, valid_from=valid_from)
+    return None
+
+
 def _set_session_cookie(response: Response, client_id: int) -> None:
     """Выдать HttpOnly-cookie с подписанным session-токеном."""
     settings = get_settings()
@@ -127,17 +147,39 @@ async def set_password(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> OkResponse:
-    """Установить пароль по magic-link токену (первый вход / сброс) и войти в кабинет."""
+    """Установить пароль по magic-link токену (первый вход / сброс) и войти в кабинет.
+
+    Токен проверяется дважды — тот же приём, что в `view_cabinet`/`_identify`.
+    Первый раз БЕЗ границы отзыва: запрос приходит по той самой ссылке, которую
+    отзыв мог погасить, и границу неоткуда взять, пока не известен client_id, —
+    подняв её раньше этой проверки, мы бы отвергли собственный запрос (spec §6.3).
+    Но на этом нельзя останавливаться: без второй проверки, уже с границей
+    `sessions_valid_from` клиента, отозванная ссылка продолжала бы работать именно
+    здесь, хотя `GET /cabinet` по ней уже отдаёт 401 (аудит 2026-09-01, находка 1) —
+    держатель утёкшей ссылки мог бы задать клиенту новый пароль и получить
+    постоянную сессию уже после отзыва. После установки пароля границу поднимаем
+    заново — прежние сессии/ссылки этого клиента гаснут, а cookie этого устройства
+    выставляется уже после, так что клиент остаётся в кабинете.
+    """
     if len(data.password) < _MIN_PASSWORD_LEN:
         raise HTTPException(status_code=422, detail="password_too_short")
-    client_id = verify_token(data.token, get_settings().secret_key.get_secret_value())
+    secret = get_settings().secret_key.get_secret_value()
+    client_id = verify_token(data.token, secret)
     if client_id is None:
         raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    existing = await get_client(session, DEFAULT_ACCOUNT_ID, client_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    if existing.sessions_valid_from is not None:
+        confirmed = verify_token(data.token, secret, valid_from=existing.sessions_valid_from)
+        if confirmed is None:
+            raise HTTPException(status_code=401, detail="Доступ отозван")
     client = await set_client_password(
         session, DEFAULT_ACCOUNT_ID, client_id, hash_password(data.password)
     )
     if client is None:
         raise HTTPException(status_code=404, detail="Клиент не найден")
+    await revoke_client_sessions(session, DEFAULT_ACCOUNT_ID, client_id)
     await session.commit()
     _set_session_cookie(response, client_id)
     return OkResponse()
@@ -196,17 +238,27 @@ async def view_cabinet(
     token: Annotated[str | None, Query()] = None,
     session_cookie: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
 ) -> CabinetView:
-    """Показать кабинет: по session-cookie или по magic-link токену (`?token=`)."""
+    """Показать кабинет: по session-cookie или по magic-link токену (`?token=`).
+
+    Проверка подписи идёт дважды: первый раз без границы отзыва — только чтобы
+    узнать, о каком клиенте речь, и прочитать его `sessions_valid_from`; второй —
+    уже с границей, чтобы решить, пускать ли. Иначе границу неоткуда взять до того,
+    как известен client_id.
+    """
     secret = get_settings().secret_key.get_secret_value()
-    client_id = verify_session(session_cookie, secret) if session_cookie else None
-    if client_id is None and token:
-        client_id = verify_token(token, secret)
+    client_id = _identify(secret, session_cookie, token, valid_from=None)
     if client_id is None:
         raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
 
     client = await get_client(session, DEFAULT_ACCOUNT_ID, client_id)
     if client is None:
         raise HTTPException(status_code=404, detail="Клиент не найден")
+
+    if client.sessions_valid_from is not None:
+        confirmed = _identify(secret, session_cookie, token, valid_from=client.sessions_valid_from)
+        if confirmed is None:
+            raise HTTPException(status_code=401, detail="Доступ отозван")
+
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
     # Скоуп строго по client_id из сессии/токена, никогда из параметра запроса —
     # иначе один клиент мог бы подставить чужой id и увидеть чужую статистику.

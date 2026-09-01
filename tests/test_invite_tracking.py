@@ -45,7 +45,7 @@ async def _make_sent(session: AsyncSession, token: str, contact: str, delivered:
     invite = await create_brief_invite(
         session, 1, 10, token, "individual", "email", contact, "email"
     )
-    await mark_invite_sent(session, invite.id)
+    await mark_invite_sent(session, 1, invite.id)
     invite.delivered_at = delivered
     await session.flush()
     return invite.id
@@ -68,7 +68,7 @@ def test_pending_view_carries_contact_name() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tn", "individual", "telegram", "@cs", "telegram"
         )
-        await mark_invite_sent(session, invite.id, contact_name="Вячеслав")
+        await mark_invite_sent(session, 1, invite.id, contact_name="Вячеслав")
         views = await list_pending(session, 1, now=NOW)
         return views[0].contact_name
 
@@ -78,7 +78,7 @@ def test_pending_view_carries_contact_name() -> None:
 def test_pending_excludes_received() -> None:
     async def scenario(session: AsyncSession) -> list[str]:
         received_id = await _make_sent(session, "t1", "got@it.c", NOW - timedelta(days=2))
-        await mark_invite_received_if_sent(session, received_id)
+        await mark_invite_received_if_sent(session, 1, received_id)
         await _make_sent(session, "t2", "wait@it.c", NOW - timedelta(days=1))
         views = await list_pending(session, 1, now=NOW)
         return [v.contact for v in views]
@@ -90,7 +90,7 @@ async def _make_received(
     session: AsyncSession, token: str, contact: str, received: datetime
 ) -> int:
     invite_id = await _make_sent(session, token, contact, received - timedelta(days=1))
-    await mark_invite_received_if_sent(session, invite_id)
+    await mark_invite_received_if_sent(session, 1, invite_id)
     # received_at ставится реальным временем — фиксируем явно для детерминизма окна.
     from db.models import BriefInvite
 

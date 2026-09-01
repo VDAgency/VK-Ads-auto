@@ -33,12 +33,14 @@ export function AdminShell({
   active,
   operatorId,
   onChangePassword,
+  onLogoutAll,
   onLogout,
   children,
 }: {
   active: Screen;
   operatorId: number;
   onChangePassword: () => void;
+  onLogoutAll: () => void;
   onLogout: () => void;
   children: React.ReactNode;
 }) {
@@ -68,6 +70,9 @@ export function AdminShell({
             </span>
             <button className="btn btn--ghost" type="button" onClick={onChangePassword}>
               Сменить пароль
+            </button>
+            <button className="btn btn--ghost" type="button" onClick={onLogoutAll}>
+              Выйти на всех устройствах
             </button>
             <button className="btn btn--ghost" type="button" onClick={onLogout}>
               Выйти

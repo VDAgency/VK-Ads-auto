@@ -68,7 +68,7 @@ def test_find_by_token_returns_invite() -> None:
         await create_brief_invite(
             session, 1, 10, "tok-xyz", "individual", "email", "a@b.c", "email"
         )
-        found = await find_brief_invite_by_token(session, "tok-xyz")
+        found = await find_brief_invite_by_token(session, 1, "tok-xyz")
         return found.contact_value if found else None
 
     assert asyncio.run(_with_db(scenario)) == "a@b.c"
@@ -76,7 +76,7 @@ def test_find_by_token_returns_invite() -> None:
 
 def test_find_by_token_missing_returns_none() -> None:
     async def scenario(session: AsyncSession) -> BriefInvite | None:
-        return await find_brief_invite_by_token(session, "nonexistent")
+        return await find_brief_invite_by_token(session, 1, "nonexistent")
 
     assert asyncio.run(_with_db(scenario)) is None
 
@@ -86,7 +86,7 @@ def test_mark_sent_transitions_status_and_delivered_at() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-1", "individual", "telegram", "@u", "telegram"
         )
-        await mark_invite_sent(session, invite.id)
+        await mark_invite_sent(session, 1, invite.id)
         await session.refresh(invite)
         return invite.status, invite.delivered_at is not None
 
@@ -100,7 +100,7 @@ def test_mark_failed_sets_error_code() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-2", "individual", "telegram", "@u", "telegram"
         )
-        await mark_invite_failed(session, invite.id, "username_not_occupied")
+        await mark_invite_failed(session, 1, invite.id, "username_not_occupied")
         await session.refresh(invite)
         return invite.status, invite.error
 
@@ -116,11 +116,11 @@ def test_find_last_failed_returns_most_recent() -> None:
         first = await create_brief_invite(
             session, 1, 10, "tok-a", "individual", "telegram", "@u", "telegram"
         )
-        await mark_invite_failed(session, first.id, "e1")
+        await mark_invite_failed(session, 1, first.id, "e1")
         second = await create_brief_invite(
             session, 1, 10, "tok-b", "individual", "telegram", "@u", "telegram"
         )
-        await mark_invite_failed(session, second.id, "e2")
+        await mark_invite_failed(session, 1, second.id, "e2")
         found = await find_last_failed_invite(session, 1, 10, "@u")
         return first.id, second.id, (found.id if found else None)
 
@@ -136,7 +136,7 @@ def test_find_last_failed_ignores_sent_invites() -> None:
         sent = await create_brief_invite(
             session, 1, 10, "tok-s", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_sent(session, sent.id)
+        await mark_invite_sent(session, 1, sent.id)
         return await find_last_failed_invite(session, 1, 10, "a@b.c")
 
     assert asyncio.run(_with_db(scenario)) is None
@@ -151,7 +151,7 @@ def test_find_last_failed_scoped_by_operator() -> None:
         other = await create_brief_invite(
             session, 1, 11, "tok-o", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_failed(session, other.id, "e")
+        await mark_invite_failed(session, 1, other.id, "e")
         return await find_last_failed_invite(session, 1, 10, "a@b.c")
 
     assert asyncio.run(_with_db(scenario)) is None
@@ -162,8 +162,8 @@ def test_mark_superseded_transitions_status() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-sup", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_failed(session, invite.id, "e")
-        await mark_invite_superseded(session, invite.id)
+        await mark_invite_failed(session, 1, invite.id, "e")
+        await mark_invite_superseded(session, 1, invite.id)
         await session.refresh(invite)
         return invite.status
 
@@ -175,8 +175,8 @@ def test_mark_received_if_sent_returns_true_and_sets_received_at() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-r", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_sent(session, invite.id)
-        ok = await mark_invite_received_if_sent(session, invite.id)
+        await mark_invite_sent(session, 1, invite.id)
+        ok = await mark_invite_received_if_sent(session, 1, invite.id)
         await session.refresh(invite)
         return ok, invite.status, invite.received_at is not None
 
@@ -193,9 +193,9 @@ def test_mark_received_if_sent_returns_false_on_second_call() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-dup", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_sent(session, invite.id)
-        first = await mark_invite_received_if_sent(session, invite.id)
-        second = await mark_invite_received_if_sent(session, invite.id)
+        await mark_invite_sent(session, 1, invite.id)
+        first = await mark_invite_received_if_sent(session, 1, invite.id)
+        second = await mark_invite_received_if_sent(session, 1, invite.id)
         return first, second
 
     first, second = asyncio.run(_with_db(scenario))
@@ -210,7 +210,7 @@ def test_mark_received_if_sent_rejects_pending_invite() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-p", "individual", "email", "a@b.c", "email"
         )
-        ok = await mark_invite_received_if_sent(session, invite.id)
+        ok = await mark_invite_received_if_sent(session, 1, invite.id)
         await session.refresh(invite)
         return ok, invite.status
 
@@ -224,8 +224,8 @@ def test_mark_received_if_sent_rejects_failed_invite() -> None:
         invite = await create_brief_invite(
             session, 1, 10, "tok-f", "individual", "email", "a@b.c", "email"
         )
-        await mark_invite_failed(session, invite.id, "smtp_unreachable")
-        return await mark_invite_received_if_sent(session, invite.id)
+        await mark_invite_failed(session, 1, invite.id, "smtp_unreachable")
+        return await mark_invite_received_if_sent(session, 1, invite.id)
 
     assert asyncio.run(_with_db(scenario)) is False
 

@@ -20,6 +20,7 @@ from db.repositories import (
     list_campaigns,
     list_client_briefs,
     list_clients,
+    revoke_client_sessions,
 )
 from db.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -43,7 +44,7 @@ from services.launch_service import BriefNotFoundError, UnsupportedGoalError
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.api.v1.admin import require_admin
+from core.api.v1.admin import OkResponse, require_admin
 from core.api.v1.briefs import (
     BriefCardOut,
     BriefEditIn,
@@ -239,6 +240,23 @@ async def client_detail(
         telegram=client.telegram,
         briefs=[ClientBrief(id=b.id, variant=b.variant, status=b.status) for b in briefs],
     )
+
+
+@router.post("/clients/{client_id}/revoke-access")
+async def revoke_client_access(
+    client_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OkResponse:
+    """Отозвать доступ клиенту: сессии кабинета и выданные magic-ссылки разом.
+
+    Нужно, когда ссылка или устройство клиента могли утечь. Клиент после этого
+    заходит заново — по паролю или по новой ссылке.
+    """
+    revoked = await revoke_client_sessions(session, DEFAULT_ACCOUNT_ID, client_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    await session.commit()
+    return OkResponse()
 
 
 @router.get("/briefs")

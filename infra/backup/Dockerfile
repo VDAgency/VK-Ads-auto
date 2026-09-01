@@ -15,4 +15,10 @@ WORKDIR /app
 COPY infra/backup/entrypoint.sh infra/backup/backup.sh infra/backup/rotate.py ./
 RUN chmod +x entrypoint.sh backup.sh
 
+# Непривилегированный пользователь (аудит 2026-09-01, CKV_DOCKER_3). Своего не
+# заводим — в базовом образе postgres:16-alpine он уже есть (тот же, под которым
+# в сервисе postgres лежат данные).
+RUN mkdir -p /backups && chown -R postgres:postgres /app /backups
+USER postgres
+
 ENTRYPOINT ["./entrypoint.sh"]

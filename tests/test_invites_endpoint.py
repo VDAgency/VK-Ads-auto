@@ -33,13 +33,13 @@ async def _get_invites(status: str) -> tuple[int, dict[str, Any]]:
         waiting = await create_brief_invite(
             session, 1, 10, "wait", "individual", "email", "wait@it.c", "email"
         )
-        await mark_invite_sent(session, waiting.id)
+        await mark_invite_sent(session, 1, waiting.id)
         waiting.delivered_at = datetime.now(UTC) - timedelta(days=2)
         got = await create_brief_invite(
             session, 1, 10, "got", "community", "telegram", "@ivan", "telegram"
         )
-        await mark_invite_sent(session, got.id)
-        await mark_invite_received_if_sent(session, got.id)
+        await mark_invite_sent(session, 1, got.id)
+        await mark_invite_received_if_sent(session, 1, got.id)
         await session.commit()
 
     async def _override() -> Any:

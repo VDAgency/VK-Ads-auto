@@ -18,6 +18,7 @@ from __future__ import annotations
 from db.repositories import (
     find_operator_by_telegram_id,
     get_or_create_operator,
+    revoke_operator_sessions,
     set_operator_password_hash,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,9 @@ async def set_operator_password(
         raise WeakPasswordError("password_too_short")
     operator = await get_or_create_operator(session, account_id, telegram_id)
     await set_operator_password_hash(session, operator, hash_password(password))
+    # Смена пароля обязана отозвать прежние сессии этого оператора — иначе
+    # похищенная cookie переживает смену пароля (аудит 2026-09-01, задача 2).
+    await revoke_operator_sessions(session, account_id, telegram_id)
 
 
 async def authenticate_operator(

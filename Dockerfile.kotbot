@@ -18,11 +18,30 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Chromium + системные библиотеки для headless-запуска (--with-deps → apt).
 # `--no-sync`: playwright уже в окружении из предыдущего sync; без флага `uv run`
 # пытается досинхронизировать проект (нужен README.md, которого ещё нет на этом слое).
-RUN uv run --no-sync playwright install --with-deps chromium
+# Каталог браузера — вне домашней папки root (аудит 2026-09-01, CKV_DOCKER_3):
+# путь по умолчанию имеет права 0700 и недоступен непривилегированному
+# пользователю app, под которым контейнер работает в рантайме. Открываем на
+# чтение всем, чтобы app мог запускать браузер, поставленный от root на сборке.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN uv run --no-sync playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
 
 COPY . .
 RUN uv sync --frozen --no-dev
 
+# Непривилегированный пользователь (аудит 2026-09-01, CKV_DOCKER_3). UID фиксирован:
+# владельца на томах выставляет другой контейнер (init-permissions в compose), и
+# совпасть они обязаны по номеру, а не по имени.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /secrets /data/creatives /home/app/.cache/uv \
+    && chown -R app:app /app /secrets /home/app
+
+ENV UV_CACHE_DIR=/home/app/.cache/uv
+
+USER app
+
 EXPOSE 8002
 
-CMD ["uv", "run", "uvicorn", "kotbot.main:app", "--host", "0.0.0.0", "--port", "8002"]
+# --no-sync: под непривилегированным пользователем `uv run` не может писать в
+# окружение проекта; без флага он попытается пересинхронизировать его при старте.
+CMD ["uv", "run", "--no-sync", "uvicorn", "kotbot.main:app", "--host", "0.0.0.0", "--port", "8002"]
