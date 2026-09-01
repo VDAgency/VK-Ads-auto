@@ -149,17 +149,31 @@ async def set_password(
 ) -> OkResponse:
     """Установить пароль по magic-link токену (первый вход / сброс) и войти в кабинет.
 
-    Токен проверяется ПЕРВЫМ, без границы отзыва: запрос приходит по той самой
-    ссылке, которую отзыв мог погасить, — подняв границу раньше проверки, мы бы
-    отвергли собственный запрос (spec §6.3). После установки пароля границу отзыва
-    поднимаем заново — прежние сессии/ссылки этого клиента гаснут, а cookie этого
-    устройства выставляется уже после, так что клиент остаётся в кабинете.
+    Токен проверяется дважды — тот же приём, что в `view_cabinet`/`_identify`.
+    Первый раз БЕЗ границы отзыва: запрос приходит по той самой ссылке, которую
+    отзыв мог погасить, и границу неоткуда взять, пока не известен client_id, —
+    подняв её раньше этой проверки, мы бы отвергли собственный запрос (spec §6.3).
+    Но на этом нельзя останавливаться: без второй проверки, уже с границей
+    `sessions_valid_from` клиента, отозванная ссылка продолжала бы работать именно
+    здесь, хотя `GET /cabinet` по ней уже отдаёт 401 (аудит 2026-09-01, находка 1) —
+    держатель утёкшей ссылки мог бы задать клиенту новый пароль и получить
+    постоянную сессию уже после отзыва. После установки пароля границу поднимаем
+    заново — прежние сессии/ссылки этого клиента гаснут, а cookie этого устройства
+    выставляется уже после, так что клиент остаётся в кабинете.
     """
     if len(data.password) < _MIN_PASSWORD_LEN:
         raise HTTPException(status_code=422, detail="password_too_short")
-    client_id = verify_token(data.token, get_settings().secret_key.get_secret_value())
+    secret = get_settings().secret_key.get_secret_value()
+    client_id = verify_token(data.token, secret)
     if client_id is None:
         raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    existing = await get_client(session, DEFAULT_ACCOUNT_ID, client_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    if existing.sessions_valid_from is not None:
+        confirmed = verify_token(data.token, secret, valid_from=existing.sessions_valid_from)
+        if confirmed is None:
+            raise HTTPException(status_code=401, detail="Доступ отозван")
     client = await set_client_password(
         session, DEFAULT_ACCOUNT_ID, client_id, hash_password(data.password)
     )

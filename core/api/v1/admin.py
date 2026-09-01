@@ -115,10 +115,28 @@ async def require_admin(
 
 
 @router.post("/authenticate", dependencies=[Depends(cabinet_auth_rate_limit)])
-async def authenticate(data: AdminAuthIn, response: Response) -> OkResponse:
-    """Обменять admin magic-link токен (из бота) на session-cookie."""
-    operator_id = verify_admin_link(data.token, get_settings().secret_key.get_secret_value())
+async def authenticate(
+    data: AdminAuthIn,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OkResponse:
+    """Обменять admin magic-link токен (из бота) на session-cookie.
+
+    Граница отзыва проверяется здесь тоже (аудит 2026-09-01, находка 2) — тем же
+    двухфазным приёмом, что и в `require_admin`: без него «выйти на всех
+    устройствах» не мешает ещё не истёкшей admin-ссылке (живёт 15 минут) выдать
+    новую полноценную сессию в обход отзыва. Сначала `verify_admin_link` без
+    границы — узнать operator_id; затем читаем его `sessions_valid_from` и
+    перепроверяем ТОТ ЖЕ токен уже с границей.
+    """
+    secret = get_settings().secret_key.get_secret_value()
+    operator_id = verify_admin_link(data.token, secret)
     if operator_id is None:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    valid_from = await get_operator_sessions_valid_from(session, DEFAULT_ACCOUNT_ID, operator_id)
+    if valid_from is not None and (
+        verify_admin_link(data.token, secret, valid_from=valid_from) is None
+    ):
         raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
     _set_admin_cookie(response, operator_id)
     return OkResponse()

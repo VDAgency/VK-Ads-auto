@@ -12,7 +12,7 @@ from core.app import create_app
 from db.base import Base
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
-from services.admin_auth import generate_admin_session
+from services.admin_auth import generate_admin_link, generate_admin_session
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -119,6 +119,42 @@ def test_password_change_keeps_current_device_and_drops_the_others() -> None:
         assert dropped.status_code == 401
 
     asyncio.run(_run(scenario))
+
+
+def test_authenticate_rejects_link_issued_before_logout_all() -> None:
+    """Находка 2 (Important, аудит 2026-09-01): `/authenticate` обязан отвергать
+    admin-ссылку (живёт 15 минут), выпущенную ДО «выйти на всех устройствах», —
+    иначе оператор, подозревая компрометацию, жмёт `logout-all`, а держатель ещё
+    не истёкшей ссылки всё равно обменивает её на новую полноценную сессию.
+    """
+
+    async def scenario(client: AsyncClient) -> tuple[int, int]:
+        session_token = generate_admin_session(555, _SECRET)
+        stale_link = generate_admin_link(555, _SECRET)
+
+        await asyncio.sleep(1.1)  # отметка выпуска в секундах
+
+        logout = await client.post(
+            "/api/v1/admin/logout-all", cookies={"admin_session": session_token}
+        )
+        assert logout.status_code == 200
+        client.cookies.clear()
+
+        # Ссылка, выпущенная до logout-all, обязана быть отвергнута.
+        stale_resp = await client.post("/api/v1/admin/authenticate", json={"token": stale_link})
+        client.cookies.clear()  # не тащить cookie, если находка не пофикшена и запрос прошёл
+
+        await asyncio.sleep(1.1)  # снова: граница отзыва — секунды
+
+        # Ссылка, выпущенная ПОСЛЕ logout-all, обязана по-прежнему работать —
+        # иначе оператор вообще не сможет войти заново.
+        fresh_link = generate_admin_link(555, _SECRET)
+        fresh_resp = await client.post("/api/v1/admin/authenticate", json={"token": fresh_link})
+        return stale_resp.status_code, fresh_resp.status_code
+
+    stale_status, fresh_status = asyncio.run(_run(scenario))
+    assert stale_status == 401
+    assert fresh_status == 200
 
 
 def test_revocation_does_not_affect_another_operator(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -194,6 +194,48 @@ def test_set_password_after_revoke_keeps_client_logged_in() -> None:
     assert me_status == 200
 
 
+def test_set_password_rejects_link_issued_before_revoke() -> None:
+    """Находка 1 (Critical, аудит 2026-09-01): `set-password` обязан отвергать
+    magic-ссылку, выпущенную ДО отзыва, — иначе отзыв здесь фикция: `GET /cabinet`
+    по той же ссылке уже отдаёт 401, а `set-password` держателю утёкшей ссылки
+    (живёт до суток) позволял бы задать клиенту новый пароль и получить постоянную
+    сессию ровно в том сценарии, ради которого отзыв доступа и существует.
+    """
+
+    async def scenario(client: AsyncClient) -> tuple[int, int]:
+        client_id = await _create_client(client)
+        stale_link = generate_token(client_id, _SECRET)
+
+        await asyncio.sleep(1.1)  # отметка выпуска в секундах
+
+        client.cookies.set("admin_session", generate_admin_session(555, _SECRET))
+        revoked = await client.post(f"/api/v1/admin/clients/{client_id}/revoke-access")
+        assert revoked.status_code == 200
+        client.cookies.clear()
+
+        # Старая ссылка, выпущенная до отзыва, обязана быть отвергнута.
+        stale_set_resp = await client.post(
+            "/api/v1/cabinet/set-password",
+            json={"token": stale_link, "password": "старый_но_длинный_пароль"},
+        )
+        client.cookies.clear()  # не тащить cookie, если находка не пофикшена и запрос прошёл
+
+        await asyncio.sleep(1.1)  # снова: граница смены пароля — секунды
+
+        # Свежая ссылка, выпущенная ПОСЛЕ отзыва, обязана по-прежнему работать —
+        # иначе клиент вообще не сможет восстановить доступ.
+        fresh_link = generate_token(client_id, _SECRET)
+        fresh_set_resp = await client.post(
+            "/api/v1/cabinet/set-password",
+            json={"token": fresh_link, "password": "новый_и_длинный_пароль"},
+        )
+        return stale_set_resp.status_code, fresh_set_resp.status_code
+
+    stale_status, fresh_status = asyncio.run(_run(scenario))
+    assert stale_status == 401
+    assert fresh_status == 200
+
+
 def test_set_password_alone_revokes_prior_sessions_and_links() -> None:
     """Смена пароля сама по себе обязана поднимать границу отзыва.
 
