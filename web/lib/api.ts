@@ -53,3 +53,65 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
   return (await response.json()) as T;
 }
+
+// --- реквизиты для документов (зеркало `core/api/v1/cabinet.py`, spec §E) --
+
+/** Поля реквизитов — тело `PUT /cabinet/bank-details` и форма сохранённых данных. */
+export type BankDetailsInput = {
+  payer_name: string;
+  bank_name: string;
+  bik: string;
+  settlement_account: string;
+  correspondent_account: string;
+};
+
+export type BankDetailsOut = BankDetailsInput;
+
+/** Ответ `GET /cabinet/bank-details`: сохранённые реквизиты (или их нет) + подсказка из брифа. */
+export type BankDetailsView = {
+  bank_details: BankDetailsOut | null;
+  brief_hint: string | null;
+};
+
+export type BankDetailsSaveOut = { bank_details: BankDetailsOut };
+
+/** Ошибки по полям из 422-ответа `PUT /cabinet/bank-details` — код на поле. */
+export type BankDetailsFieldErrors = Record<string, string>;
+
+/** Токен добавляется в путь, только если он есть: клиент, пришедший по
+ * ссылке входа без cookie-сессии (`request-link`, password уже установлен —
+ * `CabinetPage` тогда не выдаёт cookie), иначе останется без доступа к своему
+ * же кабинету на этой странице (та же граница, что `GET /cabinet?token=`). */
+function withToken(path: string, token?: string | null): string {
+  return token ? `${path}?token=${encodeURIComponent(token)}` : path;
+}
+
+export function getBankDetails(token?: string | null): Promise<BankDetailsView> {
+  return apiFetch<BankDetailsView>(withToken("/cabinet/bank-details", token));
+}
+
+export function saveBankDetails(
+  input: BankDetailsInput,
+  token?: string | null,
+): Promise<BankDetailsSaveOut> {
+  return apiFetch<BankDetailsSaveOut>(withToken("/cabinet/bank-details", token), {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+/** Извлечь пофайловые ошибки из `ApiError` 422, если ответ имел форму `{errors: {...}}`. */
+export function bankDetailsFieldErrors(error: unknown): BankDetailsFieldErrors | null {
+  if (
+    error instanceof ApiError &&
+    error.status === 422 &&
+    error.detail &&
+    typeof error.detail === "object"
+  ) {
+    const errors = (error.detail as { errors?: unknown }).errors;
+    if (errors && typeof errors === "object") {
+      return errors as BankDetailsFieldErrors;
+    }
+  }
+  return null;
+}

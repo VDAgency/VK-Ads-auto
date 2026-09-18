@@ -66,6 +66,16 @@ export type ClientRow = {
 
 export type ClientBrief = { id: number; variant: string; status: string };
 
+/** Реквизиты клиента (зеркало `BankDetailsOut` ядра) — в админке только на чтение,
+ * заполняет сам клиент в своём кабинете (spec 2026-09-19 §E). */
+export type ClientBankDetails = {
+  payer_name: string;
+  bank_name: string;
+  bik: string;
+  settlement_account: string;
+  correspondent_account: string;
+};
+
 export type ClientDetail = {
   id: number;
   full_name: string | null;
@@ -73,6 +83,7 @@ export type ClientDetail = {
   phone: string | null;
   telegram: string | null;
   briefs: ClientBrief[];
+  bank_details: ClientBankDetails | null;
 };
 
 export type BriefListItem = {

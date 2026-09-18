@@ -7,6 +7,7 @@ import {
   adminFetch,
   contactLine,
   STATUS_RU,
+  type ClientBankDetails,
   type ClientDetail,
   type ClientRow,
 } from "@/lib/adminApi";
@@ -97,6 +98,39 @@ function ClientListReady({
   );
 }
 
+/** Реквизиты клиента — только на чтение (spec 2026-09-19 §E). Заполняет их сам
+ * клиент в своём кабинете; оператору здесь править нечего. */
+function BankDetailsCard({ details }: { details: ClientBankDetails | null }) {
+  if (!details) {
+    return (
+      <div className="card">
+        <h3>Реквизиты</h3>
+        <p>Клиент ещё не заполнил.</p>
+      </div>
+    );
+  }
+  const rows: [string, string][] = [
+    ["Плательщик", details.payer_name],
+    ["Банк", details.bank_name],
+    ["БИК", details.bik],
+    ["Расчётный счёт", details.settlement_account],
+    ["Корр. счёт", details.correspondent_account],
+  ];
+  return (
+    <div className="card">
+      <h3>Реквизиты</h3>
+      <dl className="adm-bank">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function ClientDetailView({
   id,
   onBack,
@@ -169,6 +203,7 @@ function ClientDetailView({
               </div>
             ) : null}
           </div>
+          <BankDetailsCard details={state.data.bank_details} />
           <h2 className="section-title">Брифы</h2>
           {state.data.briefs.length ? (
             <div className="adm-list">
