@@ -31,6 +31,7 @@ from services.ad_accounts import (
     NoAdAccountError,
     TokenUnavailableError,
 )
+from services.bank_details import get_client_bank_details
 from services.brief_list import BriefListItem
 from services.brief_list import list_all as list_all_briefs
 from services.brief_parser import BriefValidationError, BriefVariant
@@ -54,6 +55,7 @@ from core.api.v1.briefs import (
     creative_http_error,
     to_card_out,
 )
+from core.api.v1.cabinet import BankDetailsOut, bank_details_out
 
 # Все эндпоинты требуют admin-сессию.
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -94,6 +96,9 @@ class ClientDetailOut(BaseModel):
     phone: str | None
     telegram: str | None
     briefs: list[ClientBrief]
+    # Реквизиты клиента (spec 2026-09-19 §E) — только на чтение, заполняет сам
+    # клиент в своём кабинете. `None` — ещё не заполнены.
+    bank_details: BankDetailsOut | None
 
 
 class AdminBriefItem(BaseModel):
@@ -232,6 +237,7 @@ async def client_detail(
     if client is None:
         raise HTTPException(status_code=404, detail="client_not_found")
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
+    bank_details = await get_client_bank_details(session, DEFAULT_ACCOUNT_ID, client_id)
     return ClientDetailOut(
         id=client.id,
         full_name=client.full_name,
@@ -239,6 +245,7 @@ async def client_detail(
         phone=client.phone,
         telegram=client.telegram,
         briefs=[ClientBrief(id=b.id, variant=b.variant, status=b.status) for b in briefs],
+        bank_details=bank_details_out(bank_details) if bank_details is not None else None,
     )
 
 

@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Annotated
 
 from config.settings import get_settings
+from db.models import Client, ClientBankDetails
 from db.repositories import (
     find_client_by_contacts,
     find_client_by_email,
@@ -28,6 +29,13 @@ from db.session import get_session
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from services.auth_magiclink import generate_token, verify_token
+from services.bank_details import (
+    BankDetailsInput,
+    BankDetailsValidationError,
+    get_client_bank_details,
+    latest_brief_bank_hint,
+    save_client_bank_details,
+)
 from services.cabinet_email import send_login_link
 from services.client_report import build_client_report
 from services.password import hash_password, verify_password
@@ -108,6 +116,46 @@ class CabinetView(BaseModel):
     report: ClientReportView
 
 
+class BankDetailsIn(BaseModel):
+    """Тело `PUT /bank-details` — поля `BankDetailsInput` (spec §E)."""
+
+    payer_name: str
+    bank_name: str
+    bik: str
+    settlement_account: str
+    correspondent_account: str
+
+
+class BankDetailsOut(BaseModel):
+    payer_name: str
+    bank_name: str
+    bik: str
+    settlement_account: str
+    correspondent_account: str
+
+
+class BankDetailsView(BaseModel):
+    """Ответ `GET /bank-details`: сохранённые реквизиты (или `null`) + подсказка из брифа."""
+
+    bank_details: BankDetailsOut | None
+    brief_hint: str | None
+
+
+class BankDetailsSaveOut(BaseModel):
+    bank_details: BankDetailsOut
+
+
+def bank_details_out(row: ClientBankDetails) -> BankDetailsOut:
+    """Собрать API-модель реквизитов из строки БД (переиспользует admin-карточка)."""
+    return BankDetailsOut(
+        payer_name=row.payer_name,
+        bank_name=row.bank_name,
+        bik=row.bik,
+        settlement_account=row.settlement_account,
+        correspondent_account=row.correspondent_account,
+    )
+
+
 def _identify(
     secret: str, session_cookie: str | None, token: str | None, *, valid_from: datetime | None
 ) -> int | None:
@@ -124,6 +172,31 @@ def _identify(
     if token:
         return verify_token(token, secret, valid_from=valid_from)
     return None
+
+
+async def _authenticated_client(
+    session: AsyncSession,
+    secret: str,
+    session_cookie: str | None,
+    token: str | None,
+) -> Client:
+    """Определить клиента по cookie/токену с учётом границы отзыва. 401/404 при неудаче.
+
+    Общий двухфазный приём для всех эндпоинтов кабинета (см. `_identify`): сначала
+    без границы отзыва — только чтобы узнать client_id и прочитать его
+    `sessions_valid_from`, затем — уже с границей, чтобы решить, пускать ли.
+    """
+    client_id = _identify(secret, session_cookie, token, valid_from=None)
+    if client_id is None:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    client = await get_client(session, DEFAULT_ACCOUNT_ID, client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    if client.sessions_valid_from is not None:
+        confirmed = _identify(secret, session_cookie, token, valid_from=client.sessions_valid_from)
+        if confirmed is None:
+            raise HTTPException(status_code=401, detail="Доступ отозван")
+    return client
 
 
 def _set_session_cookie(response: Response, client_id: int) -> None:
@@ -246,18 +319,8 @@ async def view_cabinet(
     как известен client_id.
     """
     secret = get_settings().secret_key.get_secret_value()
-    client_id = _identify(secret, session_cookie, token, valid_from=None)
-    if client_id is None:
-        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
-
-    client = await get_client(session, DEFAULT_ACCOUNT_ID, client_id)
-    if client is None:
-        raise HTTPException(status_code=404, detail="Клиент не найден")
-
-    if client.sessions_valid_from is not None:
-        confirmed = _identify(secret, session_cookie, token, valid_from=client.sessions_valid_from)
-        if confirmed is None:
-            raise HTTPException(status_code=401, detail="Доступ отозван")
+    client = await _authenticated_client(session, secret, session_cookie, token)
+    client_id = client.id
 
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
     # Скоуп строго по client_id из сессии/токена, никогда из параметра запроса —
@@ -289,3 +352,49 @@ async def view_cabinet(
             ]
         ),
     )
+
+
+@router.get("/bank-details")
+async def get_bank_details_view(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    token: Annotated[str | None, Query()] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
+) -> BankDetailsView:
+    """Сохранённые реквизиты клиента + подсказка из последнего брифа (без автопереноса)."""
+    secret = get_settings().secret_key.get_secret_value()
+    client = await _authenticated_client(session, secret, session_cookie, token)
+    row = await get_client_bank_details(session, DEFAULT_ACCOUNT_ID, client.id)
+    hint = await latest_brief_bank_hint(session, DEFAULT_ACCOUNT_ID, client.id)
+    return BankDetailsView(
+        bank_details=bank_details_out(row) if row is not None else None,
+        brief_hint=hint,
+    )
+
+
+@router.put("/bank-details")
+async def put_bank_details(
+    data: BankDetailsIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    token: Annotated[str | None, Query()] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=_SESSION_COOKIE)] = None,
+) -> BankDetailsSaveOut:
+    """Сохранить реквизиты (создать или заменить). 422 с ошибками по полям при неверном формате."""
+    secret = get_settings().secret_key.get_secret_value()
+    client = await _authenticated_client(session, secret, session_cookie, token)
+    try:
+        row = await save_client_bank_details(
+            session,
+            DEFAULT_ACCOUNT_ID,
+            client.id,
+            BankDetailsInput(
+                payer_name=data.payer_name,
+                bank_name=data.bank_name,
+                bik=data.bik,
+                settlement_account=data.settlement_account,
+                correspondent_account=data.correspondent_account,
+            ),
+        )
+    except BankDetailsValidationError as exc:
+        raise HTTPException(status_code=422, detail={"errors": exc.errors}) from exc
+    await session.commit()
+    return BankDetailsSaveOut(bank_details=bank_details_out(row))

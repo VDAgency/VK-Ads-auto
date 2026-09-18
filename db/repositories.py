@@ -16,6 +16,7 @@ from db.models import (
     Cabinet,
     Campaign,
     Client,
+    ClientBankDetails,
     Creative,
     Discount,
     Operator,
@@ -973,5 +974,43 @@ async def set_ad_account_client(
     if row is None:
         return None
     row.client_id = client_id
+    await session.flush()
+    return row
+
+
+# --- Банковские реквизиты клиента (ClientBankDetails, spec 2026-09-19 §E) -----
+
+
+async def get_bank_details(
+    session: AsyncSession, account_id: int, client_id: int
+) -> ClientBankDetails | None:
+    """Сохранённые реквизиты клиента тенанта. `None` — ещё не заполнены."""
+    stmt = select(ClientBankDetails).where(
+        ClientBankDetails.account_id == account_id, ClientBankDetails.client_id == client_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_bank_details(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    *,
+    payer_name: str,
+    bank_name: str,
+    bik: str,
+    settlement_account: str,
+    correspondent_account: str,
+) -> ClientBankDetails:
+    """Создать реквизиты клиента или заменить существующие (одна запись на клиента)."""
+    row = await get_bank_details(session, account_id, client_id)
+    if row is None:
+        row = ClientBankDetails(account_id=account_id, client_id=client_id)
+        session.add(row)
+    row.payer_name = payer_name
+    row.bank_name = bank_name
+    row.bik = bik
+    row.settlement_account = settlement_account
+    row.correspondent_account = correspondent_account
     await session.flush()
     return row

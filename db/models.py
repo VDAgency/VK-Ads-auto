@@ -10,7 +10,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, String, Text, func, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base, TenantMixin
@@ -383,3 +394,32 @@ class CommunityToken(TenantMixin, Base):
     token_encrypted: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClientBankDetails(TenantMixin, Base):
+    """Банковские реквизиты клиента для документов (кабинет, spec 2026-09-19 §E).
+
+    Решение 2026-07-25: реквизиты живут в личном кабинете клиента, не в брифе (бриф —
+    параметры VK, реквизиты нужны только для оформления документов). Хранятся
+    открытым текстом: не секрет доступа, сервер в РФ (152-ФЗ соблюдён локацией, не
+    шифрованием этих данных). Формат и контрольные суммы проверяет
+    `services/bank_details.py` до сохранения строки. Одна запись на клиента —
+    `UniqueConstraint(account_id, client_id)`; сохранение всегда заменяет прежнюю.
+    """
+
+    __tablename__ = "client_bank_details"
+    __table_args__ = (
+        UniqueConstraint("account_id", "client_id", name="uq_client_bank_details_account_client"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("client.id"), index=True)
+    payer_name: Mapped[str] = mapped_column(String(255))
+    bank_name: Mapped[str] = mapped_column(String(255))
+    bik: Mapped[str] = mapped_column(String(9))
+    settlement_account: Mapped[str] = mapped_column(String(20))
+    correspondent_account: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
