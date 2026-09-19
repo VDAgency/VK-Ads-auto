@@ -140,6 +140,7 @@ def test_operator_paths_stay_closed() -> None:
         "/api/v1/cabinets",
         "/api/v1/campaigns/1/stop",
         "/api/v1/stats/sync",
+        "/api/v1/stats/digest",  # ежедневная сводка (задача 3А) — операторский путь, дёргает n8n
         "/api/v1/ping",
     ]
 

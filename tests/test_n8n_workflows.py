@@ -135,6 +135,52 @@ def test_workflow_files_use_internal_service_hostnames() -> None:
             )
 
 
+def _load_workflow(filename: str) -> dict[str, Any]:
+    path = _WORKFLOWS_DIR / filename
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
+def _node(workflow: dict[str, Any], node_type: str) -> dict[str, Any]:
+    node: dict[str, Any] = next(n for n in workflow["nodes"] if n["type"] == node_type)
+    return node
+
+
+# --- daily_digest.json: ежедневная сводка оператору (09:00 МСК, задача 3А) ---------
+
+
+def test_daily_digest_workflow_is_inactive_by_default() -> None:
+    """Как и часовой синк — заводится выключенным, оператор включает вручную (docs/N8N.md)."""
+    workflow = _load_workflow("daily_digest.json")
+    assert workflow["id"] == "daily-digest"
+    assert workflow["active"] is False
+
+
+def test_daily_digest_workflow_runs_at_nine_am_moscow_time() -> None:
+    workflow = _load_workflow("daily_digest.json")
+    assert workflow["settings"]["timezone"] == "Europe/Moscow"
+    assert workflow["settings"]["executionOrder"] == "v1"
+
+    trigger = _node(workflow, "n8n-nodes-base.scheduleTrigger")
+    rule = trigger["parameters"]["rule"]["interval"][0]
+    assert rule["field"] == "cronExpression"
+    assert rule["expression"] == "0 9 * * *"
+
+
+def test_daily_digest_workflow_posts_to_internal_digest_endpoint() -> None:
+    workflow = _load_workflow("daily_digest.json")
+    http_node = _node(workflow, "n8n-nodes-base.httpRequest")
+    assert http_node["parameters"]["method"] == "POST"
+    assert http_node["parameters"]["url"] == "http://api:8000/api/v1/stats/digest"
+
+
+def test_daily_digest_workflow_needs_no_credentials() -> None:
+    """Эндпоинт не авторизован намеренно (изоляция на уровне docker-сети) — узла credentials нет."""
+    workflow = _load_workflow("daily_digest.json")
+    http_node = _node(workflow, "n8n-nodes-base.httpRequest")
+    assert "credentials" not in http_node
+
+
 def _walk_all_strings(obj: Any, path: str = "") -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if isinstance(obj, dict):

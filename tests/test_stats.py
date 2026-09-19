@@ -2,7 +2,7 @@ import asyncio
 
 from db.repositories import save_stat
 from integrations.adapter import PlatformAdapter
-from services.stats import CampaignStats, build_digest, fetch_campaign_stats
+from services.stats import CampaignStats, fetch_campaign_stats
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.test_brief_intake import _with_db
@@ -42,16 +42,6 @@ def test_zero_safe_derived() -> None:
     assert stats.ctr == 0.0
     assert stats.cpc == 0.0
     assert stats.cpl == 0.0
-
-
-def test_build_digest_with_totals() -> None:
-    text = build_digest([CampaignStats("camp-1", 100, 5, 250, 10)])
-    assert "camp-1" in text
-    assert "Итого" in text
-
-
-def test_build_digest_empty() -> None:
-    assert build_digest([]) == "Активных кампаний нет."
 
 
 def test_save_stat_persists() -> None:

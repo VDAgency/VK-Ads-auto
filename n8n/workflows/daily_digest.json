@@ -1,0 +1,73 @@
+{
+  "name": "Daily Digest (09:00 MSK)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Ежедневная сводка оператору (09:00 МСК)\n\nРаз в сутки в 9 утра по Москве дёргает `POST /api/v1/stats/digest` у ядра — по внутреннему имени сервиса `api` в сети docker-compose, снаружи этот путь закрыт на ingress (infra/Caddyfile). Ядро синхронизирует активные кампании (тот же путь, что и часовой синк, `services/stats_sync.py`), берёт последний срез по каждой и рассылает оператору текстовую сводку по кабинетам через Telegram (`services/notifier.py::notify_operator`, docs/N8N.md).\n\nКредов не требует: эндпоинт не авторизован намеренно (изоляция на уровне сети), see core/api/v1/stats.py.\n\nТаймзона воркфлоу — Europe/Moscow (settings.timezone), поэтому cron `0 9 * * *` срабатывает именно в 9:00 по Москве независимо от таймзоны хоста n8n.",
+        "height": 300,
+        "width": 400
+      },
+      "id": "b1c2d3e4-5f60-4a1b-9c2d-3e4f5a6b7c81",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-160, 60]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c2d3e4f5-6071-4b2c-8d3e-4f5a6b7c8d92",
+      "name": "Every day at 9:00 MSK",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/v1/stats/digest",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "d3e4f5a6-7182-4c3d-9e4f-5a6b7c8d9ea3",
+      "name": "Send daily digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [460, 300]
+    }
+  ],
+  "connections": {
+    "Every day at 9:00 MSK": {
+      "main": [
+        [
+          {
+            "node": "Send daily digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "timezone": "Europe/Moscow",
+    "executionOrder": "v1"
+  },
+  "id": "daily-digest",
+  "tags": []
+}
