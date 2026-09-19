@@ -39,6 +39,7 @@ from services.brief_view import apply_brief_edits, get_brief_card
 from services.contact import ContactParseError, detect_contact
 from services.creative_intake import CreativeError, intake_creative
 from services.delivery.factory import build_delivery_router
+from services.hashtags import HashtagError
 from services.invite_tracking import InviteView, list_pending, list_recent
 from services.invites import create_invite
 from services.launch_service import BriefNotFoundError, UnsupportedGoalError
@@ -53,6 +54,7 @@ from core.api.v1.briefs import (
     CreativeIn,
     CreativeLaunchOut,
     creative_http_error,
+    hashtag_http_error,
     to_card_out,
 )
 from core.api.v1.cabinet import BankDetailsOut, bank_details_out
@@ -329,11 +331,14 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
+    except HashtagError as exc:
+        raise hashtag_http_error(exc) from exc
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:

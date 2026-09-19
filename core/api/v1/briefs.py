@@ -27,6 +27,7 @@ from services.creative_intake import (
     intake_creative,
     launch_without_creative,
 )
+from services.hashtags import HashtagError
 from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
@@ -158,6 +159,9 @@ class CreativeIn(BaseModel):
     height: int = 0
     title: str = ""
     body: str = ""
+    # Хэштеги оператора (строкой, как есть с формы/бота) — необязательное поле;
+    # ядро нормализует и дописывает в конец текста (`services/hashtags.py`).
+    hashtags: str | None = None
     # Выбор оператора. Необязательные: без кабинета ядро берёт единственный
     # активный (иначе честный 409), цель — из раскладки брифа.
     ad_account_id: int | None = None
@@ -179,6 +183,16 @@ def creative_http_error(exc: CreativeError) -> HTTPException:
     if exc.code == "invalid":
         return HTTPException(status_code=422, detail={"issues": exc.issues})
     return HTTPException(status_code=422, detail=exc.code)
+
+
+def hashtag_http_error(exc: HashtagError) -> HTTPException:
+    """Маппинг `HashtagError` в HTTP-ответ (общий для бота и админки).
+
+    Машинный код — с префиксом `hashtags_`, чтобы бот/веб отличали его от кодов
+    `creative_http_error` при переводе в человеческий текст (общий список
+    маппинга — `docs/superpowers/.../global-constraints.md`).
+    """
+    return HTTPException(status_code=422, detail=f"hashtags_{exc.code}")
 
 
 def to_card_out(view: BriefCardView) -> BriefCardOut:
@@ -343,11 +357,14 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
+    except HashtagError as exc:
+        raise hashtag_http_error(exc) from exc
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
