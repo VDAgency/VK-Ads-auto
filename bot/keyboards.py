@@ -110,6 +110,33 @@ def creative_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def hashtags_choice_keyboard() -> InlineKeyboardMarkup:
+    """Шаг «хэштеги» после описания креатива (Task 5): добавить или пропустить.
+
+    Пропуск ведёт прямо к подтверждению запуска, как раньше без этого шага.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="#️⃣ Добавить", callback_data="hashtags_add"),
+                InlineKeyboardButton(text="Без хэштегов", callback_data="hashtags_skip"),
+            ]
+        ]
+    )
+
+
+def hashtags_skip_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка «Без хэштегов» на экране ввода строки — путь наружу без набора текста.
+
+    Тот же `callback_data`, что и в `hashtags_choice_keyboard`: один хендлер
+    обрабатывает пропуск из обоих состояний (выбора и ввода) — оператору
+    незачем печатать что-то, чтобы отказаться от хэштегов.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Без хэштегов", callback_data="hashtags_skip")]]
+    )
+
+
 def launch_confirm_keyboard(brief_id: int, ad_account_id: int) -> InlineKeyboardMarkup:
     """Подтверждение запуска кампании без креатива (карточка подтверждения, Т3).
 

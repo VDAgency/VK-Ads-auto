@@ -372,6 +372,27 @@ export function agencyCabinetErrorMessage(error: unknown): string {
   return AGENCY_CABINET_FALLBACK;
 }
 
+/** Причины отказа хэштегов креатива (422 `hashtags_*` ядра, `services/hashtags.py`) —
+ * тот же смысл, что бот показывает по этим кодам (`bot/api_client.py::_hashtag_reject_reason`,
+ * задача 5). */
+export const HASHTAG_ERRORS: Record<string, string> = {
+  hashtags_invalid_tag: "В хэштегах разрешены только буквы, цифры и «_».",
+  hashtags_too_many: "Хэштегов больше 10 — уберите лишние.",
+  hashtags_tag_too_long: "Один из хэштегов длиннее 50 символов — сократите его.",
+  hashtags_text_too_long:
+    "Текст с хэштегами не помещается в лимит площадки — сократите текст или хэштеги.",
+  hashtags_not_supported: "У этой площадки нет текста объявления — хэштеги здесь не нужны.",
+};
+
+/** Человеческая причина отказа именно по хэштегам — `null`, если ошибка о другом
+ * (тогда её показывает общий `launchErrorMessage`, а не поле хэштегов). */
+export function hashtagErrorMessage(error: unknown): string | null {
+  if (error instanceof ApiError && error.status === 422 && typeof error.detail === "string") {
+    return HASHTAG_ERRORS[error.detail] ?? null;
+  }
+  return null;
+}
+
 /** Человеческая причина отказа запуска/приёма креатива по ошибке API — единая
  * точка для обоих действий шага подтверждения (с креативом и без). */
 export function launchErrorMessage(error: unknown): string {

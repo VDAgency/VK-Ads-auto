@@ -11,6 +11,7 @@ import { useState } from "react";
 
 import {
   adminFetch,
+  hashtagErrorMessage,
   launchErrorMessage,
   type AdAccount,
   type Flash,
@@ -58,8 +59,10 @@ export function ConfirmStep({
   picked,
   title,
   body,
+  hashtags,
   onFlash,
   onChangeCabinet,
+  onHashtagsError,
   onLaunched,
 }: {
   brief_id: number;
@@ -70,8 +73,14 @@ export function ConfirmStep({
   picked: PickedFile | null;
   title: string;
   body: string;
+  hashtags: string;
   onFlash: (flash: Flash) => void;
   onChangeCabinet: () => void;
+  /** Ядро отказало именно по хэштегам (422 `hashtags_*`, задача 5) — родитель
+   * возвращает оператора на шаг «Креатив» и показывает причину под полем, а
+   * не общей полосой результата: там текст был бы оторван от поля, которое
+   * нужно поправить. */
+  onHashtagsError: (message: string) => void;
   /** Итог запуска целиком, не только текст — родитель прячет кнопку «Запустить»
    * насовсем после успеха (не «серая», а её нет), а не просто блокирует её на
    * время запроса (найденный баг: повторное нажатие после успеха создавало
@@ -112,6 +121,7 @@ export function ConfirmStep({
             height: picked.height,
             title,
             body,
+            hashtags,
             ad_account_id: account.id,
             goal: goalCode,
           }),
@@ -124,7 +134,12 @@ export function ConfirmStep({
       }
       onLaunched(result);
     } catch (error) {
-      onFlash({ text: launchErrorMessage(error), ok: false });
+      const hashtagMessage = hashtagErrorMessage(error);
+      if (hashtagMessage) {
+        onHashtagsError(hashtagMessage);
+      } else {
+        onFlash({ text: launchErrorMessage(error), ok: false });
+      }
     } finally {
       setSending(false);
     }

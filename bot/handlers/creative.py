@@ -29,12 +29,15 @@ from bot.api_client import (
     BriefNotFound,
     CoreUnavailable,
     CreativeRejected,
+    HashtagRejected,
 )
 from bot.keyboards import (
     ad_account_pick_keyboard,
     brief_card_keyboard,
     cabinet_create_confirm_keyboard,
     creative_confirm_keyboard,
+    hashtags_choice_keyboard,
+    hashtags_skip_keyboard,
     launch_goal_keyboard,
 )
 from bot.states import LaunchCampaign, UploadCreative
@@ -51,6 +54,12 @@ _ASK_MEDIA = "🖼 Пришлите фото или видео для рекла
 _ASK_DESCRIPTION = (
     "Добавьте описание: первая строка — заголовок (до 40 символов), остальное — текст "
     "(до 220). Или отправьте «-», чтобы без описания."
+)
+# Шаг «хэштеги» (Task 5, spec 2026-09-19-block1-remaining-gaps §B) — между описанием
+# и подтверждением запуска: единственный вызов ядра должен нести готовую строку.
+_ASK_HASHTAGS_CHOICE = "Добавить хэштеги к тексту объявления?"
+_ASK_HASHTAGS_INPUT = (
+    "Пришлите хэштеги через пробел или запятую, например: кофе утро. «#» можно не ставить."
 )
 _TOO_BIG = "Файл больше 20 МБ — Telegram не даёт боту его скачать. Пришлите версию полегче."
 _ASK_CABINET = "В каком рекламном кабинете запускаем кампанию?"
@@ -694,13 +703,52 @@ def _account_from_state(data: dict[str, Any]) -> AdAccountItem:
 
 @router.message(StateFilter(UploadCreative.waiting_description))
 async def got_description(message: Message, state: FSMContext) -> None:
-    """Принять описание и показать карточку подтверждения запуска (Т3).
-
-    Бриф запрашивается заново (а не берётся из FSM) — чтобы карточка показывала
-    актуальные данные, даже если оператор успел их поправить, пока грузил медиа.
-    """
+    """Принять описание и спросить про хэштеги (Task 5), прежде чем показать
+    карточку подтверждения запуска (Т3)."""
     title, body = _split_description(message.text or "")
     await state.update_data(title=title, body=body)
+    await state.set_state(UploadCreative.waiting_hashtags_choice)
+    await message.answer(_ASK_HASHTAGS_CHOICE, reply_markup=hashtags_choice_keyboard())
+
+
+@router.callback_query(
+    F.data == "hashtags_add", StateFilter(UploadCreative.waiting_hashtags_choice)
+)
+async def ask_hashtags(callback: CallbackQuery, state: FSMContext) -> None:
+    """Оператор решил добавить хэштеги — попросить строку."""
+    await state.set_state(UploadCreative.waiting_hashtags)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(_ASK_HASHTAGS_INPUT, reply_markup=hashtags_skip_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data == "hashtags_skip",
+    StateFilter(UploadCreative.waiting_hashtags_choice, UploadCreative.waiting_hashtags),
+)
+async def skip_hashtags(callback: CallbackQuery, state: FSMContext) -> None:
+    """«Без хэштегов» — работает и с шага выбора, и с шага ввода строки (после
+    отказа ядра оператору не нужно печатать что-то, чтобы отказаться от затеи)."""
+    await state.update_data(hashtags=None)
+    if isinstance(callback.message, Message):
+        await _show_launch_confirmation(callback.message, state)
+    await callback.answer()
+
+
+@router.message(StateFilter(UploadCreative.waiting_hashtags))
+async def got_hashtags(message: Message, state: FSMContext) -> None:
+    """Принять строку хэштегов как есть — нормализация только на стороне ядра."""
+    await state.update_data(hashtags=message.text or "")
+    await _show_launch_confirmation(message, state)
+
+
+async def _show_launch_confirmation(message: Message, state: FSMContext) -> None:
+    """Показать карточку подтверждения запуска (Т3) — общий хвост для «без
+    хэштегов» и «хэштеги приняты».
+
+    Бриф запрашивается заново (а не берётся из FSM) — чтобы карточка показывала
+    актуальные данные, даже если оператор успел их поправить, пока грузил материалы.
+    """
     data = await state.get_data()
     brief_id = int(data["brief_id"])
 
@@ -711,14 +759,17 @@ async def got_description(message: Message, state: FSMContext) -> None:
         await message.answer(_NOT_FOUND)
         return
     except CoreUnavailable:
-        # Не сбрасываем состояние: описание уже принято, оператор может просто
-        # повторить его тем же сообщением, когда ядро отзовётся.
+        # Не сбрасываем состояние: описание и хэштеги уже приняты, оператор
+        # может просто повторить действие, когда ядро отзовётся.
         await message.answer(_UNAVAILABLE)
         return
 
     account = _account_from_state(data)
     goal_code = str(data.get("goal", ""))
     goal_label = GOAL_LABELS.get(goal_code, goal_code)
+    title = str(data.get("title", ""))
+    body = str(data.get("body", ""))
+    hashtags = data.get("hashtags")
 
     lines = [render_launch_confirmation(card, account, goal_label), "", "Креатив:"]
     if title:
@@ -727,6 +778,8 @@ async def got_description(message: Message, state: FSMContext) -> None:
         lines.append(f"Текст: {_escape(body)}")
     if not title and not body:
         lines.append("Без описания.")
+    if hashtags:
+        lines.append(f"Хэштеги: {_escape(str(hashtags))}")
     lines.append("")
     lines.append("Отправка запустит подготовку рекламной кампании.")
     await message.answer(
@@ -772,10 +825,16 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
             str(data.get("body", "")),
             ad_account_id=data.get("ad_account_id"),
             goal=data.get("goal"),
+            hashtags=data.get("hashtags"),
         )
     except BriefNotFound:
         await state.clear()
         await message.answer(_NOT_FOUND)
+    except HashtagRejected as exc:
+        # Не сбрасываем весь сценарий: медиа и описание уже приняты, возвращаем
+        # оператора именно к вводу хэштегов (Task 5, ambiguities resolved).
+        await state.set_state(UploadCreative.waiting_hashtags)
+        await message.answer(f"⚠️ {exc.reason}", reply_markup=hashtags_skip_keyboard())
     except CreativeRejected as exc:
         await state.clear()
         await message.answer(f"⚠️ {exc.reason}")

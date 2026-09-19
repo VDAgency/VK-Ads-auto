@@ -58,6 +58,12 @@ export function LaunchWizard({
   const [picked, setPicked] = useState<PickedFile | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [hashtags, setHashtags] = useState("");
+  // Ошибка ядра по хэштегам (422 `hashtags_*`, задача 5) — узнаём только на шаге
+  // подтверждения (сам запрос уходит оттуда), но показываем под полем на шаге
+  // «Креатив»: `ConfirmStep` сообщает о ней через `onHashtagsError`, а мы
+  // возвращаем оператора на этот шаг, чтобы он видел причину рядом с полем.
+  const [hashtagsError, setHashtagsError] = useState<string | null>(null);
 
   // Найденный баг: повторное нажатие «Запустить» после успеха создавало вторую
   // кампанию по тому же брифу — кнопка оставалась на экране и снова активной.
@@ -222,6 +228,12 @@ export function LaunchWizard({
             onTitleChange={setTitle}
             body={body}
             onBodyChange={setBody}
+            hashtags={hashtags}
+            onHashtagsChange={(value) => {
+              setHashtags(value);
+              setHashtagsError(null);
+            }}
+            hashtagsError={hashtagsError}
             onContinue={() => goToNext("creative")}
           />
         ) : null}
@@ -236,8 +248,13 @@ export function LaunchWizard({
             picked={picked}
             title={title}
             body={body}
+            hashtags={hashtags}
             onFlash={onFlash}
             onChangeCabinet={() => setCurrentStep("cabinet")}
+            onHashtagsError={(message) => {
+              setHashtagsError(message);
+              setCurrentStep("creative");
+            }}
             onLaunched={(outcome) => {
               setJustLaunched(outcome);
               onFlash({ text: outcome.message, ok: true, persistent: true });

@@ -50,6 +50,21 @@ class CreativeRejected(RuntimeError):
         self.reason = reason
 
 
+class HashtagRejected(RuntimeError):
+    """Ядро отклонило строку хэштегов (422 `hashtags_*`, `services/hashtags.py`) —
+    причина уже человекочитаема (`reason`).
+
+    Отдельно от `CreativeRejected`: отказ по хэштегам не должен сбрасывать весь
+    сценарий загрузки креатива — хендлер бота возвращает оператора именно к
+    вводу хэштегов, оставив медиа и описание как есть (Task 5, ambiguities
+    resolved в задании).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class CabinetChoiceRequired(RuntimeError):
     """Ядро не смогло само выбрать кабинет для запуска без креатива (409).
 
@@ -385,6 +400,27 @@ def _creative_reject_reason(detail: Any) -> str:
     return "Креатив не принят. Проверьте файл и текст."
 
 
+# Человеческий текст по кодам `hashtags_*` ядра (`services/hashtags.py::HashtagError`,
+# `core/api/v1/briefs.py::hashtag_http_error`) — единый список для бота и веба
+# (docs/superpowers/.../global-constraints.md).
+_HASHTAG_ERRORS = {
+    "hashtags_invalid_tag": (
+        "В хэштегах разрешены только буквы, цифры и «_». Проверьте и пришлите ещё раз."
+    ),
+    "hashtags_too_many": "Хэштегов больше 10 — уберите лишние и пришлите ещё раз.",
+    "hashtags_tag_too_long": "Один из хэштегов длиннее 50 символов — сократите его.",
+    "hashtags_text_too_long": (
+        "Текст с хэштегами не помещается в лимит площадки — сократите текст или хэштеги."
+    ),
+    "hashtags_not_supported": "У этой площадки нет текста объявления — хэштеги здесь не нужны.",
+}
+
+
+def _hashtag_reject_reason(detail: str) -> str:
+    """Человекочитаемая причина отказа по коду `hashtags_*`."""
+    return _HASHTAG_ERRORS.get(detail, "Хэштеги не приняты. Проверьте и попробуйте ещё раз.")
+
+
 def _cabinet_reject_reason(detail: str) -> str:
     """Человекочитаемая причина отказа по 409-детали ядра: кабинет выбран, но не годится.
 
@@ -419,12 +455,17 @@ async def upload_creative(
     body: str,
     ad_account_id: int | None = None,
     goal: str | None = None,
+    hashtags: str | None = None,
 ) -> CreativeResult:
     """`POST /briefs/{id}/creative`: отправить креатив (триггер запуска РК).
 
     `ad_account_id`/`goal` — выбор оператора, сделанный до загрузки материалов.
+    `hashtags` — необязательная строка хэштегов оператора (Task 5); нормализацию
+    и дописывание к тексту делает только ядро (`services/hashtags.py`), бот
+    отправляет строку как есть.
 
-    404 → `BriefNotFound`; 413/422 → `CreativeRejected`; сеть/5xx → `CoreUnavailable`.
+    404 → `BriefNotFound`; 413 → `CreativeRejected`; 422 `hashtags_*` →
+    `HashtagRejected`, прочие 422 → `CreativeRejected`; сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/creative"
     payload: dict[str, Any] = {
@@ -436,6 +477,7 @@ async def upload_creative(
         "body": body,
         "ad_account_id": ad_account_id,
         "goal": goal,
+        "hashtags": hashtags,
     }
     try:
         async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
@@ -450,6 +492,8 @@ async def upload_creative(
         detail: Any = None
         with contextlib.suppress(ValueError):
             detail = response.json().get("detail")
+        if isinstance(detail, str) and detail.startswith("hashtags_"):
+            raise HashtagRejected(_hashtag_reject_reason(detail))
         raise CreativeRejected(_creative_reject_reason(detail))
     if response.status_code == 409:
         # Кабинет выбран, но не годится: токен недоступен либо не соответствует брифу.

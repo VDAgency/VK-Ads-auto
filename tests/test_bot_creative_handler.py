@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from bot.api_client import AdAccountItem, BriefCard, CreativeRejected, CreativeResult
+from bot.api_client import (
+    AdAccountItem,
+    BriefCard,
+    CreativeRejected,
+    CreativeResult,
+    HashtagRejected,
+)
 from bot.handlers import creative
 from bot.states import UploadCreative
 
@@ -170,8 +176,10 @@ def test_got_media_non_media_asks_again() -> None:
     assert message.answers
 
 
-def test_got_description_shows_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_get_brief(monkeypatch)
+def test_got_description_asks_hashtags_choice() -> None:
+    """После описания бот сначала спрашивает про хэштеги (Task 5), а не сразу
+    показывает подтверждение запуска — единственный вызов ядра должен нести
+    уже готовую строку хэштегов."""
     state = _FakeState()
     state.state = UploadCreative.waiting_description
     state.data = {
@@ -186,12 +194,79 @@ def test_got_description_shows_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
     message = _FakeMessage(text="Заголовок\nТекст объявления")
     asyncio.run(creative.got_description(message, state))
 
+    assert state.state == UploadCreative.waiting_hashtags_choice
     assert state.data["title"] == "Заголовок"
     assert state.data["body"] == "Текст объявления"
     text, markup = message.answers[-1]
+    assert "хэштег" in text.lower()
+    assert markup is not None  # кнопки «Добавить» / «Без хэштегов»
+
+
+def test_skip_hashtags_shows_launch_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Без хэштегов» ведёт прямо к подтверждению запуска, как раньше без этого шага."""
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+    _stub_get_brief(monkeypatch)
+    state = _FakeState()
+    state.state = UploadCreative.waiting_hashtags_choice
+    state.data = {
+        "brief_id": 7,
+        "file_id": "fid",
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "ad_account_id": 1,
+        "ad_account_title": "Студия «Пример»",
+        "title": "Заголовок",
+        "body": "Текст объявления",
+    }
+    callback = _FakeCallback("hashtags_skip")
+    asyncio.run(creative.skip_hashtags(callback, state))
+
+    assert state.data.get("hashtags") is None
+    text, markup = callback.message.answers[-1]
     assert markup is not None  # клавиатура подтверждения
     assert "Заголовок" in text
     assert "Текст объявления" in text
+
+
+def test_choose_add_hashtags_asks_for_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Добавить» переводит в состояние ввода строки хэштегов."""
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+    state = _FakeState()
+    state.state = UploadCreative.waiting_hashtags_choice
+    state.data = {"brief_id": 7}
+    callback = _FakeCallback("hashtags_add")
+    asyncio.run(creative.ask_hashtags(callback, state))
+
+    assert state.state == UploadCreative.waiting_hashtags
+    text, markup = callback.message.answers[-1]
+    assert markup is not None  # кнопка «Без хэштегов» как путь наружу
+
+
+def test_got_hashtags_shows_confirmation_with_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Введённая строка хэштегов запоминается как есть и попадает в карточку
+    подтверждения — нормализацию делает только ядро."""
+    _stub_get_brief(monkeypatch)
+    state = _FakeState()
+    state.state = UploadCreative.waiting_hashtags
+    state.data = {
+        "brief_id": 7,
+        "file_id": "fid",
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "ad_account_id": 1,
+        "ad_account_title": "Студия «Пример»",
+        "title": "",
+        "body": "",
+    }
+    message = _FakeMessage(text="кофе, утро")
+    asyncio.run(creative.got_hashtags(message, state))
+
+    assert state.data["hashtags"] == "кофе, утро"
+    text, markup = message.answers[-1]
+    assert markup is not None
+    assert "кофе, утро" in text
 
 
 def test_send_creative_uploads_and_confirms(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,6 +308,73 @@ def test_send_creative_uploads_and_confirms(monkeypatch: pytest.MonkeyPatch) -> 
     text, markup = callback.message.answers[-1]
     assert "подготовлена" in text
     assert markup is not None  # карточка с кнопками
+
+
+def test_send_creative_passes_hashtags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Строка хэштегов из FSM уходит в ядро тем же вызовом, что медиа и описание."""
+    captured: dict[str, Any] = {}
+
+    async def fake_upload(
+        brief_id: int,
+        media_b64: str,
+        media_type: str,
+        width: int,
+        height: int,
+        title: str,
+        body: str,
+        **kwargs: Any,
+    ) -> CreativeResult:
+        captured.update(kwargs)
+        return CreativeResult(campaign_status="prepared", campaign_id=5, message="🚀 подготовлена")
+
+    monkeypatch.setattr("bot.api_client.upload_creative", fake_upload)
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+    state = _FakeState()
+    state.state = UploadCreative.waiting_hashtags
+    state.data = {
+        "brief_id": 7,
+        "file_id": "fid",
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "title": "T",
+        "body": "B",
+        "hashtags": "кофе утро",
+    }
+    callback = _FakeCallback("creative_send")
+    asyncio.run(creative.send_creative(callback, state, _FakeBot()))
+
+    assert captured["hashtags"] == "кофе утро"
+
+
+def test_send_creative_hashtag_rejected_stays_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Отказ ядра по хэштегам возвращает оператора к вводу строки, а не сбрасывает
+    весь сценарий загрузки креатива (медиа и описание уже приняты)."""
+
+    async def fake_upload(*args: Any, **kwargs: Any) -> CreativeResult:
+        raise HashtagRejected("В хэштегах разрешены только буквы, цифры и «_».")
+
+    monkeypatch.setattr("bot.api_client.upload_creative", fake_upload)
+    monkeypatch.setattr(creative, "Message", _FakeMessage)
+    state = _FakeState()
+    state.state = UploadCreative.waiting_hashtags
+    state.data = {
+        "brief_id": 7,
+        "file_id": "fid",
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "title": "",
+        "body": "",
+        "hashtags": "кофе!",
+    }
+    callback = _FakeCallback("creative_send")
+    asyncio.run(creative.send_creative(callback, state, _FakeBot()))
+
+    assert state.state == UploadCreative.waiting_hashtags  # не сбрасываем сценарий
+    text, markup = callback.message.answers[-1]
+    assert "буквы, цифры" in text
+    assert markup is not None  # кнопка «Без хэштегов»
 
 
 def test_send_creative_rejected_shows_reason(monkeypatch: pytest.MonkeyPatch) -> None:
