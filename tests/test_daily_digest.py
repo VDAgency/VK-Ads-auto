@@ -1,33 +1,57 @@
 """Тесты ежедневной сводки оператору (`services.daily_digest`, задача 3А).
 
 `render_digest` — чистое форматирование, без БД. `collect_digest` проверяется
-на SQLite-фикстурах по образцу `tests/test_stats_sync.py`; сам синк подменяется
-(«замокать синк... так же, как в существующих тестах синка», брифинг задачи) —
-здесь это monkeypatch `services.daily_digest.sync_campaign_stats`, чтобы не
-тянуть в тест ещё и живой выбор адаптера/канала, уже покрытый test_stats_sync.
+на SQLite-фикстурах по образцу `tests/test_stats_sync.py`. Большинство тестов
+подменяют сам синк («замокать синк... так же, как в существующих тестах
+синка», брифинг задачи) — monkeypatch `services.daily_digest.
+sync_campaign_stats` — чтобы не тянуть в каждый тест ещё и живой выбор
+адаптера/канала, уже покрытый `test_stats_sync.py`. Один тест (ревью, фикс-
+раунд 1) намеренно идёт РЕАЛЬНЫМ `sync_campaign_stats` с фейковым
+`PlatformAdapter` (тот же приём, что и в `test_stats_sync.py`) — проверяет,
+что статус кампании в отчёте — результат сегодняшнего синка, а не значение,
+случайно унаследованное из identity-map сессии.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime
 from typing import Any, TypeVar
 
 import pytest
+import services.ad_accounts as ad_accounts
 import services.daily_digest as daily_digest_module
+import services.launch_service as launch_service
 from config.settings import Settings
+from cryptography.fernet import Fernet
 from db.base import Base
-from db.models import Account, AdAccount, Brief, Campaign, Client, Stat
+from db.models import Account, AdAccount, Brief, Cabinet, Campaign, Client, Stat
+from db.repositories import list_active_campaigns
+from integrations.adapter import PlatformAdapter
+from pydantic import SecretStr
+from services.ad_accounts import add_account
 from services.daily_digest import DigestReport, DigestRow, collect_digest, render_digest
+from services.vk_identity import VkIdentity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 T = TypeVar("T")
 
+TOKEN = "fake-access-token-for-tests-0000000000000000"
+
 
 def _settings() -> Settings:
     return Settings(_env_file=None)
+
+
+def _live_settings() -> Settings:
+    """Настройки с ключом шифрования и разрешённым боевым каналом (для кабинетов)."""
+    return Settings(
+        _env_file=None,
+        vk_ads_secret_key=SecretStr(Fernet.generate_key().decode()),
+        vk_live_campaigns=True,
+    )
 
 
 # --- render_digest: чистое форматирование -------------------------------------------
@@ -124,6 +148,7 @@ def _campaign(
     account_id: int = 1,
     status: str = "launched",
     external_id: str | None = "ext-1",
+    cabinet_id: int | None = None,
     ad_account_id: int | None = None,
     spec_name: str = "Подписчики · Иван Иванов",
 ) -> Campaign:
@@ -132,7 +157,7 @@ def _campaign(
         account_id=account_id,
         brief_id=1,
         client_id=1,
-        cabinet_id=None,
+        cabinet_id=cabinet_id,
         ad_account_id=ad_account_id,
         status=status,
         objective="socialengagement",
@@ -261,15 +286,22 @@ def test_collect_digest_marks_failed_sync_as_stale(monkeypatch: pytest.MonkeyPat
     assert report.rows[0].stale is True
 
 
-def test_collect_digest_day_is_moscow_date(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collect_digest_day_uses_moscow_offset_across_midnight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """22:30 UTC — уже за полночь по Москве (UTC+3): дата отчёта обязана стать
+    завтрашней. Прежний тест сравнивал с `datetime.now()` той же формулой, что
+    и сама реализация, — тавтология, которая не поймала бы ошибку в переводе
+    часового пояса. Теперь время внутрь передаётся явно (шов `now`)."""
     monkeypatch.setattr(daily_digest_module, "sync_campaign_stats", _mock_sync({}))
 
     async def scenario(session: AsyncSession) -> DigestReport:
-        return await collect_digest(session, 1, _settings())
+        return await collect_digest(
+            session, 1, _settings(), now=datetime(2026, 9, 18, 22, 30, tzinfo=UTC)
+        )
 
     report = asyncio.run(_with_db(scenario))
-    expected = datetime.now(timezone(timedelta(hours=3))).date()
-    assert report.day == expected
+    assert report.day == date(2026, 9, 19)
 
 
 def test_collect_digest_empty_when_no_active_campaigns(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,3 +312,122 @@ def test_collect_digest_empty_when_no_active_campaigns(monkeypatch: pytest.Monke
 
     report = asyncio.run(_with_db(scenario))
     assert report.rows == []
+
+
+# --- ревью, фикс-раунд 1: статус строки — результат РЕАЛЬНОГО сегодняшнего --
+# синка, а не значение, унаследованное из identity-map сессии ----------------
+
+
+class _StatusFlipAdapter(PlatformAdapter):
+    """Настоящий путь `sync_campaign_stats` (не подмена самого синка): площадка
+    отвечает `blocked` посреди прогона — кампания обязана стать `stopped`."""
+
+    def __init__(self, access_token: SecretStr, **_: object) -> None:
+        self.token = access_token.get_secret_value()
+
+    async def create_cabinet(self, account_id: int, client_ref: str) -> str:
+        return "cab"
+
+    async def create_campaign(self, cabinet_id: str, goal: str) -> str:
+        return "camp"
+
+    async def upload_creative(self, campaign_id: str, creative_ref: str) -> str:
+        return "creative"
+
+    async def launch(self, campaign_id: str) -> None:
+        return None
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def get_stats(self, campaign_id: str) -> dict[str, float]:
+        return {"shows": 500.0, "clicks": 25.0, "spent": 300.0, "goals": 8.0}
+
+    async def get_status(self, campaign_id: str) -> str:
+        return "blocked"
+
+
+def _detached_copy(campaign: Campaign) -> Campaign:
+    """Транзиентная копия строки — НЕ добавлена в сессию, вне identity-map.
+
+    Инструмент проверки: если бы `collect_digest` читал статус напрямую из
+    объекта `Campaign`, отобранного до синка (старое поведение, негласно
+    полагавшееся на то, что `sync_campaign_stats` мутирует именно ЭТОТ же
+    Python-объект через identity-map сессии), — он увидел бы статус ЭТОЙ
+    копии, замороженный на момент отбора, и не заметил бы правку синка,
+    выполненную над настоящим объектом сессии.
+    """
+    return Campaign(
+        id=campaign.id,
+        account_id=campaign.account_id,
+        brief_id=campaign.brief_id,
+        client_id=campaign.client_id,
+        cabinet_id=campaign.cabinet_id,
+        ad_account_id=campaign.ad_account_id,
+        status=campaign.status,
+        objective=campaign.objective,
+        spec_json=campaign.spec_json,
+        external_id=campaign.external_id,
+    )
+
+
+def test_collect_digest_reflects_status_changed_by_real_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`sync_campaign_stats` НЕ подменён — идёт настоящим путём выбора адаптера
+    (как в `test_stats_sync.py`), площадка отвечает `blocked` → кампания
+    становится `stopped` прямо во время синка. Строка отчёта обязана показать
+    `stopped`, а не `launched`, с которым кампания была ДО прогона.
+
+    `list_active_campaigns` здесь подменена на версию, отдающую ТРАНЗИЕНТНЫЕ
+    копии строк (`_detached_copy`) — вне identity-map сессии. Это делает тест
+    настоящим регрессионным: реализация, которая просто читает
+    `campaign.status` у объекта, отобранного до синка (старое поведение),
+    здесь провалится (увидит замороженный `launched`), а `collect_digest`
+    обязан перечитать статус явным запросом (`_post_sync_status` /
+    `db.repositories.get_campaign`), чтобы увидеть настоящий `stopped`.
+    """
+
+    async def identity(token: str, **_: object) -> VkIdentity:
+        return VkIdentity("10000001", "a1b2c3d4e5@agency_client", "Кабинет «Тест»", "active")
+
+    async def balance(token: str, **_: object) -> str | None:
+        return None
+
+    async def detached_list_active_campaigns(
+        session: AsyncSession, account_id: int
+    ) -> list[Campaign]:
+        campaigns = await list_active_campaigns(session, account_id)
+        return [_detached_copy(c) for c in campaigns]
+
+    monkeypatch.setattr(ad_accounts, "fetch_identity", identity)
+    monkeypatch.setattr(ad_accounts, "fetch_balance", balance)
+    monkeypatch.setattr(launch_service, "VkApiAdapter", _StatusFlipAdapter)
+    monkeypatch.setattr(
+        daily_digest_module, "list_active_campaigns", detached_list_active_campaigns
+    )
+
+    async def scenario(session: AsyncSession) -> DigestReport:
+        cfg = _live_settings()
+        session.add(
+            Cabinet(
+                id=1,
+                account_id=1,
+                client_id=1,
+                channel="vk_api",
+                ad_object_url="https://vk.com/id1",
+            )
+        )
+        await session.commit()
+        ad_account = await add_account(session, 1, TOKEN, settings=cfg)
+        await session.commit()
+        session.add(_campaign(1, external_id="vk-1", cabinet_id=1, ad_account_id=ad_account.id))
+        await session.commit()
+        return await collect_digest(session, 1, cfg)
+
+    report = asyncio.run(_with_db(scenario))
+    assert len(report.rows) == 1
+    row = report.rows[0]
+    assert row.status == "stopped"  # не "launched", с которым кампания была до синка
+    assert row.shows == 500.0
+    assert row.stale is False

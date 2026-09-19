@@ -18,6 +18,18 @@ stats_sync_hourly.json`, просто вызванный ещё раз пере�
 срез, который мог не обновиться сегодня; честно помечаем, а не имитируем
 свежесть (CLAUDE.md §7).
 
+Набор кампаний в отчёте фиксируется ДО синка (`list_active_campaigns`) — это
+то, что оператор ждёт увидеть в сегодняшней сводке. Если синк переводит
+кампанию в неактивный статус (например, площадка ответила «заблокирована» →
+`stopped`), кампания НЕ исчезает из отчёта, который как раз про неё, — набор
+после синка не пересчитывается. Но сам СТАТУС строки читается ПОСЛЕ синка
+явным повторным запросом (`db.repositories.get_campaign`), а не берётся из
+объекта `Campaign`, отобранного до синка: полагаться на то, что
+`sync_campaign_stats` (через `set_campaign_status`) случайно мутирует именно
+тот же объект в identity-map той же сессии — скрытая зависимость от деталей
+реализации ORM, а не документированный контракт `sync_campaign_stats`
+(фикс по ревью, раунд 1: это было именно так и никак не проверялось тестом).
+
 Расписание (09:00 МСК) подключается n8n (`n8n/workflows/daily_digest.json`),
 здесь только сбор данных и рендер текста. Отправка оператору — через
 `services.notifier.notify_operator` (тот же транспорт, что и остальные
@@ -28,11 +40,16 @@ stats_sync_hourly.json`, просто вызванный ещё раз пере�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 from config.settings import Settings
 from db.models import Campaign
-from db.repositories import aggregate_cabinet_stats, get_ad_account, list_active_campaigns
+from db.repositories import (
+    aggregate_cabinet_stats,
+    get_ad_account,
+    get_campaign,
+    list_active_campaigns,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.stats_sync import sync_campaign_stats
@@ -91,29 +108,54 @@ async def _cabinet_title(session: AsyncSession, account_id: int, campaign: Campa
     return ad_account.title if ad_account is not None else "—"
 
 
+async def _post_sync_status(session: AsyncSession, account_id: int, campaign: Campaign) -> str:
+    """Статус кампании ПОСЛЕ синка — явным повторным запросом, не из кэша.
+
+    Не полагаемся на то, что `sync_campaign_stats` мутирует именно тот же
+    Python-объект `campaign` через identity-map сессии (было так, но это
+    деталь реализации ORM, а не контракт `sync_campaign_stats`/
+    `set_campaign_status`) — перечитываем строку явно. `None` (кампанию за это
+    время удалили) — статус, который был известен до синка, честный запасной
+    вариант, а не выдумка.
+    """
+    fresh = await get_campaign(session, account_id, campaign.id)
+    return fresh.status if fresh is not None else campaign.status
+
+
 async def collect_digest(
-    session: AsyncSession, account_id: int, settings: Settings
+    session: AsyncSession,
+    account_id: int,
+    settings: Settings,
+    *,
+    now: datetime | None = None,
 ) -> DigestReport:
     """Синхронизировать активные кампании тенанта и собрать по ним данные отчёта.
 
     Использует один и тот же `sync_campaign_stats`, что и часовой n8n-синк — не
-    отдельный путь опроса площадок. Кампании берутся ДО синка: тот же объект
-    `Campaign` мутируется синком в identity-map той же сессии (`db.repositories.
-    set_campaign_status`), поэтому `campaign.status` в строке отчёта уже
-    отражает результат сегодняшнего прогона, а не устаревшее значение.
+    отдельный путь опроса площадок. Набор кампаний фиксируется ДО синка
+    (`list_active_campaigns`) — кампания, которую синк перевёл в неактивный
+    статус (площадка ответила «заблокирована» → `stopped`), не пропадает из
+    отчёта, который как раз про неё. Сам статус строки при этом читается
+    ПОСЛЕ синка явным повторным запросом (`_post_sync_status`), а не берётся
+    из объекта, отобранного до синка.
+
+    `now` — точка отсчёта «сегодня» (по умолчанию текущее время); принимает
+    tz-aware `datetime` в любой таймзоне и переводит её в московскую дату —
+    шов для детерминированных тестов вблизи полуночи по Москве.
     """
     campaigns = await list_active_campaigns(session, account_id)
     sync_summary = await sync_campaign_stats(session, account_id, settings=settings)
 
     rows: list[DigestRow] = []
     for campaign in campaigns:
+        status = await _post_sync_status(session, account_id, campaign)
         agg = await aggregate_cabinet_stats(session, account_id, campaign.external_id or "")
         cabinet = await _cabinet_title(session, account_id, campaign)
         rows.append(
             DigestRow(
                 title=_campaign_title(campaign),
                 cabinet=cabinet,
-                status=campaign.status,
+                status=status,
                 shows=agg["shows"],
                 clicks=agg["clicks"],
                 spent=agg["spent"],
@@ -121,7 +163,8 @@ async def collect_digest(
                 stale=sync_summary.get(campaign.id) != "ok",
             )
         )
-    return DigestReport(rows=rows, day=datetime.now(MOSCOW_TZ).date())
+    moment = (now or datetime.now(UTC)).astimezone(MOSCOW_TZ)
+    return DigestReport(rows=rows, day=moment.date())
 
 
 def _format_money(value: float) -> str:
