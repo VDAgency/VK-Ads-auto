@@ -156,6 +156,41 @@ def launch_confirm_keyboard(brief_id: int, ad_account_id: int) -> InlineKeyboard
     )
 
 
+def relaunch_confirm_keyboard(brief_id: int) -> InlineKeyboardMarkup:
+    """409 `campaign_already_exists` в сценарии с креативом (задача 6): повторить
+    тем же креативом (`allow_relaunch=True`) либо отменить — материалы остаются
+    в FSM, повторного набора не требуется (`bot/handlers/creative.py`)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚀 Запустить ещё одну", callback_data=f"creative_relaunch:{brief_id}"
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="creative_cancel"),
+            ]
+        ]
+    )
+
+
+def relaunch_confirm_keyboard_no_creative(
+    brief_id: int, ad_account_id: int
+) -> InlineKeyboardMarkup:
+    """То же самое для сценария без креатива. Оба id — в `callback_data`: у этого
+    сценария нет FSM-состояния между показом карточки и повтором (тот же приём,
+    что в `launch_confirm_keyboard`)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚀 Запустить ещё одну",
+                    callback_data=f"nocre_relaunch:{brief_id}:{ad_account_id}",
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="nocre_cancel"),
+            ]
+        ]
+    )
+
+
 def code_keypad() -> InlineKeyboardMarkup:
     """Цифровая клавиатура для кода авторизации юзер-бота (/link_userbot).
 

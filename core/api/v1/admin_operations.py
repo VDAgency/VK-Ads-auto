@@ -120,7 +120,10 @@ async def admin_launch_brief(
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива из веб-админки (зеркало бот-эндпоинта)."""
     ad_account_id = data.ad_account_id if data is not None else None
-    return await launch_brief_response(session, brief_id, ad_account_id)
+    allow_relaunch = data.allow_relaunch if data is not None else False
+    return await launch_brief_response(
+        session, brief_id, ad_account_id, allow_relaunch=allow_relaunch
+    )
 
 
 class LaunchPreviewOut(BaseModel):

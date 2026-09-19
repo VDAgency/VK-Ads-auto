@@ -34,6 +34,8 @@ from db.repositories import (
     get_brief,
     get_cabinet,
     get_campaign,
+    list_campaigns_for_brief,
+    lock_brief_for_launch,
     set_campaign_status,
 )
 from integrations.adapter import PlatformAdapter
@@ -79,6 +81,13 @@ STUB_CHANNEL = "stub"
 # Статусы площадки, которые считаем модерацией (VK отдаёт `moderation`/`pending`).
 # Публичная константа: тем же признаком пользуется синк статистики (`services/stats_sync`).
 MODERATION_MARKERS = ("moder", "pending")
+
+# Статусы кампании, при которых повторный запуск по тому же брифу считается
+# опасным дублем (spec 2026-09-19-block1-remaining-gaps §F): кампания ещё не
+# завершена, деньги клиента либо уже тратятся, либо вот-вот начнут. `stopped` и
+# `failed` сюда не попадают намеренно — остановленную или неудавшуюся кампанию
+# запускать заново нужно без лишних подтверждений.
+ACTIVE_CAMPAIGN_STATUSES = ("prepared", "launched", "moderation")
 
 
 # Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» прошли боевой
@@ -158,6 +167,26 @@ class AdvertiserMismatchError(Exception):
         self.ad_account_id = ad_account_id
         self.ad_account_inn = ad_account_inn
         self.brief_tax_id = brief_tax_id
+
+
+class CampaignAlreadyExistsError(Exception):
+    """По этому брифу уже есть кампания в незавершённом статусе на боевом канале
+    (spec 2026-09-19-block1-remaining-gaps §F).
+
+    Защита от двойной траты бюджета клиента: без неё второй запуск по тому же
+    брифу (из другой вкладки, из бота параллельно с вебом или прямым вызовом API)
+    молча создавал бы вторую кампанию — раньше это перехватывал только веб-мастер
+    (commit 2969d33), а бот и прямой API оставались беззащитны. Кампании
+    заглушки-фолбэка (`_is_stub_campaign`) не считаются: иначе после честного
+    отказа боевого канала повторить запуск было бы вообще нельзя. Снимается
+    явным `allow_relaunch=True` — оператор мог решить запустить вторую кампанию
+    осознанно (веб уже даёт для этого отдельное подтверждённое действие).
+    """
+
+    def __init__(self, campaign_id: int, status: str) -> None:
+        super().__init__(f"active campaign {campaign_id} already exists with status {status!r}")
+        self.campaign_id = campaign_id
+        self.status = status
 
 
 class CampaignStopError(Exception):
@@ -313,6 +342,43 @@ def _check_ad_account_matches_brief(
     brief_digits = _digits_only(brief_tax_id)
     if account_digits and brief_digits and account_digits != brief_digits:
         raise AdvertiserMismatchError(ad_account.id, account_inn, brief_tax_id)
+
+
+def _is_stub_campaign(campaign: Campaign) -> bool:
+    """Кампания создана на заглушке (`StubAdapter`), а не на боевом канале.
+
+    Признак — внешний id: `StubAdapter.create_campaign` (`integrations/stub.py`)
+    всегда отдаёт `f"stub-campaign-{cabinet_id}"`, и дефолтная реализация
+    `PlatformAdapter.create_campaign_from_spec` (`integrations/adapter.py`), которой
+    заглушка пользуется, этот формат не меняет. Строится именно на этом, а не на
+    `Cabinet.channel == "stub"`: кабинет для брифов без клиента вообще не
+    персистится (`_resolve_cabinet` ниже, `client_id is None` — редкий, но
+    возможный край), и тогда `cabinet_id` был бы `None` независимо от того, боевой
+    канал был или заглушка — признак по кабинету в этом крае молчал бы неверно.
+    """
+    return campaign.external_id is not None and campaign.external_id.startswith("stub-campaign-")
+
+
+async def _check_no_active_campaign(
+    session: AsyncSession, account_id: int, brief_id: int, *, allow_relaunch: bool
+) -> None:
+    """Отказать повторному запуску по брифу, если по нему уже есть незавершённая
+    кампания на боевом канале (spec §F). `allow_relaunch=True` — оператор явно
+    подтвердил повторный запуск (веб уже это умеет, commit 2969d33; бот и прямой
+    API теперь спрашивают то же самое, см. `CampaignAlreadyExistsError`) — тогда
+    проверка снимается совсем.
+
+    Смотрим ВСЕ кампании брифа (`list_campaigns_for_brief`), не только последнюю:
+    честный фолбэк на заглушку (`launch_from_creative` ниже) оставляет по строке
+    на каждый запуск, и предыдущая попытка вполне может быть заглушкой, а более
+    ранняя — настоящей незавершённой кампанией.
+    """
+    if allow_relaunch:
+        return
+    campaigns = await list_campaigns_for_brief(session, account_id, brief_id)
+    for campaign in campaigns:
+        if campaign.status in ACTIVE_CAMPAIGN_STATUSES and not _is_stub_campaign(campaign):
+            raise CampaignAlreadyExistsError(campaign.id, campaign.status)
 
 
 def _is_unauthorized(exc: BaseException) -> bool:
@@ -637,6 +703,7 @@ async def launch_from_creative(
     router: ChannelRouter | None = None,
     ad_account_id: int | None = None,
     goal: str | None = None,
+    allow_relaunch: bool = False,
 ) -> LaunchOutcome:
     """Сохранить креатив, разложить бриф и создать кампанию. Коммит — на вызывающем.
 
@@ -657,14 +724,20 @@ async def launch_from_creative(
     сообщения, Senler); бриф с ещё не реализованной будущей целью по-прежнему
     отклоняется тем же `UnsupportedGoalError`, что и неизвестный параметр `goal`.
 
+    `allow_relaunch` — оператор явно подтвердил повторный запуск по брифу, у
+    которого уже есть незавершённая кампания на боевом канале (spec §F). Без
+    него второй такой запуск отклоняется `CampaignAlreadyExistsError` —
+    см. `_check_no_active_campaign`.
+
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
     (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
     ИЛИ неподдержанная цель самого брифа), ошибки выбора кабинета
     (`AccountNotFoundError`, `TokenUnavailableError`, `NoAdAccountError`,
-    `AmbiguousAdAccountError`) и сверки кабинета с брифом (`AdAccountClientMismatchError`,
-    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3) —
-    все они срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения
-    к площадке (см. `_check_ad_account_matches_brief`).
+    `AmbiguousAdAccountError`), сверки кабинета с брифом (`AdAccountClientMismatchError`,
+    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3) и
+    `CampaignAlreadyExistsError` (повтор без `allow_relaunch`, spec §F) — все они
+    срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения к площадке
+    (см. `_check_ad_account_matches_brief`, `_check_no_active_campaign`).
     """
     cfg = settings or get_settings()
     _validate_goal(goal)
@@ -687,6 +760,12 @@ async def launch_from_creative(
     # Сверка ДО любых побочных эффектов (Creative/Cabinet/кампания на площадке):
     # чужой кабинет или несовпавший ИНН обязаны прервать запуск начисто (spec §1.2-1.3).
     _check_ad_account_matches_brief(ad_account, brief.client_id, parsed.tax_id)
+
+    # Блокировка строки брифа (no-op на SQLite) держит проверку и создание кампании
+    # в одной транзакции: два одновременных запуска по одному брифу не должны оба
+    # проскочить проверку параллельно (spec §F, гонка двух запросов).
+    await lock_brief_for_launch(session, account_id, brief_id)
+    await _check_no_active_campaign(session, account_id, brief_id, allow_relaunch=allow_relaunch)
 
     try:
         spec = build_campaign_spec(parsed)

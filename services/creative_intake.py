@@ -52,13 +52,14 @@ async def launch_without_creative(
     settings: Settings | None = None,
     ad_account_id: int | None = None,
     goal: str | None = None,
+    allow_relaunch: bool = False,
 ) -> LaunchOutcome:
     """Запустить кампанию без креатива — для площадок, которым он не нужен.
 
     Продвижение готового поста, клипа или трека: объявлением служит сам объект, и
     просить у оператора картинку не за чем. Бросает `UnsupportedGoalError`, если
     площадка брифа креатив всё-таки требует, — молча запускать пустое объявление
-    там, где нужен макет, нельзя.
+    там, где нужен макет, нельзя. `allow_relaunch` — см. `launch_from_creative`.
     """
     return await launch_from_creative(
         session,
@@ -71,6 +72,7 @@ async def launch_without_creative(
         settings=settings,
         ad_account_id=ad_account_id,
         goal=goal,
+        allow_relaunch=allow_relaunch,
     )
 
 
@@ -124,11 +126,13 @@ async def intake_creative(
     settings: Settings | None = None,
     ad_account_id: int | None = None,
     goal: str | None = None,
+    allow_relaunch: bool = False,
 ) -> LaunchOutcome:
     """Декодировать, валидировать, сохранить креатив и подготовить/запустить кампанию.
 
     `ad_account_id` и `goal` — выбор оператора (рекламный кабинет и цель). Оба
     необязательны: без них поведение прежнее, поэтому старые вызовы не ломаются.
+    `allow_relaunch` — см. `services.launch_service.launch_from_creative`.
 
     `hashtags` — необязательная строка тегов оператора (`services/hashtags.py`):
     нормализуется и дописывается в конец текста объявления ДО существующей
@@ -187,4 +191,5 @@ async def intake_creative(
         settings=settings,
         ad_account_id=ad_account_id,
         goal=goal,
+        allow_relaunch=allow_relaunch,
     )

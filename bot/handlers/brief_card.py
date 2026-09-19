@@ -20,12 +20,14 @@ from bot.api_client import (
     BriefCard,
     BriefNotFound,
     CabinetChoiceRequired,
+    CampaignAlreadyExists,
     CoreUnavailable,
     CreativeRejected,
 )
 from bot.handlers.creative import (
     create_cabinet_or_report,
     offer_cabinet_creation,
+    offer_relaunch_without_creative,
     render_launch_confirmation,
 )
 from bot.keyboards import ad_account_pick_keyboard, brief_card_keyboard, launch_confirm_keyboard
@@ -89,10 +91,18 @@ async def _send_card(message: Message, card: BriefCard) -> None:
     )
 
 
-async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int | None) -> None:
-    """Запустить кампанию без креатива выбранным кабинетом и показать итог оператору."""
+async def _launch_and_report(
+    message: Message, brief_id: int, ad_account_id: int | None, *, allow_relaunch: bool = False
+) -> None:
+    """Запустить кампанию без креатива выбранным кабинетом и показать итог оператору.
+
+    `allow_relaunch` — оператор явно подтвердил повторный запуск после 409
+    `campaign_already_exists` (задача 6, кнопка «Запустить ещё одну»).
+    """
     try:
-        result = await api_client.launch_brief(brief_id, ad_account_id=ad_account_id)
+        result = await api_client.launch_brief(
+            brief_id, ad_account_id=ad_account_id, allow_relaunch=allow_relaunch
+        )
     except BriefNotFound:
         await message.answer(_NOT_FOUND)
     except CabinetChoiceRequired as exc:
@@ -100,6 +110,13 @@ async def _launch_and_report(message: Message, brief_id: int, ad_account_id: int
         # такое возможно, если состав кабинетов изменился прямо во время запуска.
         text = _NO_CABINETS if exc.reason == "no_ad_account" else _ASK_CABINET
         await message.answer(text)
+    except CampaignAlreadyExists:
+        # `ad_account_id` здесь всегда известен (кабинет уже выбран на карточке
+        # подтверждения) — нужен для клавиатуры повтора (`nocre_relaunch:{id}:{id}`).
+        if ad_account_id is not None:
+            await offer_relaunch_without_creative(message, brief_id, ad_account_id)
+        else:
+            await message.answer(_UNAVAILABLE)
     except CreativeRejected as exc:
         # Тот же вид отказа, что в сценарии с креативом (`bot/handlers/creative.py:
         # send_creative`, ревью операторского опыта §2.3) — единый стиль тревожных
@@ -301,6 +318,17 @@ async def confirm_launch_without_creative(callback: CallbackQuery) -> None:
     brief_id, ad_account_id = int(parts[1]), int(parts[2])
     if isinstance(callback.message, Message):
         await _launch_and_report(callback.message, brief_id, ad_account_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("nocre_relaunch:"))
+async def relaunch_without_creative(callback: CallbackQuery) -> None:
+    """Оператор подтвердил «Запустить ещё одну» после 409 `campaign_already_exists`
+    (задача 6) — повтор тем же кабинетом, с `allow_relaunch=True`."""
+    parts = (callback.data or "").split(":")
+    brief_id, ad_account_id = int(parts[1]), int(parts[2])
+    if isinstance(callback.message, Message):
+        await _launch_and_report(callback.message, brief_id, ad_account_id, allow_relaunch=True)
     await callback.answer()
 
 

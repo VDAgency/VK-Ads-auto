@@ -249,11 +249,20 @@ export function LaunchWizard({
             title={title}
             body={body}
             hashtags={hashtags}
+            allowRelaunch={confirmedRelaunch}
             onFlash={onFlash}
             onChangeCabinet={() => setCurrentStep("cabinet")}
             onHashtagsError={(message) => {
               setHashtagsError(message);
               setCurrentStep("creative");
+            }}
+            onCampaignAlreadyExists={() => {
+              // Кто-то успел запустить кампанию по этому брифу, пока мы дошли до
+              // подтверждения (гонка вкладок либо повтор без флага) — сбрасываем
+              // подтверждение и обновляем карточку: свежий `campaign_status`
+              // сам покажет экран «по этому брифу уже есть кампания» ниже.
+              setConfirmedRelaunch(false);
+              void refreshCard();
             }}
             onLaunched={(outcome) => {
               setJustLaunched(outcome);

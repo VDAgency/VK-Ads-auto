@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 from html import escape as _escape
 from typing import Any
 
@@ -27,6 +28,7 @@ from bot.api_client import (
     AgencyCabinetRejected,
     BriefCard,
     BriefNotFound,
+    CampaignAlreadyExists,
     CoreUnavailable,
     CreativeRejected,
     HashtagRejected,
@@ -39,6 +41,8 @@ from bot.keyboards import (
     hashtags_choice_keyboard,
     hashtags_skip_keyboard,
     launch_goal_keyboard,
+    relaunch_confirm_keyboard,
+    relaunch_confirm_keyboard_no_creative,
 )
 from bot.states import LaunchCampaign, UploadCreative
 
@@ -93,6 +97,56 @@ GOALS: list[tuple[str, str, bool]] = [
 # (Т3, spec 2026-08-25-cabinet-client-binding-design §2: «цель по-русски»). Считаем
 # из launch_goals(), а не дублируем текстом, чтобы подписи не могли разойтись.
 GOAL_LABELS: dict[str, str] = {goal.code: goal.title for goal in launch_goals()}
+
+# Статус кампании (`Campaign.status`, задача 6) по-русски, женский род («кампания
+# подготовлена») — отдельно от `_STATUS_RU` статусов брифа в
+# `bot/handlers/brief_card.py` и от `_STATUS_HINT` кабинета в
+# `bot/handlers/stats.py` (мужской род, «кабинет подготовлен»): разное
+# согласование, общий словарь смешал бы формулировки.
+_CAMPAIGN_STATUS_RU = {
+    "prepared": "подготовлена",
+    "launched": "запущена",
+    "moderation": "на модерации",
+    "stopped": "остановлена",
+    "failed": "ошибка запуска",
+}
+
+
+async def _relaunch_notice_text(brief_id: int) -> str:
+    """Текст уведомления 409 `campaign_already_exists` (задача 6) со статусом
+    существующей кампании — берём из свежей карточки брифа (`card.campaign_status`),
+    409-деталь ядра его не несёт (строковый код, как у прочих отказов запуска).
+    """
+    status = None
+    with contextlib.suppress(BriefNotFound, CoreUnavailable):
+        card = await api_client.get_brief(brief_id)
+        status = card.campaign_status
+    status_ru = _CAMPAIGN_STATUS_RU.get(status or "", status) if status else None
+    suffix = f" (статус: {status_ru})" if status_ru else ""
+    return f"⚠️ По этому брифу уже есть кампания{suffix}. Запустить ещё одну?"
+
+
+async def _offer_relaunch(message: Message, brief_id: int) -> None:
+    """409 `campaign_already_exists` в сценарии с креативом: показать статус
+    существующей кампании и явно спросить, запускать ли ещё одну."""
+    await message.answer(
+        await _relaunch_notice_text(brief_id), reply_markup=relaunch_confirm_keyboard(brief_id)
+    )
+
+
+async def offer_relaunch_without_creative(
+    message: Message, brief_id: int, ad_account_id: int
+) -> None:
+    """То же самое, но для сценария без креатива (`bot/handlers/brief_card.py`):
+    нет FSM, оба id уходят в `callback_data` клавиатуры, поэтому используется
+    отдельная клавиатура (`relaunch_confirm_keyboard_no_creative`). Публичная —
+    вызывается из другого модуля хендлеров, как и
+    `create_cabinet_or_report`/`offer_cabinet_creation`.
+    """
+    await message.answer(
+        await _relaunch_notice_text(brief_id),
+        reply_markup=relaunch_confirm_keyboard_no_creative(brief_id, ad_account_id),
+    )
 
 
 # --- C1: предложение завести клиенту кабинет автоматически ---------------------
@@ -796,20 +850,21 @@ async def cancel_creative(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "creative_send")
-async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Скачать медиа из Telegram, отправить в ядро → подготовка/запуск кампании."""
-    data = await state.get_data()
-    if not isinstance(callback.message, Message):
-        await callback.answer()
-        return
-    message = callback.message
+async def _upload_creative_from_state(
+    message: Message, state: FSMContext, bot: Bot, *, allow_relaunch: bool
+) -> None:
+    """Скачать медиа из Telegram, отправить в ядро → подготовка/запуск кампании.
 
+    Общий хвост для первой отправки (`send_creative`) и для повтора после 409
+    `campaign_already_exists` (`relaunch_creative`, задача 6) — во втором случае
+    состояние НЕ сбрасывается на 409, поэтому те же медиа/описание/хэштеги можно
+    отправить ещё раз с `allow_relaunch=True`, не прося оператора набрать их снова.
+    """
+    data = await state.get_data()
     buffer = await bot.download(data["file_id"])
     if buffer is None:
         await state.clear()
         await message.answer(_TOO_BIG)
-        await callback.answer()
         return
     media_b64 = base64.b64encode(buffer.read()).decode("ascii")
 
@@ -826,6 +881,7 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
             ad_account_id=data.get("ad_account_id"),
             goal=data.get("goal"),
             hashtags=data.get("hashtags"),
+            allow_relaunch=allow_relaunch,
         )
     except BriefNotFound:
         await state.clear()
@@ -835,6 +891,10 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
         # оператора именно к вводу хэштегов (Task 5, ambiguities resolved).
         await state.set_state(UploadCreative.waiting_hashtags)
         await message.answer(f"⚠️ {exc.reason}", reply_markup=hashtags_skip_keyboard())
+    except CampaignAlreadyExists:
+        # Состояние НЕ сбрасываем: тот же креатив/описание понадобится для
+        # повтора («Запустить ещё одну» → `relaunch_creative` ниже).
+        await _offer_relaunch(message, brief_id)
     except CreativeRejected as exc:
         await state.clear()
         await message.answer(f"⚠️ {exc.reason}")
@@ -844,4 +904,20 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
     else:
         await state.clear()
         await message.answer(result.message, reply_markup=brief_card_keyboard(brief_id))
+
+
+@router.callback_query(F.data == "creative_send")
+async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Первая отправка креатива — без подтверждённого повторного запуска."""
+    if isinstance(callback.message, Message):
+        await _upload_creative_from_state(callback.message, state, bot, allow_relaunch=False)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("creative_relaunch:"))
+async def relaunch_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Оператор подтвердил «Запустить ещё одну» после 409 `campaign_already_exists`
+    (задача 6) — повтор тем же креативом/описанием из FSM, с `allow_relaunch=True`."""
+    if isinstance(callback.message, Message):
+        await _upload_creative_from_state(callback.message, state, bot, allow_relaunch=True)
     await callback.answer()

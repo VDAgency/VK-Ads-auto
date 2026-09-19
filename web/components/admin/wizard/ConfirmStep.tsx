@@ -12,6 +12,7 @@ import { useState } from "react";
 import {
   adminFetch,
   hashtagErrorMessage,
+  isCampaignAlreadyExists,
   launchErrorMessage,
   type AdAccount,
   type Flash,
@@ -60,9 +61,11 @@ export function ConfirmStep({
   title,
   body,
   hashtags,
+  allowRelaunch,
   onFlash,
   onChangeCabinet,
   onHashtagsError,
+  onCampaignAlreadyExists,
   onLaunched,
 }: {
   brief_id: number;
@@ -74,6 +77,11 @@ export function ConfirmStep({
   title: string;
   body: string;
   hashtags: string;
+  /** Оператор явно подтвердил «запустить ещё одну» на экране предупреждения
+   * (`LaunchWizard.tsx`, задача 6) — уходит в запрос как `allow_relaunch`. Обычный
+   * первый запуск шлёт `false`, ядро само отказывает без этого флага (409
+   * `campaign_already_exists`), если по брифу уже есть незавершённая кампания. */
+  allowRelaunch: boolean;
   onFlash: (flash: Flash) => void;
   onChangeCabinet: () => void;
   /** Ядро отказало именно по хэштегам (422 `hashtags_*`, задача 5) — родитель
@@ -81,6 +89,12 @@ export function ConfirmStep({
    * не общей полосой результата: там текст был бы оторван от поля, которое
    * нужно поправить. */
   onHashtagsError: (message: string) => void;
+  /** 409 `campaign_already_exists` (задача 6): кто-то успел запустить кампанию
+   * по этому брифу, пока оператор дошёл до подтверждения (гонка двух вкладок
+   * либо повтор без флага). Родитель возвращает на экран «по этому брифу уже
+   * есть кампания» — то же уведомление, что показывается при открытии такого
+   * брифа, а не общая полоса ошибки. */
+  onCampaignAlreadyExists: () => void;
   /** Итог запуска целиком, не только текст — родитель прячет кнопку «Запустить»
    * насовсем после успеха (не «серая», а её нет), а не просто блокирует её на
    * время запроса (найденный баг: повторное нажатие после успеха создавало
@@ -124,16 +138,21 @@ export function ConfirmStep({
             hashtags,
             ad_account_id: account.id,
             goal: goalCode,
+            allow_relaunch: allowRelaunch,
           }),
         });
       } else {
         result = await adminFetch<LaunchOutcome>(`/briefs/${brief_id}/launch`, {
           method: "POST",
-          body: JSON.stringify({ ad_account_id: account.id }),
+          body: JSON.stringify({ ad_account_id: account.id, allow_relaunch: allowRelaunch }),
         });
       }
       onLaunched(result);
     } catch (error) {
+      if (isCampaignAlreadyExists(error)) {
+        onCampaignAlreadyExists();
+        return;
+      }
       const hashtagMessage = hashtagErrorMessage(error);
       if (hashtagMessage) {
         onHashtagsError(hashtagMessage);

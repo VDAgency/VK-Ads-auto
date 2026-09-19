@@ -78,6 +78,16 @@ class CabinetChoiceRequired(RuntimeError):
         self.reason = reason
 
 
+class CampaignAlreadyExists(RuntimeError):
+    """По брифу уже есть незавершённая кампания на боевом канале (409
+    `campaign_already_exists`, задача 6) — повторный запуск отклонён.
+
+    Статус существующей кампании бот берёт из карточки брифа
+    (`BriefCard.campaign_status`, `api_client.get_brief`), а не из этой ошибки:
+    ядро не дублирует данные в 409-детали (строковый код, как у прочих отказов).
+    """
+
+
 class CampaignNotFound(RuntimeError):
     """Ядро не нашло кампанию (404) — показать оператору «кампания не найдена»."""
 
@@ -456,16 +466,20 @@ async def upload_creative(
     ad_account_id: int | None = None,
     goal: str | None = None,
     hashtags: str | None = None,
+    allow_relaunch: bool = False,
 ) -> CreativeResult:
     """`POST /briefs/{id}/creative`: отправить креатив (триггер запуска РК).
 
     `ad_account_id`/`goal` — выбор оператора, сделанный до загрузки материалов.
     `hashtags` — необязательная строка хэштегов оператора (Task 5); нормализацию
     и дописывание к тексту делает только ядро (`services/hashtags.py`), бот
-    отправляет строку как есть.
+    отправляет строку как есть. `allow_relaunch` — оператор явно подтвердил
+    повторный запуск по брифу, у которого уже есть кампания (задача 6).
 
     404 → `BriefNotFound`; 413 → `CreativeRejected`; 422 `hashtags_*` →
-    `HashtagRejected`, прочие 422 → `CreativeRejected`; сеть/5xx → `CoreUnavailable`.
+    `HashtagRejected`, прочие 422 → `CreativeRejected`; 409 `campaign_already_exists`
+    → `CampaignAlreadyExists`, прочие 409 → `CreativeRejected`; сеть/5xx →
+    `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/creative"
     payload: dict[str, Any] = {
@@ -478,6 +492,7 @@ async def upload_creative(
         "ad_account_id": ad_account_id,
         "goal": goal,
         "hashtags": hashtags,
+        "allow_relaunch": allow_relaunch,
     }
     try:
         async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
@@ -497,9 +512,12 @@ async def upload_creative(
         raise CreativeRejected(_creative_reject_reason(detail))
     if response.status_code == 409:
         # Кабинет выбран, но не годится: токен недоступен либо не соответствует брифу.
+        # Либо по брифу уже есть кампания (задача 6) — отдельный, не «кабинетный» отказ.
         detail_409 = ""
         with contextlib.suppress(ValueError):
             detail_409 = str(response.json().get("detail", ""))
+        if detail_409 == "campaign_already_exists":
+            raise CampaignAlreadyExists()
         raise CreativeRejected(_cabinet_reject_reason(detail_409))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")
@@ -511,22 +529,29 @@ async def upload_creative(
     )
 
 
-async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+async def launch_brief(
+    brief_id: int, ad_account_id: int | None = None, *, allow_relaunch: bool = False
+) -> CreativeResult:
     """`POST /briefs/{id}/launch`: запустить кампанию без креатива.
 
     Для площадок, где объявлением служит сам объект (пост, клип, трек).
     `ad_account_id` — кабинет, который оператор уже выбрал (см.
     `bot/handlers/brief_card.py`); без него ядро пробует кабинет по умолчанию.
+    `allow_relaunch` — оператор явно подтвердил повторный запуск (задача 6).
 
     404 → `BriefNotFound`; 422 → `CreativeRejected`; 409 → `CabinetChoiceRequired`
-    (ядро не смогло само выбрать кабинет — кабинетов нет либо их несколько) либо
-    `CreativeRejected` (кабинет выбран, но не годится — токен, привязка к клиенту
-    или ИНН конечного рекламодателя); сеть/5xx → `CoreUnavailable`.
+    (ядро не смогло само выбрать кабинет — кабинетов нет либо их несколько),
+    `CampaignAlreadyExists` (по брифу уже есть кампания) либо `CreativeRejected`
+    (кабинет выбран, но не годится — токен, привязка к клиенту или ИНН конечного
+    рекламодателя); сеть/5xx → `CoreUnavailable`.
     """
     url = f"{_base_url()}/api/v1/briefs/{brief_id}/launch"
     try:
         async with httpx.AsyncClient(timeout=_LAUNCH_TIMEOUT) as client:
-            response = await client.post(url, json={"ad_account_id": ad_account_id})
+            response = await client.post(
+                url,
+                json={"ad_account_id": ad_account_id, "allow_relaunch": allow_relaunch},
+            )
     except (httpx.HTTPError, httpx.TransportError) as exc:
         raise CoreUnavailable(str(exc)) from exc
     if response.status_code == 404:
@@ -542,6 +567,8 @@ async def launch_brief(brief_id: int, ad_account_id: int | None = None) -> Creat
             detail = str(response.json().get("detail", ""))
         if detail in ("no_ad_account", "ambiguous_ad_account"):
             raise CabinetChoiceRequired(detail)
+        if detail == "campaign_already_exists":
+            raise CampaignAlreadyExists()
         raise CreativeRejected(_cabinet_reject_reason(detail))
     if response.status_code >= 500:
         raise CoreUnavailable(f"core {response.status_code}")

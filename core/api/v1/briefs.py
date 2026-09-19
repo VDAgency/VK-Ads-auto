@@ -32,6 +32,7 @@ from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
     BriefNotFoundError,
+    CampaignAlreadyExistsError,
     SenlerNotConnectedError,
     UnsupportedGoalError,
 )
@@ -141,9 +142,14 @@ class LaunchIn(BaseModel):
     Поле необязательное; без него (тело `{}` или отсутствует вовсе — так бот
     ходил сюда раньше) ядро само берёт кабинет по умолчанию — единственный
     активный, а при нуле/нескольких кабинетах отвечает 409.
+
+    `allow_relaunch` — оператор явно подтвердил повторный запуск по брифу, у
+    которого уже есть незавершённая кампания на боевом канале (задача 6, spec §F).
+    Без него такой повтор отклоняется 409 `campaign_already_exists`.
     """
 
     ad_account_id: int | None = None
+    allow_relaunch: bool = False
 
 
 class CreativeIn(BaseModel):
@@ -166,6 +172,8 @@ class CreativeIn(BaseModel):
     # активный (иначе честный 409), цель — из раскладки брифа.
     ad_account_id: int | None = None
     goal: str | None = None
+    # См. `LaunchIn.allow_relaunch` — то же поле, тот же смысл, для пути с креативом.
+    allow_relaunch: bool = False
 
 
 class CreativeLaunchOut(BaseModel):
@@ -284,7 +292,11 @@ async def edit_brief(
 
 
 async def launch_brief_response(
-    session: AsyncSession, brief_id: int, ad_account_id: int | None
+    session: AsyncSession,
+    brief_id: int,
+    ad_account_id: int | None,
+    *,
+    allow_relaunch: bool = False,
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива — общая часть для бота и веб-админки.
 
@@ -294,11 +306,16 @@ async def launch_brief_response(
 
     `ad_account_id` — кабинет, выбранный оператором. Не передан — ядро берёт
     кабинет по умолчанию и, если это невозможно (кабинетов нет или их
-    несколько), отвечает 409 вместо угадывания.
+    несколько), отвечает 409 вместо угадывания. `allow_relaunch` — см.
+    `LaunchIn.allow_relaunch`.
     """
     try:
         outcome = await launch_without_creative(
-            session, DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id
+            session,
+            DEFAULT_ACCOUNT_ID,
+            brief_id,
+            ad_account_id=ad_account_id,
+            allow_relaunch=allow_relaunch,
         )
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
@@ -312,6 +329,8 @@ async def launch_brief_response(
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
         raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
@@ -336,7 +355,10 @@ async def launch_brief(
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива — для площадок, которым он не нужен."""
     ad_account_id = data.ad_account_id if data is not None else None
-    return await launch_brief_response(session, brief_id, ad_account_id)
+    allow_relaunch = data.allow_relaunch if data is not None else False
+    return await launch_brief_response(
+        session, brief_id, ad_account_id, allow_relaunch=allow_relaunch
+    )
 
 
 @router.post("/{brief_id}/creative", status_code=201)
@@ -360,6 +382,7 @@ async def upload_creative(
             hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
+            allow_relaunch=data.allow_relaunch,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
@@ -377,6 +400,8 @@ async def upload_creative(
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
         raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

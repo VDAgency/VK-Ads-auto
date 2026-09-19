@@ -350,7 +350,9 @@ def test_launch_without_creative_end_to_end_waits_for_confirmation(
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
         return [_account(id=3, client_id=42, client_name="Иван Петров")]
 
-    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> Any:
+    async def fake_launch(
+        brief_id: int, ad_account_id: int | None = None, *, allow_relaunch: bool = False
+    ) -> Any:
         launched["brief_id"] = brief_id
         launched["ad_account_id"] = ad_account_id
         return SimpleNamespace(campaign_status="prepared", campaign_id=1, message="🚀 подготовлена")

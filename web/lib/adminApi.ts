@@ -290,6 +290,16 @@ export const LAUNCH_REJECT_ERRORS: Record<string, string> = {
   brief_not_found: "Бриф не найден.",
 };
 
+/** 409-код повторного запуска по брифу в ядре (задача 6, spec §F) — распознаётся
+ * отдельно от `CABINET_REJECT_ERRORS`: вместо общей полосы ошибки мастер
+ * возвращает оператора на уведомление «по этому брифу уже есть кампания»
+ * (`LaunchWizard.tsx`), а не показывает голый текст отказа. */
+export function isCampaignAlreadyExists(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.detail === "campaign_already_exists"
+  );
+}
+
 /** Известные отказы `POST /ad-accounts/agency-cabinets` — тот же текст, что
  * бот показывает в `_agency_cabinet_reject_reason` (bot/api_client.py), без
  * упоминания команды `/cabinets`: в вебе альтернатива — «выбрать кабинет вручную». */

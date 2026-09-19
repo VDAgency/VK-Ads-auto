@@ -42,7 +42,11 @@ from services.delivery.factory import build_delivery_router
 from services.hashtags import HashtagError
 from services.invite_tracking import InviteView, list_pending, list_recent
 from services.invites import create_invite
-from services.launch_service import BriefNotFoundError, UnsupportedGoalError
+from services.launch_service import (
+    BriefNotFoundError,
+    CampaignAlreadyExistsError,
+    UnsupportedGoalError,
+)
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -334,6 +338,7 @@ async def upload_creative(
             hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
+            allow_relaunch=data.allow_relaunch,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
@@ -345,6 +350,8 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
