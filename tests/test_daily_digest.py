@@ -5,11 +5,13 @@
 подменяют сам синк («замокать синк... так же, как в существующих тестах
 синка», брифинг задачи) — monkeypatch `services.daily_digest.
 sync_campaign_stats` — чтобы не тянуть в каждый тест ещё и живой выбор
-адаптера/канала, уже покрытый `test_stats_sync.py`. Один тест (ревью, фикс-
-раунд 1) намеренно идёт РЕАЛЬНЫМ `sync_campaign_stats` с фейковым
-`PlatformAdapter` (тот же приём, что и в `test_stats_sync.py`) — проверяет,
-что статус кампании в отчёте — результат сегодняшнего синка, а не значение,
-случайно унаследованное из identity-map сессии.
+адаптера/канала, уже покрытый `test_stats_sync.py`. Один сквозной тест (ревью,
+фикс-раунд 2) намеренно идёт РЕАЛЬНЫМ `list_active_campaigns` + РЕАЛЬНЫМ
+`sync_campaign_stats`, подменён только `PlatformAdapter` (тот же приём, что и
+в `test_stats_sync.py`) — закрепляет наблюдаемое поведение «статус и метрики
+строки — свежие, пост-синковые» как регресс-страховку на будущее (см. его
+собственный докстринг и докстринг `services/daily_digest.py` про зависимость
+от identity-map сессии).
 """
 
 from __future__ import annotations
@@ -27,7 +29,6 @@ from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, AdAccount, Brief, Cabinet, Campaign, Client, Stat
-from db.repositories import list_active_campaigns
 from integrations.adapter import PlatformAdapter
 from pydantic import SecretStr
 from services.ad_accounts import add_account
@@ -314,13 +315,13 @@ def test_collect_digest_empty_when_no_active_campaigns(monkeypatch: pytest.Monke
     assert report.rows == []
 
 
-# --- ревью, фикс-раунд 1: статус строки — результат РЕАЛЬНОГО сегодняшнего --
-# синка, а не значение, унаследованное из identity-map сессии ----------------
+# --- сквозной тест (ревью, фикс-раунд 2): реальный список кампаний + ---------
+# реальный синк, подменён только адаптер площадки ----------------------------
 
 
 class _StatusFlipAdapter(PlatformAdapter):
     """Настоящий путь `sync_campaign_stats` (не подмена самого синка): площадка
-    отвечает `blocked` посреди прогона — кампания обязана стать `stopped`."""
+    отвечает `moderation` и новыми метриками посреди прогона."""
 
     def __init__(self, access_token: SecretStr, **_: object) -> None:
         self.token = access_token.get_secret_value()
@@ -344,48 +345,28 @@ class _StatusFlipAdapter(PlatformAdapter):
         return {"shows": 500.0, "clicks": 25.0, "spent": 300.0, "goals": 8.0}
 
     async def get_status(self, campaign_id: str) -> str:
-        return "blocked"
+        return "moderation"
 
 
-def _detached_copy(campaign: Campaign) -> Campaign:
-    """Транзиентная копия строки — НЕ добавлена в сессию, вне identity-map.
-
-    Инструмент проверки: если бы `collect_digest` читал статус напрямую из
-    объекта `Campaign`, отобранного до синка (старое поведение, негласно
-    полагавшееся на то, что `sync_campaign_stats` мутирует именно ЭТОТ же
-    Python-объект через identity-map сессии), — он увидел бы статус ЭТОЙ
-    копии, замороженный на момент отбора, и не заметил бы правку синка,
-    выполненную над настоящим объектом сессии.
-    """
-    return Campaign(
-        id=campaign.id,
-        account_id=campaign.account_id,
-        brief_id=campaign.brief_id,
-        client_id=campaign.client_id,
-        cabinet_id=campaign.cabinet_id,
-        ad_account_id=campaign.ad_account_id,
-        status=campaign.status,
-        objective=campaign.objective,
-        spec_json=campaign.spec_json,
-        external_id=campaign.external_id,
-    )
-
-
-def test_collect_digest_reflects_status_changed_by_real_sync(
+def test_collect_digest_reflects_status_and_metrics_from_real_sync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`sync_campaign_stats` НЕ подменён — идёт настоящим путём выбора адаптера
-    (как в `test_stats_sync.py`), площадка отвечает `blocked` → кампания
-    становится `stopped` прямо во время синка. Строка отчёта обязана показать
-    `stopped`, а не `launched`, с которым кампания была ДО прогона.
+    """Сквозной тест: `db.repositories.list_active_campaigns` и
+    `services.stats_sync.sync_campaign_stats` — НАСТОЯЩИЕ, не подменены;
+    подменён только адаптер площадки (`launch_service.VkApiAdapter`), как в
+    `tests/test_stats_sync.py`. Кампания была `launched`, площадка отвечает
+    `moderation` и новыми метриками — строка отчёта обязана показать И
+    посвежевший статус, И посвежевшие метрики.
 
-    `list_active_campaigns` здесь подменена на версию, отдающую ТРАНЗИЕНТНЫЕ
-    копии строк (`_detached_copy`) — вне identity-map сессии. Это делает тест
-    настоящим регрессионным: реализация, которая просто читает
-    `campaign.status` у объекта, отобранного до синка (старое поведение),
-    здесь провалится (увидит замороженный `launched`), а `collect_digest`
-    обязан перечитать статус явным запросом (`_post_sync_status` /
-    `db.repositories.get_campaign`), чтобы увидеть настоящий `stopped`.
+    Важно: этот тест ПРОЙДЁТ и на реализации ДО фикс-раунда 2 (когда
+    `collect_digest` читал `campaign.status` напрямую у объекта, отобранного
+    до синка) — SQLAlchemy identity-map и так мутирует именно этот объект,
+    пока `sync_campaign_stats` работает в ТОЙ ЖЕ сессии (см. докстринг модуля
+    `services/daily_digest.py`). Смысл теста не в том, чтобы отличить старую
+    реализацию от новой, а в том, чтобы ЗАФИКСИРОВАТЬ это поведение на
+    будущее: если `sync_campaign_stats` когда-нибудь станет ходить в отдельную
+    сессию/транзакцию, этот тест — единственная защита, которая заметит, что
+    статус и метрики в сводке перестали обновляться.
     """
 
     async def identity(token: str, **_: object) -> VkIdentity:
@@ -394,18 +375,9 @@ def test_collect_digest_reflects_status_changed_by_real_sync(
     async def balance(token: str, **_: object) -> str | None:
         return None
 
-    async def detached_list_active_campaigns(
-        session: AsyncSession, account_id: int
-    ) -> list[Campaign]:
-        campaigns = await list_active_campaigns(session, account_id)
-        return [_detached_copy(c) for c in campaigns]
-
     monkeypatch.setattr(ad_accounts, "fetch_identity", identity)
     monkeypatch.setattr(ad_accounts, "fetch_balance", balance)
     monkeypatch.setattr(launch_service, "VkApiAdapter", _StatusFlipAdapter)
-    monkeypatch.setattr(
-        daily_digest_module, "list_active_campaigns", detached_list_active_campaigns
-    )
 
     async def scenario(session: AsyncSession) -> DigestReport:
         cfg = _live_settings()
@@ -421,13 +393,20 @@ def test_collect_digest_reflects_status_changed_by_real_sync(
         await session.commit()
         ad_account = await add_account(session, 1, TOKEN, settings=cfg)
         await session.commit()
-        session.add(_campaign(1, external_id="vk-1", cabinet_id=1, ad_account_id=ad_account.id))
+        session.add(
+            _campaign(
+                1, status="launched", external_id="vk-1", cabinet_id=1, ad_account_id=ad_account.id
+            )
+        )
         await session.commit()
         return await collect_digest(session, 1, cfg)
 
     report = asyncio.run(_with_db(scenario))
     assert len(report.rows) == 1
     row = report.rows[0]
-    assert row.status == "stopped"  # не "launched", с которым кампания была до синка
+    assert row.status == "moderation"  # не "launched", с которым кампания была до синка
     assert row.shows == 500.0
+    assert row.clicks == 25.0
+    assert row.spent == 300.0
+    assert row.results == 8.0
     assert row.stale is False
