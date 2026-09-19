@@ -17,6 +17,11 @@ from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from services.ad_accounts import AmbiguousAdAccountError, NoAdAccountError
 from services.admin_auth import generate_admin_session
+from services.launch_service import (
+    AdAccountClientMismatchError,
+    AdvertiserMismatchError,
+    CampaignAlreadyExistsError,
+)
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -311,6 +316,72 @@ def test_admin_creative_ambiguous_ad_account_is_409(monkeypatch: pytest.MonkeyPa
     code, body = asyncio.run(_with_admin(scenario))
     assert code == 409
     assert body["detail"] == "ambiguous_ad_account"
+
+
+def test_admin_creative_ad_account_client_mismatch_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кабинет закреплён за другим клиентом — 409, а не необработанное падение
+    (пробел, найденный при ревью задачи 6: этот except-chain не зеркалил
+    `core/api/v1/briefs.py`, хотя веб-админка ходит именно сюда)."""
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise AdAccountClientMismatchError(1, 2, 3)
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo"},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 409
+    assert body["detail"] == "ad_account_client_mismatch"
+
+
+def test_admin_creative_advertiser_mismatch_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ИНН конечного рекламодателя кабинета разошёлся с брифом — 409, та же находка."""
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise AdvertiserMismatchError(1, "7700000000", "7700000001")
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo"},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 409
+    assert body["detail"] == "advertiser_mismatch"
+
+
+def test_admin_creative_campaign_already_exists_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """По брифу уже есть кампания (задача 6) — 409 `campaign_already_exists`,
+    а не необработанное падение; `allow_relaunch` из тела доезжает до сервиса."""
+    captured: dict[str, Any] = {}
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise CampaignAlreadyExistsError(1, "launched")
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo", "allow_relaunch": True},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 409
+    assert body["detail"] == "campaign_already_exists"
+    assert captured["allow_relaunch"] is True
 
 
 def test_admin_briefs_all_includes_brief_without_invite() -> None:

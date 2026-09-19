@@ -92,9 +92,19 @@ async def _send_card(message: Message, card: BriefCard) -> None:
 
 
 async def _launch_and_report(
-    message: Message, brief_id: int, ad_account_id: int | None, *, allow_relaunch: bool = False
+    message: Message, brief_id: int, ad_account_id: int, *, allow_relaunch: bool = False
 ) -> None:
     """Запустить кампанию без креатива выбранным кабинетом и показать итог оператору.
+
+    `ad_account_id` — не `int | None`, хотя `api_client.launch_brief` формально
+    допускает `None`: у этой функции ровно два вызывающих
+    (`confirm_launch_without_creative`/`relaunch_without_creative` ниже), и оба
+    разбирают его из `callback_data` (`nocre_confirm:{id}:{id}`/
+    `nocre_relaunch:{id}:{id}`) как обязательный `int` — карточка подтверждения,
+    с которой уходят эти кнопки, без выбранного кабинета вообще не показывается
+    (см. `_show_launch_confirmation`). `CampaignAlreadyExists` ниже полагается
+    именно на это — клавиатуре повтора (`offer_relaunch_without_creative`) кабинет
+    нужен всегда.
 
     `allow_relaunch` — оператор явно подтвердил повторный запуск после 409
     `campaign_already_exists` (задача 6, кнопка «Запустить ещё одну»).
@@ -111,12 +121,7 @@ async def _launch_and_report(
         text = _NO_CABINETS if exc.reason == "no_ad_account" else _ASK_CABINET
         await message.answer(text)
     except CampaignAlreadyExists:
-        # `ad_account_id` здесь всегда известен (кабинет уже выбран на карточке
-        # подтверждения) — нужен для клавиатуры повтора (`nocre_relaunch:{id}:{id}`).
-        if ad_account_id is not None:
-            await offer_relaunch_without_creative(message, brief_id, ad_account_id)
-        else:
-            await message.answer(_UNAVAILABLE)
+        await offer_relaunch_without_creative(message, brief_id, ad_account_id)
     except CreativeRejected as exc:
         # Тот же вид отказа, что в сценарии с креативом (`bot/handlers/creative.py:
         # send_creative`, ревью операторского опыта §2.3) — единый стиль тревожных

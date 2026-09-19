@@ -763,7 +763,9 @@ async def launch_from_creative(
 
     # Блокировка строки брифа (no-op на SQLite) держит проверку и создание кампании
     # в одной транзакции: два одновременных запуска по одному брифу не должны оба
-    # проскочить проверку параллельно (spec §F, гонка двух запросов).
+    # проскочить проверку параллельно (spec §F, гонка двух запросов). Возвращаемая
+    # строка намеренно не используется — сам факт блокировки и есть эффект, `brief`
+    # выше уже разобран для запуска.
     await lock_brief_for_launch(session, account_id, brief_id)
     await _check_no_active_campaign(session, account_id, brief_id, allow_relaunch=allow_relaunch)
 

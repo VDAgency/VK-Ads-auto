@@ -43,6 +43,8 @@ from services.hashtags import HashtagError
 from services.invite_tracking import InviteView, list_pending, list_recent
 from services.invites import create_invite
 from services.launch_service import (
+    AdAccountClientMismatchError,
+    AdvertiserMismatchError,
     BriefNotFoundError,
     CampaignAlreadyExistsError,
     UnsupportedGoalError,
@@ -350,6 +352,10 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
     except CampaignAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
