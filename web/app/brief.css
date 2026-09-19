@@ -327,6 +327,21 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.bf-choice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* Короткая подсказка под подписью варианта (задача 7, spec §C: минимум бюджета
+   у Дзена). Единственный вариант с такой подсказкой сегодня, но правило общее. */
+.bf-choice__note {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
 
 /* --------------------------------------------------------------------------
    Вкладки цели рекламы

@@ -182,7 +182,12 @@ export function BriefGoalSurface({ variant, includeGoalField, invalid }: Props) 
                         />
                         <label htmlFor={id}>
                           <span className="bf-choice__mark" aria-hidden="true" />
-                          <span>{surface.label}</span>
+                          <span className="bf-choice__body">
+                            <span>{surface.label}</span>
+                            {surface.note ? (
+                              <span className="bf-choice__note">{surface.note}</span>
+                            ) : null}
+                          </span>
                           {!surface.enabled ? <span className="bf-choice__soon">скоро</span> : null}
                         </label>
                       </div>

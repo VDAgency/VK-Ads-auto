@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from services.brief_parser import parse_budget
 from services.goals import launch_goals
-from services.launch import balance_below_daily_budget
+from services.launch import balance_below_daily_budget, daily_budget_rub_from_amount
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -679,6 +679,33 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     return line
 
 
+def _format_rub(value: float) -> str:
+    """Целое число рублей с пробелом-разделителем тысяч («10 000», не «10000»)."""
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def _budget_minimum_line(card: BriefCard) -> str | None:
+    """Предупреждение, что дневной бюджет брифа ниже минимума площадки (задача 7,
+    spec §C) — теми же числами, которые реальный запуск сравнит с минимумом
+    (`services.launch_service._check_daily_budget_meets_minimum`). Показывается
+    заранее, но кнопку подтверждения не прячет: оператор может сначала поднять
+    бюджет правкой брифа, а может и отправить как есть и увидеть честный отказ.
+
+    Бюджет «обсудить» (`daily_budget_rub_from_amount` вернул `None`) — сравнивать
+    не с чем, строка не показывается.
+    """
+    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
+    daily_budget = daily_budget_rub_from_amount(amount, needs_discussion)
+    minimum = card.surface_min_daily_budget_rub
+    if daily_budget is None or daily_budget >= minimum:
+        return None
+    surface = f"«{_escape(card.surface_title)}»" if card.surface_title else "этой площадки"
+    return (
+        f"⚠️ Дневной бюджет {_format_rub(daily_budget)} ₽ ниже минимума {surface} — "
+        f"{_format_rub(minimum)} ₽. Запуск будет отклонён."
+    )
+
+
 def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_label: str) -> str:
     """Карточка подтверждения запуска — клиент, объект, цель, бюджет, кабинет,
     отметка соответствия (spec 2026-08-25-cabinet-client-binding-design §2).
@@ -722,6 +749,11 @@ def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_lab
     lines += [
         f"🎯 Цель: {_escape(goal_label)}",
         f"💰 Бюджет: {budget} · срок: {term}",
+    ]
+    budget_min_line = _budget_minimum_line(card)
+    if budget_min_line:
+        lines.append(budget_min_line)
+    lines += [
         "",
         f"💼 Кабинет: {_escape(account.title)} (id {_escape(account.external_id)})",
         f"Конечный рекламодатель кабинета: {advertiser}",

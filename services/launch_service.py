@@ -44,6 +44,7 @@ from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
 from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
+from integrations.vk_surfaces import surface_for
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,6 +188,27 @@ class CampaignAlreadyExistsError(Exception):
         super().__init__(f"active campaign {campaign_id} already exists with status {status!r}")
         self.campaign_id = campaign_id
         self.status = status
+
+
+class BudgetBelowMinimumError(Exception):
+    """Дневной бюджет брифа ниже минимума, который принимает площадка
+    (spec 2026-09-19-block1-remaining-gaps §C, боевая проверка 2026-07-27).
+
+    VK отклоняет `budget_limit_day` ниже порога целиком: 100 ₽/день у всех
+    площадок ВК/ОК/MAX, 10 000 ₽/день у Дзена
+    (`integrations.vk_surfaces.Surface.min_daily_budget_rub`). Молча отправлять
+    заниженный бюджет площадке смысла нет — кампания там всё равно не создастся,
+    поэтому отказ случается в ядре, до обращения к площадке. Бюджет «обсудить»
+    (`daily_budget_rub` вернул `None`) не блокирует — сравнивать не с чем.
+    """
+
+    def __init__(self, minimum: int, actual: float, surface_title: str) -> None:
+        super().__init__(
+            f"daily budget {actual} below minimum {minimum} for surface {surface_title!r}"
+        )
+        self.minimum = minimum
+        self.actual = actual
+        self.surface_title = surface_title
 
 
 class CampaignStopError(Exception):
@@ -381,6 +403,24 @@ async def _check_no_active_campaign(
             raise CampaignAlreadyExistsError(campaign.id, campaign.status)
 
 
+def _check_daily_budget_meets_minimum(spec: CampaignSpec) -> None:
+    """Отказать запуску, если дневной бюджет брифа ниже минимума площадки (spec §C).
+
+    `daily_budget_rub(spec)` уже сводит месячный бюджет брифа к дневному лимиту
+    (та же формула, что показывает предупреждение по балансу) — `None` значит
+    «обсудить» и сравнивать не с чем, тогда проверка молча пропускает запуск.
+    Площадка берётся по `spec.object_kind` — тому же ключу, что раскладка брифа
+    (`services.mapping.build_campaign_spec`) уже сохранила из распознанной
+    площадки, поэтому второй раз её распознавать не нужно.
+    """
+    daily_budget = daily_budget_rub(spec)
+    if daily_budget is None:
+        return
+    surface = surface_for(spec.object_kind)
+    if daily_budget < surface.min_daily_budget_rub:
+        raise BudgetBelowMinimumError(surface.min_daily_budget_rub, daily_budget, surface.title)
+
+
 def _is_unauthorized(exc: BaseException) -> bool:
     """Отличить «VK отклонил токен» от прочих отказов канала.
 
@@ -443,6 +483,12 @@ class LaunchPreview:
     daily_budget_rub: float | None
     balance_below_daily_budget: bool
     client_mismatch: bool
+    # Минимальный дневной бюджет площадки и признак, что бюджет брифа ниже него
+    # (spec 2026-09-19-block1-remaining-gaps §C) — карточка предупреждает заранее,
+    # что реальный запуск (`_check_daily_budget_meets_minimum`) отклонит кампанию;
+    # кнопку запуска это не прячет — оператор может сначала поднять бюджет в брифе.
+    min_daily_budget_rub: int
+    budget_below_minimum: bool
 
 
 async def launch_preview(
@@ -509,6 +555,9 @@ async def launch_preview(
         if balance is not None:
             balance_warning = balance_below_daily_budget(balance, amount, needs_discussion)
 
+    min_daily_budget = card.surface_min_daily_budget_rub
+    budget_below_minimum = daily_budget is not None and daily_budget < min_daily_budget
+
     return LaunchPreview(
         client_name=card.client_name,
         client_tax_id=tax_id(card) or None,
@@ -526,6 +575,8 @@ async def launch_preview(
         daily_budget_rub=daily_budget,
         balance_below_daily_budget=balance_warning,
         client_mismatch=ad_account_client_mismatch(ad_account, card.client_id),
+        min_daily_budget_rub=min_daily_budget,
+        budget_below_minimum=budget_below_minimum,
     )
 
 
@@ -734,10 +785,12 @@ async def launch_from_creative(
     ИЛИ неподдержанная цель самого брифа), ошибки выбора кабинета
     (`AccountNotFoundError`, `TokenUnavailableError`, `NoAdAccountError`,
     `AmbiguousAdAccountError`), сверки кабинета с брифом (`AdAccountClientMismatchError`,
-    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3) и
-    `CampaignAlreadyExistsError` (повтор без `allow_relaunch`, spec §F) — все они
-    срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения к площадке
-    (см. `_check_ad_account_matches_brief`, `_check_no_active_campaign`).
+    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3),
+    `CampaignAlreadyExistsError` (повтор без `allow_relaunch`, spec §F) и
+    `BudgetBelowMinimumError` (дневной бюджет ниже минимума площадки, spec §C) —
+    все они срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения
+    к площадке (см. `_check_ad_account_matches_brief`, `_check_no_active_campaign`,
+    `_check_daily_budget_meets_minimum`).
     """
     cfg = settings or get_settings()
     _validate_goal(goal)
@@ -776,6 +829,10 @@ async def launch_from_creative(
         # выше): роутерам и боту достаточно ловить один `UnsupportedGoalError`, чтобы
         # честно ответить 422 вместо утечки 500 в VK.
         raise UnsupportedGoalError(exc.goal.value) from exc
+
+    # Дневной бюджет ниже минимума площадки (spec §C) — тоже ДО любых побочных
+    # эффектов: площадка такую кампанию не примет, значит запуск не имеет смысла.
+    _check_daily_budget_meets_minimum(spec)
 
     senler_note: str | None = None
     if parsed.goal is Goal.SENLER:

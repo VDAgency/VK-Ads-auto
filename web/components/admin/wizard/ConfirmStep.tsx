@@ -244,6 +244,16 @@ export function ConfirmStep({
         </p>
       ) : null}
 
+      {preview.budget_below_minimum && preview.daily_budget_rub != null ? (
+        <p className="adm-warn">
+          Дневной бюджет {Math.round(preview.daily_budget_rub).toLocaleString("ru-RU")} ₽ ниже
+          минимума площадки{preview.surface_title ? ` «${preview.surface_title}»` : ""} —{" "}
+          {preview.min_daily_budget_rub.toLocaleString("ru-RU")} ₽.{" "}
+          <strong>Запуск будет отклонён.</strong> Поднимите бюджет правкой брифа либо запустите как
+          есть и увидите отказ.
+        </p>
+      ) : null}
+
       {preview.client_mismatch ? (
         <>
           <div className="adm-drop__error" role="alert">

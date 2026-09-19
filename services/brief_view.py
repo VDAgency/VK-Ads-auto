@@ -75,6 +75,11 @@ class BriefCardView:
     # же приём, что `AdAccountView.client_id` в Т1: старые прямые конструкторы
     # `BriefCardView(...)` в тестах не ломаются.
     client_id: int | None = None
+    # Минимальный дневной бюджет площадки (spec 2026-09-19-block1-remaining-gaps §C) —
+    # карточка подтверждения запуска (бот и веб-предпросмотр) предупреждает заранее,
+    # если бюджет брифа ниже него; сам отказ считает ядро при запуске (`services.
+    # launch_service._check_daily_budget_meets_minimum`), карточка только показывает.
+    surface_min_daily_budget_rub: int = 100
 
 
 async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> BriefCardView:
@@ -91,6 +96,7 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
     creative = await get_creative_for_brief(session, account_id, brief.id)
     campaign = await get_latest_campaign_for_brief(session, account_id, brief.id)
     cabinet_step = await cabinet_step_state(session, account_id, brief.id)
+    surface = surface_for(kind)
     return BriefCardView(
         brief_id=brief.id,
         variant=brief.variant,
@@ -103,7 +109,8 @@ async def _build_view(session: AsyncSession, account_id: int, brief: Brief) -> B
         has_creative=creative is not None,
         campaign_status=campaign.status if campaign is not None else None,
         surface_title=target_title(kind),
-        surface_needs_creative=surface_for(kind).needs_creative,
+        surface_needs_creative=surface.needs_creative,
+        surface_min_daily_budget_rub=surface.min_daily_budget_rub,
         launch_goal_title=launch_goal_title(NO_CREATIVE_GOAL),
         cabinet_step_available=cabinet_step.available,
         cabinet_step_own_cabinet_exists=cabinet_step.own_cabinet_exists,

@@ -261,6 +261,10 @@ export type LaunchPreview = {
   daily_budget_rub: number | null;
   balance_below_daily_budget: boolean;
   client_mismatch: boolean;
+  /** Минимальный дневной бюджет площадки и признак, что бюджет брифа ниже него
+   * (задача 7, spec §C) — тот же расчёт, что реальный запуск отклонит. */
+  min_daily_budget_rub: number;
+  budget_below_minimum: boolean;
 };
 
 /** Причины отказа выбора кабинета при запуске (409-детали ядра) — тот же текст,
@@ -287,6 +291,9 @@ export const LAUNCH_REJECT_ERRORS: Record<string, string> = {
   senler_not_connected:
     "К сообществу не подключён чат-бот Senler — заявки будет некому обрабатывать. " +
     "Проверьте подключение и повторите запуск.",
+  budget_below_minimum:
+    "Дневной бюджет ниже минимума площадки — VK не примет такую кампанию. " +
+    "Увеличьте бюджет в брифе.",
   brief_not_found: "Бриф не найден.",
 };
 
@@ -584,6 +591,7 @@ export type SurfaceOut = {
   goal: string;
   goal_title: string;
   needs_creative: boolean;
+  min_daily_budget_rub: number;
 };
 
 export type SurfacesOut = { items: SurfaceOut[] };

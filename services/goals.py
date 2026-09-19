@@ -60,6 +60,9 @@ class SubscriptionTarget:
     # Нужен ли клиенту креатив. Продвижение поста обходится без него: объявлением
     # служит сам пост, и просить у клиента картинку незачем.
     needs_creative: bool
+    # Минимальный дневной бюджет площадки (spec 2026-09-19-block1-remaining-gaps
+    # §C) — интерфейсы показывают его, только если он отличается от базовых 100 ₽.
+    min_daily_budget_rub: int
 
     @property
     def target_type(self) -> TargetType:
@@ -81,6 +84,7 @@ def subscription_targets() -> tuple[SubscriptionTarget, ...]:
             available=surface.verified,
             goal=surface.goal,
             needs_creative=surface.needs_creative,
+            min_daily_budget_rub=surface.min_daily_budget_rub,
         )
         for surface in SURFACES
     )

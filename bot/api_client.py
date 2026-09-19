@@ -173,6 +173,9 @@ class BriefCard:
     # Распознанная площадка подписки — приходит из ядра готовой строкой.
     surface_title: str = ""
     surface_needs_creative: bool = True
+    # Минимальный дневной бюджет площадки (задача 7, spec §C) — карточка
+    # подтверждения запуска предупреждает заранее, если бюджет брифа ниже него.
+    surface_min_daily_budget_rub: int = 100
     # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
     # ядро уже применило правило «пост/клип/трек без креатива → подписчики»,
     # бот только показывает (CLAUDE.md §1.3).
@@ -346,6 +349,7 @@ def _parse_card(payload: dict[str, Any]) -> BriefCard:
         campaign_status=payload.get("campaign_status"),
         surface_title=str(payload.get("surface_title") or ""),
         surface_needs_creative=bool(payload.get("surface_needs_creative", True)),
+        surface_min_daily_budget_rub=int(payload.get("surface_min_daily_budget_rub", 100)),
         launch_goal_title=str(payload.get("launch_goal_title") or ""),
         cabinet_step_available=bool(payload.get("cabinet_step_available", False)),
         cabinet_step_own_cabinet_exists=bool(payload.get("cabinet_step_own_cabinet_exists", False)),
@@ -406,6 +410,11 @@ def _creative_reject_reason(detail: Any) -> str:
         return (
             "К сообществу не подключён чат-бот Senler — заявки будет некому обрабатывать. "
             "Проверьте подключение и повторите запуск."
+        )
+    if detail == "budget_below_minimum":
+        return (
+            "Дневной бюджет ниже минимума площадки — VK не примет такую кампанию. "
+            "Увеличьте бюджет в брифе."
         )
     return "Креатив не принят. Проверьте файл и текст."
 

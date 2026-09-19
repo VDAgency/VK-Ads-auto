@@ -46,6 +46,7 @@ from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
     BriefNotFoundError,
+    BudgetBelowMinimumError,
     CampaignAlreadyExistsError,
     UnsupportedGoalError,
 )
@@ -352,6 +353,8 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:

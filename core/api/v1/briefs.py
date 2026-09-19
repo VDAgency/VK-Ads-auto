@@ -32,6 +32,7 @@ from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
     BriefNotFoundError,
+    BudgetBelowMinimumError,
     CampaignAlreadyExistsError,
     SenlerNotConnectedError,
     UnsupportedGoalError,
@@ -112,6 +113,9 @@ class BriefCardOut(BaseModel):
     surface_title: str = ""
     # Нужен ли креатив: у продвижения готового поста его не спрашивают.
     surface_needs_creative: bool = True
+    # Минимальный дневной бюджет площадки (spec 2026-09-19-block1-remaining-gaps §C) —
+    # карточка подтверждения запуска предупреждает заранее, если бюджет ниже него.
+    surface_min_daily_budget_rub: int = 100
     # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
     # каналы больше не решают это правило сами (CLAUDE.md §1.3), а показывают то,
     # что уже посчитало ядро.
@@ -220,6 +224,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         campaign_status=view.campaign_status,
         surface_title=view.surface_title,
         surface_needs_creative=view.surface_needs_creative,
+        surface_min_daily_budget_rub=view.surface_min_daily_budget_rub,
         launch_goal_title=view.launch_goal_title,
         cabinet_step_available=view.cabinet_step_available,
         cabinet_step_own_cabinet_exists=view.cabinet_step_own_cabinet_exists,
@@ -325,6 +330,8 @@ async def launch_brief_response(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
@@ -396,6 +403,8 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
