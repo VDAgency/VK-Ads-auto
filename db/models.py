@@ -182,6 +182,15 @@ class Brief(TenantMixin, Base):
         ForeignKey("brief_invite.id"), index=True, default=None
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Числовой id объекта рекламы (сообщество/личная страница), разрешённый из
+    # короткого адреса при запуске кампании (spec 2026-09-19-block1-remaining-gaps
+    # §D). Резолвится один раз и не пересчитывается: заполненные поля значат,
+    # что `services/launch_service.py` резолвер больше не вызывает.
+    object_numeric_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    object_resolved_kind: Mapped[str | None] = mapped_column(String(16), default=None)
+    object_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
 
 class BriefInvite(TenantMixin, Base):

@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import asdict, dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from config.settings import Settings, get_settings
 from db.community_tokens import find_decrypted_token
-from db.models import Campaign, Creative
+from db.models import Brief, Campaign, Creative
 from db.repositories import (
     create_cabinet_row,
     find_cabinet,
@@ -36,6 +37,7 @@ from db.repositories import (
     get_campaign,
     list_campaigns_for_brief,
     lock_brief_for_launch,
+    save_brief_object_resolution,
     set_campaign_status,
 )
 from integrations.adapter import PlatformAdapter
@@ -44,6 +46,7 @@ from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
 from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
+from integrations.vk_object import ResolvedVkObject, resolve_vk_object
 from integrations.vk_surfaces import surface_for
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +62,14 @@ from services.ad_accounts import (
     resolve_default_account,
     resolve_token,
 )
-from services.brief_parser import BriefVariant, Goal, parse_brief, parse_budget
+from services.brief_parser import (
+    BriefVariant,
+    Goal,
+    ParsedBrief,
+    TargetType,
+    parse_brief,
+    parse_budget,
+)
 from services.brief_view import field_value, get_brief_card, tax_id
 from services.goals import launch_goal_title
 from services.launch import (
@@ -109,6 +119,17 @@ SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL, SENLER_GOAL)
 # реже `event…`/`id…`) — используется ТОЛЬКО проверкой подключения Senler
 # (`_community_reference`), не связан с `integrations.vk_api._COMMUNITY_RE`.
 _COMMUNITY_SLUG_RE = re.compile(r"^(?:club|public|event|id)(\d+)$")
+
+# Резолвер числового id объекта — инжектируемый параметр `launch_from_creative`
+# (spec §D): тесты подменяют его без сети, а по умолчанию используется
+# `integrations.vk_object.resolve_vk_object`.
+ObjectResolver = Callable[[str], Awaitable[ResolvedVkObject | None]]
+
+# Площадки, для которых числовой адрес однозначно решает «сообщество или личная
+# страница» (та же пара, что `integrations.vk_api._URL_DECIDABLE`) — только для
+# них имеет смысл звать резолвер. Остальные площадки (рассылка, каналы, ОК) из
+# адреса не выводятся вовсе, поэтому там решает исключительно бриф.
+_OBJECT_RESOLVABLE_TARGET_TYPES = frozenset({TargetType.COMMUNITY, TargetType.PERSONAL_PAGE})
 
 
 class BriefNotFoundError(Exception):
@@ -401,6 +422,44 @@ async def _check_no_active_campaign(
     for campaign in campaigns:
         if campaign.status in ACTIVE_CAMPAIGN_STATUSES and not _is_stub_campaign(campaign):
             raise CampaignAlreadyExistsError(campaign.id, campaign.status)
+
+
+async def _resolve_brief_object(
+    session: AsyncSession,
+    account_id: int,
+    brief: Brief,
+    parsed: ParsedBrief,
+    resolve_object: ObjectResolver,
+) -> ParsedBrief:
+    """Подставить числовой адрес объекта вместо короткого, если он уже сохранён
+    в брифе или его удаётся узнать у ВК прямо сейчас (spec §D).
+
+    Резолвим только площадку из пары «сообщество/личная страница» — короткий
+    адрес других площадок (рассылка, каналы, ОК) её не выражает вовсе, там
+    решает только бриф. Уже сохранённый в брифе результат НЕ резолвим повторно
+    (решение Вячеслава) — читаем колонки `Brief.object_numeric_id`/
+    `object_resolved_kind`, заполненные предыдущим успешным запуском. Неудача
+    резолва (сеть, таймаут, нет маркера) не кэшируется и не меняет `parsed` —
+    запуск идёт со старой подсказкой брифа, как раньше.
+    """
+    if brief.object_numeric_id is not None and brief.object_resolved_kind is not None:
+        cached = ResolvedVkObject(
+            numeric_id=brief.object_numeric_id,
+            kind=brief.object_resolved_kind,  # type: ignore[arg-type]
+        )
+        return replace(parsed, object_url=cached.canonical_url)
+
+    if parsed.target_type not in _OBJECT_RESOLVABLE_TARGET_TYPES:
+        return parsed
+
+    resolved = await resolve_object(parsed.object_url)
+    if resolved is None:
+        return parsed
+
+    await save_brief_object_resolution(
+        session, account_id, brief.id, resolved.numeric_id, resolved.kind, datetime.now(UTC)
+    )
+    return replace(parsed, object_url=resolved.canonical_url)
 
 
 def _check_daily_budget_meets_minimum(spec: CampaignSpec) -> None:
@@ -755,6 +814,7 @@ async def launch_from_creative(
     ad_account_id: int | None = None,
     goal: str | None = None,
     allow_relaunch: bool = False,
+    resolve_object: ObjectResolver = resolve_vk_object,
 ) -> LaunchOutcome:
     """Сохранить креатив, разложить бриф и создать кампанию. Коммит — на вызывающем.
 
@@ -779,6 +839,11 @@ async def launch_from_creative(
     которого уже есть незавершённая кампания на боевом канале (spec §F). Без
     него второй такой запуск отклоняется `CampaignAlreadyExistsError` —
     см. `_check_no_active_campaign`.
+
+    `resolve_object` — резолвер числового id объекта по короткому адресу (spec
+    §D), инжектируемый, чтобы тесты не ходили в сеть; по умолчанию
+    `integrations.vk_object.resolve_vk_object`. Вызывается ДО `build_campaign_spec`
+    для площадки «сообщество/личная страница» — см. `_resolve_brief_object`.
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
     (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
@@ -821,6 +886,10 @@ async def launch_from_creative(
     # выше уже разобран для запуска.
     await lock_brief_for_launch(session, account_id, brief_id)
     await _check_no_active_campaign(session, account_id, brief_id, allow_relaunch=allow_relaunch)
+
+    # Числовой адрес объекта (spec §D) — ДО раскладки спеки: он способен сменить
+    # площадку (сообщество/личная страница), а значит и пакет/цель кампании.
+    parsed = await _resolve_brief_object(session, account_id, brief, parsed, resolve_object)
 
     try:
         spec = build_campaign_spec(parsed)

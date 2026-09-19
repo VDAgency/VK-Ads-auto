@@ -100,6 +100,32 @@ async def lock_brief_for_launch(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def save_brief_object_resolution(
+    session: AsyncSession,
+    account_id: int,
+    brief_id: int,
+    numeric_id: int,
+    kind: str,
+    resolved_at: datetime,
+) -> Brief | None:
+    """Сохранить итог резолва числового id объекта рекламы (задача 8, spec §D).
+
+    Заполненные колонки — признак «резолвить больше не нужно»: вызывающая
+    сторона (`services/launch_service.py`) проверяет их перед тем, как звать
+    резолвер повторно. Возвращает `None`, если брифа нет в тенанте — сохранять
+    тогда некуда.
+    """
+    stmt = select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id)
+    brief = (await session.execute(stmt)).scalar_one_or_none()
+    if brief is None:
+        return None
+    brief.object_numeric_id = numeric_id
+    brief.object_resolved_kind = kind
+    brief.object_resolved_at = resolved_at
+    await session.flush()
+    return brief
+
+
 async def list_clients(session: AsyncSession, account_id: int) -> list[Client]:
     """Все клиенты тенанта (свежие первыми) — для админ-панели."""
     stmt = select(Client).where(Client.account_id == account_id).order_by(Client.id.desc())
