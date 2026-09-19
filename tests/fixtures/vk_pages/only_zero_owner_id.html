@@ -1,0 +1,15 @@
+<!--
+Патология: единственные вхождения "owner_id" — нули (например, страница ещё не
+дорендерилась). Ненулевого owner_id нет вовсе — резолвер обязан деградировать в
+None, а не угадывать по "user_id".
+-->
+<!doctype html>
+<html>
+<head><title>Загрузка… | ВКонтакте</title></head>
+<body>
+<script>
+  var vk_config = {"al_page_state": {"a": 0}, "owner_id": 0};
+  var vk_loading = {"owner_id": 0};
+</script>
+</body>
+</html>

@@ -1,11 +1,20 @@
 """Резолв числового id объекта рекламы ВК по короткому (vanity) адресу.
 
 Короткий адрес (`vk.ru/fin_dolm`) сам по себе не говорит, сообщество это или
-личная страница — это решает только числовой id (`club…`/`id…`). Разведка
-2026-07-26: обычный HTTP GET публичной страницы отдаёт HTML с маркером
-`"owner_id":…` — отрицательный у сообщества, положительный у личной страницы;
-у личной страницы дополнительно встречается `"user_id":…` — запасной маркер на
-случай, если `owner_id` в разметке не нашёлся.
+личная страница — это решает только числовой id (`club…`/`id…`). Разметка
+публичной страницы отдаёт `"owner_id":…` — отрицательный у сообщества,
+положительный у личной страницы, — но живой прогон 2026-09-20
+(`vk.com/fin_dolm`, обычный User-Agent, HTTP 200) показал, что разметка личной
+страницы несёт СРАЗУ несколько `owner_id`, и ПЕРВОЕ вхождение — decoy-ноль:
+12 вхождений, первое — `0`, остальные 11 — верный `808632468`. «Первое
+совпадение решает всё» на этой разметке резолвило бы страницу в id `0`. Берём
+ВСЕ вхождения, отбрасываем нули и берём самое частое из оставшихся (при
+равной частоте — самое раннее по порядку) — так decoy-ноль не мешает.
+`"user_id"` в качестве запасного маркера сюда сознательно НЕ включён: та же
+разведка нашла на странице сообщества (`vk.com/club228817082`) decoy
+`"user_id":100` — доверять `user_id`, когда `owner_id` в разметке не нашёлся
+вовсе, нельзя, поэтому при отсутствии ненулевых `owner_id` резолв просто
+деградирует в `None`.
 
 Резолвер вызывается только при запуске кампании (`services/launch_service.py`),
 не при приёме брифа — приём не должен зависеть от доступности vk.com. Любая
@@ -34,7 +43,6 @@ _ALLOWED_HOSTS = frozenset({"vk.com", "vk.ru", "m.vk.com"})
 _COMMUNITY_RE = re.compile(r"^(?:club|public|event)(\d+)$")
 _PROFILE_RE = re.compile(r"^id(\d+)$")
 _OWNER_ID_RE = re.compile(r'"owner_id"\s*:\s*(-?\d+)')
-_USER_ID_RE = re.compile(r'"user_id"\s*:\s*(-?\d+)')
 
 _TIMEOUT_SECONDS = 5.0
 # Обычный браузерный User-Agent — без него разметка публичной страницы может отличаться.
@@ -86,20 +94,31 @@ def _from_numeric_slug(slug: str) -> ResolvedVkObject | None:
 
 
 def _from_html(html: str) -> ResolvedVkObject | None:
-    """Первое вхождение `owner_id` решает всё — знак определяет тип. `user_id` —
-    запасной маркер личной страницы на случай отсутствия `owner_id` в разметке."""
-    owner_match = _OWNER_ID_RE.search(html)
-    if owner_match:
-        owner_id = int(owner_match.group(1))
-        if owner_id < 0:
-            return ResolvedVkObject(numeric_id=-owner_id, kind="community")
-        return ResolvedVkObject(numeric_id=owner_id, kind="personal")
+    """Разобрать ВСЕ вхождения `owner_id`, отбросить нули (decoy на личной
+    странице, живой прогон 2026-09-20) и взять самое частое из оставшихся
+    значений — при равной частоте побеждает то, что встретилось раньше. Знак
+    решает тип (отрицательный — сообщество), модуль — числовой id. Ни одного
+    ненулевого `owner_id` — `None`: `user_id` намеренно не запасной маркер (на
+    странице сообщества у него встречается decoy `"user_id":100`, доверять
+    ему без owner_id нельзя)."""
+    matches = [int(value) for value in _OWNER_ID_RE.findall(html)]
+    non_zero = [value for value in matches if value != 0]
+    if not non_zero:
+        return None
 
-    user_match = _USER_ID_RE.search(html)
-    if user_match:
-        return ResolvedVkObject(numeric_id=abs(int(user_match.group(1))), kind="personal")
+    counts: dict[int, int] = {}
+    order: list[int] = []
+    for value in non_zero:
+        if value not in counts:
+            order.append(value)
+        counts[value] = counts.get(value, 0) + 1
 
-    return None
+    # `max` возвращает ПЕРВЫЙ максимум при равенстве — порядок `order` уже
+    # соответствует «раньше встретилось» среди уникальных значений.
+    winner = max(order, key=lambda value: counts[value])
+    if winner < 0:
+        return ResolvedVkObject(numeric_id=-winner, kind="community")
+    return ResolvedVkObject(numeric_id=winner, kind="personal")
 
 
 async def resolve_vk_object(
@@ -141,5 +160,5 @@ async def resolve_vk_object(
 
     resolved = _from_html(response.text)
     if resolved is None:
-        logger.warning("VK object resolution found no owner_id/user_id marker for %r", url)
+        logger.warning("VK object resolution found no usable owner_id marker for %r", url)
     return resolved

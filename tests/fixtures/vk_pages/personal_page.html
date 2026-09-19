@@ -1,15 +1,28 @@
 <!--
-Минимальный фрагмент публичной страницы личного профиля ВК (не живой снимок —
-сеть при подготовке фикстуры была недоступна из-за VPN; собран по фактам
-разведки 2026-07-26: vk.ru/fin_dolm -> owner_id 808632468 (положительный),
-user_id 808632468).
+Фрагмент публичной страницы личного профиля ВК, воспроизводящий маркерную
+последовательность живого прогона 2026-09-20 (vk.com/fin_dolm, обычный
+User-Agent, HTTP 200): 12 вхождений "owner_id" — ПЕРВОЕ decoy-ноль, остальные
+11 — верный 808632468; "user_id" встречается 4 раза, всегда 808632468;
+"group_id" — один раз, посторонним значением 23242408 (не используется
+резолвером, оставлен как есть в живой разметке).
 -->
 <!doctype html>
 <html>
 <head><title>Иван | ВКонтакте</title></head>
 <body>
 <script>
-  var vk_config = {"al_page_state": {"a": 0}, "owner_id": 808632468, "user_id": 808632468, "first_name": "Иван"};
+  var vk_config = {"al_page_state": {"a": 0}, "owner_id": 0, "group_id": 23242408};
+  var vk_profile_1 = {"owner_id": 808632468, "user_id": 808632468};
+  var vk_profile_2 = {"owner_id": 808632468, "user_id": 808632468};
+  var vk_profile_3 = {"owner_id": 808632468, "user_id": 808632468};
+  var vk_profile_4 = {"owner_id": 808632468, "user_id": 808632468};
+  var vk_profile_5 = {"owner_id": 808632468};
+  var vk_profile_6 = {"owner_id": 808632468};
+  var vk_profile_7 = {"owner_id": 808632468};
+  var vk_profile_8 = {"owner_id": 808632468};
+  var vk_profile_9 = {"owner_id": 808632468};
+  var vk_profile_10 = {"owner_id": 808632468};
+  var vk_profile_11 = {"owner_id": 808632468, "first_name": "Иван"};
 </script>
 </body>
 </html>

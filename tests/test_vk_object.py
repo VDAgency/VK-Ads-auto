@@ -1,6 +1,8 @@
 """Резолвер числового id объекта ВК по короткому адресу (`integrations/vk_object.py`,
 spec 2026-09-19-block1-remaining-gaps §D). Фикстуры HTML — `tests/fixtures/vk_pages/`
-(маркеры `owner_id`/`user_id`, разведка 2026-07-26).
+— воспроизводят живые маркерные последовательности 2026-09-20: у личной страницы
+среди 12 вхождений `owner_id` первое — decoy-ноль, у сообщества есть decoy
+`user_id`, не связанный с owner_id.
 """
 
 from __future__ import annotations
@@ -28,7 +30,11 @@ def _run(coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro)
 
 
-def test_personal_page_short_address_resolves() -> None:
+def test_personal_page_with_decoy_zero_owner_id_resolves_to_the_real_id() -> None:
+    """Живой прогон 2026-09-20: 12 вхождений `owner_id`, первое — decoy-ноль,
+    остальные 11 — верный 808632468. «Первое совпадение» дало бы id `0` —
+    резолвер обязан взять самое частое ненулевое значение."""
+
     async def scenario() -> ResolvedVkObject | None:
         with respx.mock() as router:
             router.get("https://vk.ru/fin_dolm").mock(
@@ -42,7 +48,10 @@ def test_personal_page_short_address_resolves() -> None:
     assert result.canonical_url == "https://vk.com/id808632468"
 
 
-def test_community_short_address_resolves() -> None:
+def test_community_with_decoy_user_id_resolves_by_owner_id_alone() -> None:
+    """Сообщество несёт decoy `"user_id":100`, не связанный с owner_id — резолвер
+    его не видит вовсе (не запасной маркер), решает только `owner_id`."""
+
     async def scenario() -> ResolvedVkObject | None:
         with respx.mock() as router:
             router.get("https://vk.com/djbeauty").mock(
@@ -54,6 +63,20 @@ def test_community_short_address_resolves() -> None:
     assert result == ResolvedVkObject(numeric_id=228817082, kind="community")
     assert result is not None
     assert result.canonical_url == "https://vk.com/club228817082"
+
+
+def test_only_zero_owner_id_returns_none() -> None:
+    """Ни одного ненулевого `owner_id` — деградация в `None`, без угадывания по
+    `user_id` (тот на странице сообщества оказался decoy, доверять ему нельзя)."""
+
+    async def scenario() -> ResolvedVkObject | None:
+        with respx.mock() as router:
+            router.get("https://vk.com/loading").mock(
+                return_value=httpx.Response(200, text=_fixture("only_zero_owner_id.html"))
+            )
+            return await resolve_vk_object("https://vk.com/loading")
+
+    assert _run(scenario()) is None
 
 
 def test_page_without_marker_returns_none() -> None:
