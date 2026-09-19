@@ -12,7 +12,7 @@ import binascii
 
 from config.settings import Settings
 from db.repositories import get_brief
-from integrations.vk_surfaces import surface_for
+from integrations.vk_surfaces import Surface, surface_for, text_limit
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.brief_parser import parse_target_type
@@ -74,6 +74,41 @@ async def launch_without_creative(
     )
 
 
+async def _brief_surface(session: AsyncSession, account_id: int, brief_id: int) -> Surface | None:
+    """Площадка брифа (`integrations/vk_surfaces.py`) для проверок хэштегов.
+
+    `None` — брифа нет: `HashtagError("not_supported")` в этом случае не имеет
+    смысла бросать здесь, `launch_from_creative` ниже честно ответит
+    `BriefNotFoundError` сама.
+    """
+    brief = await get_brief(session, account_id, brief_id)
+    if brief is None:
+        return None
+    kind = parse_target_type(brief.payload.get("target_type", "")).value
+    return surface_for(kind)
+
+
+def _hashtag_text_limit(surface: Surface | None) -> int:
+    """Лимит текста для дописывания хэштегов: самый узкий текстовый слот площадки.
+
+    Площадка уже известна на этом шаге (см. `_brief_surface`) — значит нет нужды
+    ждать выбора конкретного шаблона (он зависит от соотношения сторон креатива
+    и решается позже, в `launch_from_creative`): берём консервативный минимум по
+    ВСЕМ её шаблонам (`integrations/vk_surfaces.py::text_limit`, тот же хелпер,
+    которым площадка пользуется при сборке кампании) — с хэштегами текст не
+    попадёт ни в один слот площадки уже здесь, а не молча обрежется в
+    `integrations.vk_api._fit` при реальной отправке в VK. Площадка без шаблонов
+    (продвижение поста/клипа/трека) сюда не доходит — её отсекает проверка
+    `needs_creative` до вызова этой функции; `None`/пустые шаблоны — защитный
+    фолбэк на `MAX_TEXT_LEN`. Итог не может быть шире `MAX_TEXT_LEN`, которым
+    продолжает пользоваться существующая `validate_text` ниже.
+    """
+    if surface is None or not surface.patterns:
+        return MAX_TEXT_LEN
+    floor = min(text_limit(pattern.text_slot) for pattern in surface.patterns)
+    return min(floor, MAX_TEXT_LEN)
+
+
 async def intake_creative(
     session: AsyncSession,
     account_id: int,
@@ -97,17 +132,16 @@ async def intake_creative(
 
     `hashtags` — необязательная строка тегов оператора (`services/hashtags.py`):
     нормализуется и дописывается в конец текста объявления ДО существующей
-    валидации длины текста. Лимит — тот же generic `MAX_TEXT_LEN`, которым уже
-    пользуется `validate_text` здесь: сама рекламная площадка (и её текстовый
-    слот/лимит) на этом шаге ещё не выбрана — выбор шаблона происходит позже,
+    валидации длины текста. Лимит — самый узкий текстовый слот площадки брифа
+    (`_hashtag_text_limit`, не шире `MAX_TEXT_LEN`), чтобы текст с хэштегами не
+    обрезался молча в `integrations.vk_api._fit` при реальной отправке в VK: у
+    каналов ВК/MAX это `text_90`, у Дзена — `text_40` (`integrations/
+    vk_surfaces.py:TEXT_SLOT_LIMITS`, конкретный шаблон выбирается позже —
     внутри `launch_from_creative` → `services.mapping.build_campaign_spec`, по
-    соотношению сторон уже сохранённого креатива. Заводить для хэштегов
-    отдельный, более узкий лимит тут значило бы дублировать источник правды
-    вместо переиспользования (`integrations/vk_surfaces.py:TEXT_SLOT_LIMITS`
-    используется там же, где и раньше — при сборке кампании).
-    Площадка вовсе без текстового слота (продвижение готового поста/клипа/
-    трека, `Surface.needs_creative is False`) хэштеги не принимает — `HashtagError
-    ("not_supported")`.
+    соотношению сторон уже сохранённого креатива, но сама площадка и набор её
+    шаблонов известны уже здесь, из брифа). Площадка вовсе без текстового слота
+    (продвижение готового поста/клипа/трека, `Surface.needs_creative is False`)
+    хэштеги не принимает — `HashtagError("not_supported")`.
 
     Бросает `CreativeError` (битый base64 / слишком большой / невалидный),
     `HashtagError` (нормализация/лимит хэштегов), а также `BriefNotFoundError` /
@@ -115,12 +149,12 @@ async def intake_creative(
     `launch_from_creative`.
     """
     tags = normalize_hashtags(hashtags or "")
+    hashtag_limit = MAX_TEXT_LEN
     if tags:
-        brief = await get_brief(session, account_id, brief_id)
-        if brief is not None:
-            kind = parse_target_type(brief.payload.get("target_type", "")).value
-            if not surface_for(kind).needs_creative:
-                raise HashtagError("not_supported")
+        surface = await _brief_surface(session, account_id, brief_id)
+        if surface is not None and not surface.needs_creative:
+            raise HashtagError("not_supported")
+        hashtag_limit = _hashtag_text_limit(surface)
 
     try:
         raw = base64.b64decode(media_b64, validate=True)
@@ -136,7 +170,7 @@ async def intake_creative(
     else:
         issues = validate_video_size(len(raw))
     if tags:
-        body = append_hashtags(body, tags, MAX_TEXT_LEN)
+        body = append_hashtags(body, tags, hashtag_limit)
     issues += validate_text(title, body)
     if not is_valid(issues):
         raise CreativeError("invalid", issues)

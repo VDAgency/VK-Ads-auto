@@ -281,3 +281,78 @@ def test_upload_creative_hashtags_not_supported_for_surface_without_text() -> No
     result = asyncio.run(_with_client(scenario, payload=payload))
     assert result["status"] == 422
     assert result["detail"] == "hashtags_not_supported"
+
+
+def _hashtag_upload_json(*, body: str, hashtags: str) -> dict[str, Any]:
+    return {
+        "media_b64": _IMAGE_B64,
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "title": "Заголовок",
+        "body": body,
+        "hashtags": hashtags,
+    }
+
+
+def test_upload_creative_hashtags_over_channel_text_slot_is_rejected() -> None:
+    """Канал ВКонтакте — самый узкий слот `text_90` среди его шаблонов
+    (`integrations.vk_surfaces.VK_CHANNEL`, `TEXT_SLOT_LIMITS["text_90"] == 90`).
+
+    Текст + хэштеги вместе — 91 символ: меньше generic `MAX_TEXT_LEN` (220), но
+    больше 90 — без учёта площадки прошло бы 201, а в реальной кампании
+    `integrations.vk_api._fit` молча обрезал бы хэштеги. Ядро обязано отказать
+    здесь, до сохранения креатива.
+    """
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Т" * 85, hashtags="тест"),
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    payload = dict(_VALID)
+    payload["target_type"] = "канал ВКонтакте"
+
+    result = asyncio.run(_with_client(scenario, payload=payload))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_text_too_long"
+
+
+def test_upload_creative_same_hashtags_fit_community_wider_text_slot() -> None:
+    """Тот же текст+хэштеги (91 символ), но площадка — сообщество ВКонтакте:
+    её шаблоны используют `text_2000`, генерик-лимит `MAX_TEXT_LEN` (220) шире
+    91 символа — запрос проходит."""
+
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Т" * 85, hashtags="тест"),
+        )
+        return resp.status_code
+
+    payload = dict(_VALID)
+    payload["target_type"] = "сообщество ВКонтакте"
+
+    assert asyncio.run(_with_client(scenario, payload=payload)) == 201
+
+
+def test_upload_creative_hashtags_over_dzen_text_slot_is_rejected() -> None:
+    """Дзен — самый жёсткий текстовый слот (`text_40`, `TEXT_SLOT_LIMITS["text_40"]
+    == 40`). Короткий текст (5 символов) + один длинный тег (41 символ с `#`) —
+    47 символов вместе, больше 40."""
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Текст", hashtags="а" * 40),
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    payload = dict(_VALID)
+    payload["target_type"] = "канал Дзен"
+
+    result = asyncio.run(_with_client(scenario, payload=payload))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_text_too_long"
