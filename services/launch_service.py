@@ -844,6 +844,11 @@ async def launch_from_creative(
     §D), инжектируемый, чтобы тесты не ходили в сеть; по умолчанию
     `integrations.vk_object.resolve_vk_object`. Вызывается ДО `build_campaign_spec`
     для площадки «сообщество/личная страница» — см. `_resolve_brief_object`.
+    Инвариант порядка: резолв объекта выполняется ДО `lock_brief_for_launch` —
+    это сетевой HTTP-запрос (таймаут 5 с), и он не должен идти под блокировкой
+    строки брифа (`FOR UPDATE`). `_check_no_active_campaign` — единственная
+    проверка, которая обязана выполняться ПОСЛЕ захвата блокировки; резолв на неё
+    не влияет и от неё не зависит.
 
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
     (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
@@ -879,6 +884,14 @@ async def launch_from_creative(
     # чужой кабинет или несовпавший ИНН обязаны прервать запуск начисто (spec §1.2-1.3).
     _check_ad_account_matches_brief(ad_account, brief.client_id, parsed.tax_id)
 
+    # Числовой адрес объекта (spec §D) — ДО раскладки спеки (он способен сменить
+    # площадку, а значит и пакет/цель кампании) и ДО блокировки строки брифа: резолв
+    # ходит по сети в vk.com (HTTP GET, таймаут 5 с), и держать под ним строку
+    # заблокированной (`FOR UPDATE`) значит блокировать конкурентный запуск по этому
+    # брифу на всё время сетевого похода. Блокировка нужна только проверке активной
+    # кампании и созданию новой — резолв на них не влияет.
+    parsed = await _resolve_brief_object(session, account_id, brief, parsed, resolve_object)
+
     # Блокировка строки брифа (no-op на SQLite) держит проверку и создание кампании
     # в одной транзакции: два одновременных запуска по одному брифу не должны оба
     # проскочить проверку параллельно (spec §F, гонка двух запросов). Возвращаемая
@@ -886,10 +899,6 @@ async def launch_from_creative(
     # выше уже разобран для запуска.
     await lock_brief_for_launch(session, account_id, brief_id)
     await _check_no_active_campaign(session, account_id, brief_id, allow_relaunch=allow_relaunch)
-
-    # Числовой адрес объекта (spec §D) — ДО раскладки спеки: он способен сменить
-    # площадку (сообщество/личная страница), а значит и пакет/цель кампании.
-    parsed = await _resolve_brief_object(session, account_id, brief, parsed, resolve_object)
 
     try:
         spec = build_campaign_spec(parsed)

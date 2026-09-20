@@ -21,6 +21,7 @@ from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
     CampaignAlreadyExistsError,
+    SenlerNotConnectedError,
 )
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -382,6 +383,28 @@ def test_admin_creative_campaign_already_exists_is_409(monkeypatch: pytest.Monke
     assert code == 409
     assert body["detail"] == "campaign_already_exists"
     assert captured["allow_relaunch"] is True
+
+
+def test_admin_creative_senler_not_connected_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """У сообщества нет подключённого чат-бота Senler — 422, а не необработанное
+    падение (этот except-chain не зеркалил `core/api/v1/briefs.py`, хотя
+    веб-админка ходит именно сюда)."""
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        raise SenlerNotConnectedError("club1")
+
+    monkeypatch.setattr(admin_data_module, "intake_creative", boom)
+
+    async def scenario(client: AsyncClient) -> tuple[int, Any]:
+        resp = await client.post(
+            "/api/v1/admin/briefs/1/creative",
+            json={"media_b64": "AAAA", "media_type": "photo"},
+        )
+        return resp.status_code, resp.json()
+
+    code, body = asyncio.run(_with_admin(scenario))
+    assert code == 422
+    assert body["detail"] == "senler_not_connected"
 
 
 def test_admin_briefs_all_includes_brief_without_invite() -> None:

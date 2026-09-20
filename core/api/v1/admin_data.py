@@ -48,6 +48,7 @@ from services.launch_service import (
     BriefNotFoundError,
     BudgetBelowMinimumError,
     CampaignAlreadyExistsError,
+    SenlerNotConnectedError,
     UnsupportedGoalError,
 )
 from services.secret_box import NotConfiguredError
@@ -353,6 +354,8 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except SenlerNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail="senler_not_connected") from exc
     except BudgetBelowMinimumError as exc:
         raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:

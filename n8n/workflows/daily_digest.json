@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Ежедневная сводка оператору (09:00 МСК)\n\nРаз в сутки в 9 утра по Москве дёргает `POST /api/v1/stats/digest` у ядра — по внутреннему имени сервиса `api` в сети docker-compose, снаружи этот путь закрыт на ingress (infra/Caddyfile). Ядро синхронизирует активные кампании (тот же путь, что и часовой синк, `services/stats_sync.py`), берёт последний срез по каждой и рассылает оператору текстовую сводку по кабинетам через Telegram (`services/notifier.py::notify_operator`, docs/N8N.md).\n\nКредов не требует: эндпоинт не авторизован намеренно (изоляция на уровне сети), see core/api/v1/stats.py.\n\nТаймзона воркфлоу — Europe/Moscow (settings.timezone), поэтому cron `0 9 * * *` срабатывает именно в 9:00 по Москве независимо от таймзоны хоста n8n.",
+        "content": "## Ежедневная сводка оператору (09:00 МСК)\n\nРаз в сутки в 9 утра по Москве дёргает `POST /api/v1/stats/digest` у ядра — по внутреннему имени сервиса `api` в сети docker-compose, снаружи этот путь закрыт на ingress (infra/Caddyfile). Ядро синхронизирует активные кампании (тот же путь, что и часовой синк, `services/stats_sync.py`), берёт последний срез по каждой и рассылает оператору текстовую сводку по кабинетам через Telegram (`services/notifier.py::notify_operator`, docs/N8N.md).\n\nКредов не требует: эндпоинт не авторизован намеренно (изоляция на уровне сети), see core/api/v1/stats.py.\n\nТаймзона воркфлоу — Europe/Moscow (settings.timezone), поэтому cron `0 9 * * *` срабатывает именно в 9:00 по Москве независимо от таймзоны хоста n8n.\n\nВ отличие от часового синка (`stats_sync_hourly.json`) у HTTP-узла НЕТ `retryOnFail`: `/stats/sync` идемпотентен и повтор безопасен, а `/stats/digest` — нет, он безусловно зовёт `notify_operator`, и повтор после медленного ответа отправит оператору дублирующую сводку.",
         "height": 300,
         "width": 400
       },
@@ -43,9 +43,6 @@
       "name": "Send daily digest",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000,
       "position": [460, 300]
     }
   ],

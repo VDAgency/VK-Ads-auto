@@ -181,6 +181,30 @@ def test_daily_digest_workflow_needs_no_credentials() -> None:
     assert "credentials" not in http_node
 
 
+def test_daily_digest_workflow_http_node_has_no_retry() -> None:
+    """`/stats/digest` НЕ идемпотентен (безусловно зовёт `notify_operator`) — в
+    отличие от часового синка повтор после медленного ответа отправил бы
+    оператору дублирующую сводку. У узла не должно быть `retryOnFail`/`maxTries`,
+    но таймаут остаётся (найдено ревью: воркфлоу унаследовал retry от
+    `stats_sync_hourly.json` без учёта разницы в идемпотентности)."""
+    workflow = _load_workflow("daily_digest.json")
+    http_node = _node(workflow, "n8n-nodes-base.httpRequest")
+    assert "retryOnFail" not in http_node
+    assert "maxTries" not in http_node
+    assert "waitBetweenTries" not in http_node
+    assert http_node["parameters"]["options"]["timeout"] == 30000
+
+
+def test_stats_sync_hourly_workflow_http_node_keeps_retry() -> None:
+    """Контраст с задачей выше: `/stats/sync` идемпотентен, повтор там безопасен
+    и должен остаться — retry не убрали по всему `n8n/workflows/`, а только там,
+    где он был опасен."""
+    workflow = _load_workflow("stats_sync_hourly.json")
+    http_node = _node(workflow, "n8n-nodes-base.httpRequest")
+    assert http_node["retryOnFail"] is True
+    assert http_node["maxTries"] == 3
+
+
 def _walk_all_strings(obj: Any, path: str = "") -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if isinstance(obj, dict):

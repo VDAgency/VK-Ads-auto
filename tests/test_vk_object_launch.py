@@ -20,7 +20,7 @@ from config.settings import Settings
 from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, Brief, Client
-from db.repositories import get_brief
+from db.repositories import get_brief, lock_brief_for_launch
 from integrations.adapter import PlatformAdapter
 from integrations.channels import Channel, ChannelConfig, ChannelRouter
 from integrations.vk_api import resolve_ad_object
@@ -279,6 +279,48 @@ def test_resolution_failure_keeps_previous_behaviour() -> None:
         assert brief.object_resolved_at is None
 
     asyncio.run(_with_db(scenario))
+
+
+def test_resolver_runs_before_the_brief_row_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Резолв объекта — сетевой поход (HTTP GET к vk.com, таймаут 5 с) — не должен
+    идти под блокировкой строки брифа (`lock_brief_for_launch`, `FOR UPDATE`):
+    иначе конкурентный запуск по тому же брифу ждёт всё время сетевого похода
+    впустую (найдено ревью: резолв стоял ПОСЛЕ блокировки). Шпион на резолвере и
+    шпион на `lock_brief_for_launch` фиксируют порядок вызовов напрямую."""
+    adapter = _RecordingAdapter()
+    resolver = _ResolverSpy(ResolvedVkObject(numeric_id=808632468, kind="personal"))
+    calls: list[str] = []
+
+    async def spying_resolver(url: str) -> ResolvedVkObject | None:
+        calls.append("resolve_object")
+        return await resolver(url)
+
+    async def spying_lock(session: AsyncSession, account_id: int, brief_id: int) -> Brief | None:
+        calls.append("lock_brief_for_launch")
+        return await lock_brief_for_launch(session, account_id, brief_id)
+
+    # Патчим строкой (не через объект модуля): `lock_brief_for_launch` попадает в
+    # `services.launch_service` обычным импортом, mypy `--no-implicit-reexport`
+    # не считает его переэкспортированным атрибутом модуля.
+    monkeypatch.setattr("services.launch_service.lock_brief_for_launch", spying_lock)
+
+    async def scenario(session: AsyncSession) -> None:
+        outcome = await launch_from_creative(
+            session,
+            1,
+            1,
+            "photo",
+            "/x.jpg",
+            None,
+            None,
+            settings=_live_settings(),
+            router=_router(adapter),
+            resolve_object=spying_resolver,
+        )
+        assert outcome.campaign_status == "prepared"
+
+    asyncio.run(_with_db(scenario))
+    assert calls == ["resolve_object", "lock_brief_for_launch"]
 
 
 def test_newsletter_surface_does_not_call_the_resolver() -> None:
