@@ -420,7 +420,9 @@ def test_confirm_launch_without_creative_shows_rejection_in_shared_format(
     сценарии с креативом (`bot/handlers/creative.py:send_creative`) — один и
     тот же класс отказа не должен звучать по-разному в зависимости от сценария."""
 
-    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+    async def fake_launch(
+        brief_id: int, ad_account_id: int | None = None, *, allow_relaunch: bool = False
+    ) -> CreativeResult:
         raise CreativeRejected("Конечный рекламодатель кабинета не совпадает с клиентом брифа.")
 
     monkeypatch.setattr("bot.api_client.launch_brief", fake_launch)
@@ -436,7 +438,9 @@ def test_confirm_launch_without_creative_reaches_the_core(monkeypatch: pytest.Mo
     """Подтверждение карточки — единственный путь, которым запуск доезжает до ядра."""
     captured: dict[str, Any] = {}
 
-    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> CreativeResult:
+    async def fake_launch(
+        brief_id: int, ad_account_id: int | None = None, *, allow_relaunch: bool = False
+    ) -> CreativeResult:
         captured["brief_id"] = brief_id
         captured["ad_account_id"] = ad_account_id
         return CreativeResult(campaign_status="prepared", campaign_id=2, message="🚀 подготовлена")

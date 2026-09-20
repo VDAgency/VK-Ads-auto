@@ -54,6 +54,7 @@ class SurfaceOut(BaseModel):
     goal: str
     goal_title: str
     needs_creative: bool
+    min_daily_budget_rub: int
 
 
 class SurfacesOut(BaseModel):
@@ -78,6 +79,7 @@ async def admin_get_surfaces() -> SurfacesOut:
                 goal=target.goal,
                 goal_title=titles.get(target.goal, target.goal),
                 needs_creative=target.needs_creative,
+                min_daily_budget_rub=target.min_daily_budget_rub,
             )
             for target in subscription_targets()
         ]
@@ -120,7 +122,10 @@ async def admin_launch_brief(
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива из веб-админки (зеркало бот-эндпоинта)."""
     ad_account_id = data.ad_account_id if data is not None else None
-    return await launch_brief_response(session, brief_id, ad_account_id)
+    allow_relaunch = data.allow_relaunch if data is not None else False
+    return await launch_brief_response(
+        session, brief_id, ad_account_id, allow_relaunch=allow_relaunch
+    )
 
 
 class LaunchPreviewOut(BaseModel):
@@ -145,6 +150,8 @@ class LaunchPreviewOut(BaseModel):
     daily_budget_rub: float | None
     balance_below_daily_budget: bool
     client_mismatch: bool
+    min_daily_budget_rub: int
+    budget_below_minimum: bool
 
 
 def _to_launch_preview_out(preview: LaunchPreview) -> LaunchPreviewOut:
@@ -165,6 +172,8 @@ def _to_launch_preview_out(preview: LaunchPreview) -> LaunchPreviewOut:
         daily_budget_rub=preview.daily_budget_rub,
         balance_below_daily_budget=preview.balance_below_daily_budget,
         client_mismatch=preview.client_mismatch,
+        min_daily_budget_rub=preview.min_daily_budget_rub,
+        budget_below_minimum=preview.budget_below_minimum,
     )
 
 

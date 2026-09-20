@@ -230,6 +230,30 @@
   color: var(--ink);
 }
 
+/* --------------------------------------------------------------------------
+   Реквизиты для документов (spec 2026-09-19 §E)
+   -------------------------------------------------------------------------- */
+.cab-bank-hint {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.cab-field-error {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--danger);
+}
+.cab-bank-success {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
 @media (max-width: 40rem) {
   .cab-main {
     padding-block: var(--space-8) var(--space-16);

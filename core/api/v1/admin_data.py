@@ -31,6 +31,7 @@ from services.ad_accounts import (
     NoAdAccountError,
     TokenUnavailableError,
 )
+from services.bank_details import get_client_bank_details
 from services.brief_list import BriefListItem
 from services.brief_list import list_all as list_all_briefs
 from services.brief_parser import BriefValidationError, BriefVariant
@@ -38,9 +39,18 @@ from services.brief_view import apply_brief_edits, get_brief_card
 from services.contact import ContactParseError, detect_contact
 from services.creative_intake import CreativeError, intake_creative
 from services.delivery.factory import build_delivery_router
+from services.hashtags import HashtagError
 from services.invite_tracking import InviteView, list_pending, list_recent
 from services.invites import create_invite
-from services.launch_service import BriefNotFoundError, UnsupportedGoalError
+from services.launch_service import (
+    AdAccountClientMismatchError,
+    AdvertiserMismatchError,
+    BriefNotFoundError,
+    BudgetBelowMinimumError,
+    CampaignAlreadyExistsError,
+    SenlerNotConnectedError,
+    UnsupportedGoalError,
+)
 from services.secret_box import NotConfiguredError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,8 +62,10 @@ from core.api.v1.briefs import (
     CreativeIn,
     CreativeLaunchOut,
     creative_http_error,
+    hashtag_http_error,
     to_card_out,
 )
+from core.api.v1.cabinet import BankDetailsOut, bank_details_out
 
 # Все эндпоинты требуют admin-сессию.
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -94,6 +106,9 @@ class ClientDetailOut(BaseModel):
     phone: str | None
     telegram: str | None
     briefs: list[ClientBrief]
+    # Реквизиты клиента (spec 2026-09-19 §E) — только на чтение, заполняет сам
+    # клиент в своём кабинете. `None` — ещё не заполнены.
+    bank_details: BankDetailsOut | None
 
 
 class AdminBriefItem(BaseModel):
@@ -232,6 +247,7 @@ async def client_detail(
     if client is None:
         raise HTTPException(status_code=404, detail="client_not_found")
     briefs = await list_client_briefs(session, DEFAULT_ACCOUNT_ID, client_id)
+    bank_details = await get_client_bank_details(session, DEFAULT_ACCOUNT_ID, client_id)
     return ClientDetailOut(
         id=client.id,
         full_name=client.full_name,
@@ -239,6 +255,7 @@ async def client_detail(
         phone=client.phone,
         telegram=client.telegram,
         briefs=[ClientBrief(id=b.id, variant=b.variant, status=b.status) for b in briefs],
+        bank_details=bank_details_out(bank_details) if bank_details is not None else None,
     )
 
 
@@ -322,17 +339,31 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
+            allow_relaunch=data.allow_relaunch,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
+    except HashtagError as exc:
+        raise hashtag_http_error(exc) from exc
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
         raise HTTPException(status_code=422, detail={"missing": exc.missing}) from exc
     except UnsupportedGoalError as exc:
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
+    except SenlerNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
+    except AdAccountClientMismatchError as exc:
+        raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
+    except AdvertiserMismatchError as exc:
+        raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

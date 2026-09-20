@@ -151,6 +151,7 @@ def _fake_launch(captured: dict[str, Any]) -> Callable[..., Awaitable[LaunchOutc
         settings: Any = None,
         ad_account_id: int | None = None,
         goal: str | None = None,
+        allow_relaunch: bool = False,
     ) -> LaunchOutcome:
         captured["brief_id"] = brief_id
         captured["ad_account_id"] = ad_account_id

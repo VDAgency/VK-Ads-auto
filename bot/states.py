@@ -39,10 +39,15 @@ class EditBrief(StatesGroup):
 
 
 class UploadCreative(StatesGroup):
-    """Сценарий «загрузить креатив»: медиа → описание → отправка (триггер запуска РК)."""
+    """Сценарий «загрузить креатив»: медиа → описание → хэштеги → отправка (триггер
+    запуска РК). Шаг хэштегов (Task 5, spec 2026-09-19-block1-remaining-gaps §B)
+    вставлен между описанием и подтверждением: единственный вызов ядра
+    (`POST /briefs/{id}/creative`) должен нести уже готовую строку хэштегов."""
 
     waiting_media = State()  # ждём фото/видео
     waiting_description = State()  # ждём заголовок + текст
+    waiting_hashtags_choice = State()  # «Добавить хэштеги?» — добавить / без хэштегов
+    waiting_hashtags = State()  # ждём строку хэштегов (либо «Без хэштегов» кнопкой)
 
 
 class AddAdAccount(StatesGroup):

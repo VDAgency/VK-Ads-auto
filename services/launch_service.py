@@ -21,19 +21,23 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import asdict, dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from config.settings import Settings, get_settings
 from db.community_tokens import find_decrypted_token
-from db.models import Campaign, Creative
+from db.models import Brief, Campaign, Creative
 from db.repositories import (
     create_cabinet_row,
     find_cabinet,
     get_brief,
     get_cabinet,
     get_campaign,
+    list_campaigns_for_brief,
+    lock_brief_for_launch,
+    save_brief_object_resolution,
     set_campaign_status,
 )
 from integrations.adapter import PlatformAdapter
@@ -42,6 +46,8 @@ from integrations.kotbot_http import KotbotAdapter
 from integrations.stub import StubAdapter
 from integrations.vk_api import VkApiAdapter
 from integrations.vk_community import VkCommunityUnreachable, fetch_callback_servers
+from integrations.vk_object import ResolvedVkObject, resolve_vk_object
+from integrations.vk_surfaces import surface_for
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +62,14 @@ from services.ad_accounts import (
     resolve_default_account,
     resolve_token,
 )
-from services.brief_parser import BriefVariant, Goal, parse_brief, parse_budget
+from services.brief_parser import (
+    BriefVariant,
+    Goal,
+    ParsedBrief,
+    TargetType,
+    parse_brief,
+    parse_budget,
+)
 from services.brief_view import field_value, get_brief_card, tax_id
 from services.goals import launch_goal_title
 from services.launch import (
@@ -80,6 +93,13 @@ STUB_CHANNEL = "stub"
 # Публичная константа: тем же признаком пользуется синк статистики (`services/stats_sync`).
 MODERATION_MARKERS = ("moder", "pending")
 
+# Статусы кампании, при которых повторный запуск по тому же брифу считается
+# опасным дублем (spec 2026-09-19-block1-remaining-gaps §F): кампания ещё не
+# завершена, деньги клиента либо уже тратятся, либо вот-вот начнут. `stopped` и
+# `failed` сюда не попадают намеренно — остановленную или неудавшуюся кампанию
+# запускать заново нужно без лишних подтверждений.
+ACTIVE_CAMPAIGN_STATUSES = ("prepared", "launched", "moderation")
+
 
 # Цели рекламы, принимаемые этим валидатором запуска. «Сообщения» прошли боевой
 # зонд 2026-08-23 (integrations.vk_surfaces.VK_MESSAGES.verified=True) и в боте/вебе
@@ -99,6 +119,17 @@ SUPPORTED_GOALS = (SUBSCRIBERS_GOAL, LEAD_FORM_GOAL, MESSAGES_GOAL, SENLER_GOAL)
 # реже `event…`/`id…`) — используется ТОЛЬКО проверкой подключения Senler
 # (`_community_reference`), не связан с `integrations.vk_api._COMMUNITY_RE`.
 _COMMUNITY_SLUG_RE = re.compile(r"^(?:club|public|event|id)(\d+)$")
+
+# Резолвер числового id объекта — инжектируемый параметр `launch_from_creative`
+# (spec §D): тесты подменяют его без сети, а по умолчанию используется
+# `integrations.vk_object.resolve_vk_object`.
+ObjectResolver = Callable[[str], Awaitable[ResolvedVkObject | None]]
+
+# Площадки, для которых числовой адрес однозначно решает «сообщество или личная
+# страница» (та же пара, что `integrations.vk_api._URL_DECIDABLE`) — только для
+# них имеет смысл звать резолвер. Остальные площадки (рассылка, каналы, ОК) из
+# адреса не выводятся вовсе, поэтому там решает исключительно бриф.
+_OBJECT_RESOLVABLE_TARGET_TYPES = frozenset({TargetType.COMMUNITY, TargetType.PERSONAL_PAGE})
 
 
 class BriefNotFoundError(Exception):
@@ -158,6 +189,47 @@ class AdvertiserMismatchError(Exception):
         self.ad_account_id = ad_account_id
         self.ad_account_inn = ad_account_inn
         self.brief_tax_id = brief_tax_id
+
+
+class CampaignAlreadyExistsError(Exception):
+    """По этому брифу уже есть кампания в незавершённом статусе на боевом канале
+    (spec 2026-09-19-block1-remaining-gaps §F).
+
+    Защита от двойной траты бюджета клиента: без неё второй запуск по тому же
+    брифу (из другой вкладки, из бота параллельно с вебом или прямым вызовом API)
+    молча создавал бы вторую кампанию — раньше это перехватывал только веб-мастер
+    (commit 2969d33), а бот и прямой API оставались беззащитны. Кампании
+    заглушки-фолбэка (`_is_stub_campaign`) не считаются: иначе после честного
+    отказа боевого канала повторить запуск было бы вообще нельзя. Снимается
+    явным `allow_relaunch=True` — оператор мог решить запустить вторую кампанию
+    осознанно (веб уже даёт для этого отдельное подтверждённое действие).
+    """
+
+    def __init__(self, campaign_id: int, status: str) -> None:
+        super().__init__(f"active campaign {campaign_id} already exists with status {status!r}")
+        self.campaign_id = campaign_id
+        self.status = status
+
+
+class BudgetBelowMinimumError(Exception):
+    """Дневной бюджет брифа ниже минимума, который принимает площадка
+    (spec 2026-09-19-block1-remaining-gaps §C, боевая проверка 2026-07-27).
+
+    VK отклоняет `budget_limit_day` ниже порога целиком: 100 ₽/день у всех
+    площадок ВК/ОК/MAX, 10 000 ₽/день у Дзена
+    (`integrations.vk_surfaces.Surface.min_daily_budget_rub`). Молча отправлять
+    заниженный бюджет площадке смысла нет — кампания там всё равно не создастся,
+    поэтому отказ случается в ядре, до обращения к площадке. Бюджет «обсудить»
+    (`daily_budget_rub` вернул `None`) не блокирует — сравнивать не с чем.
+    """
+
+    def __init__(self, minimum: int, actual: float, surface_title: str) -> None:
+        super().__init__(
+            f"daily budget {actual} below minimum {minimum} for surface {surface_title!r}"
+        )
+        self.minimum = minimum
+        self.actual = actual
+        self.surface_title = surface_title
 
 
 class CampaignStopError(Exception):
@@ -315,6 +387,99 @@ def _check_ad_account_matches_brief(
         raise AdvertiserMismatchError(ad_account.id, account_inn, brief_tax_id)
 
 
+def _is_stub_campaign(campaign: Campaign) -> bool:
+    """Кампания создана на заглушке (`StubAdapter`), а не на боевом канале.
+
+    Признак — внешний id: `StubAdapter.create_campaign` (`integrations/stub.py`)
+    всегда отдаёт `f"stub-campaign-{cabinet_id}"`, и дефолтная реализация
+    `PlatformAdapter.create_campaign_from_spec` (`integrations/adapter.py`), которой
+    заглушка пользуется, этот формат не меняет. Строится именно на этом, а не на
+    `Cabinet.channel == "stub"`: кабинет для брифов без клиента вообще не
+    персистится (`_resolve_cabinet` ниже, `client_id is None` — редкий, но
+    возможный край), и тогда `cabinet_id` был бы `None` независимо от того, боевой
+    канал был или заглушка — признак по кабинету в этом крае молчал бы неверно.
+    """
+    return campaign.external_id is not None and campaign.external_id.startswith("stub-campaign-")
+
+
+async def _check_no_active_campaign(
+    session: AsyncSession, account_id: int, brief_id: int, *, allow_relaunch: bool
+) -> None:
+    """Отказать повторному запуску по брифу, если по нему уже есть незавершённая
+    кампания на боевом канале (spec §F). `allow_relaunch=True` — оператор явно
+    подтвердил повторный запуск (веб уже это умеет, commit 2969d33; бот и прямой
+    API теперь спрашивают то же самое, см. `CampaignAlreadyExistsError`) — тогда
+    проверка снимается совсем.
+
+    Смотрим ВСЕ кампании брифа (`list_campaigns_for_brief`), не только последнюю:
+    честный фолбэк на заглушку (`launch_from_creative` ниже) оставляет по строке
+    на каждый запуск, и предыдущая попытка вполне может быть заглушкой, а более
+    ранняя — настоящей незавершённой кампанией.
+    """
+    if allow_relaunch:
+        return
+    campaigns = await list_campaigns_for_brief(session, account_id, brief_id)
+    for campaign in campaigns:
+        if campaign.status in ACTIVE_CAMPAIGN_STATUSES and not _is_stub_campaign(campaign):
+            raise CampaignAlreadyExistsError(campaign.id, campaign.status)
+
+
+async def _resolve_brief_object(
+    session: AsyncSession,
+    account_id: int,
+    brief: Brief,
+    parsed: ParsedBrief,
+    resolve_object: ObjectResolver,
+) -> ParsedBrief:
+    """Подставить числовой адрес объекта вместо короткого, если он уже сохранён
+    в брифе или его удаётся узнать у ВК прямо сейчас (spec §D).
+
+    Резолвим только площадку из пары «сообщество/личная страница» — короткий
+    адрес других площадок (рассылка, каналы, ОК) её не выражает вовсе, там
+    решает только бриф. Уже сохранённый в брифе результат НЕ резолвим повторно
+    (решение Вячеслава) — читаем колонки `Brief.object_numeric_id`/
+    `object_resolved_kind`, заполненные предыдущим успешным запуском. Неудача
+    резолва (сеть, таймаут, нет маркера) не кэшируется и не меняет `parsed` —
+    запуск идёт со старой подсказкой брифа, как раньше.
+    """
+    if brief.object_numeric_id is not None and brief.object_resolved_kind is not None:
+        cached = ResolvedVkObject(
+            numeric_id=brief.object_numeric_id,
+            kind=brief.object_resolved_kind,  # type: ignore[arg-type]
+        )
+        return replace(parsed, object_url=cached.canonical_url)
+
+    if parsed.target_type not in _OBJECT_RESOLVABLE_TARGET_TYPES:
+        return parsed
+
+    resolved = await resolve_object(parsed.object_url)
+    if resolved is None:
+        return parsed
+
+    await save_brief_object_resolution(
+        session, account_id, brief.id, resolved.numeric_id, resolved.kind, datetime.now(UTC)
+    )
+    return replace(parsed, object_url=resolved.canonical_url)
+
+
+def _check_daily_budget_meets_minimum(spec: CampaignSpec) -> None:
+    """Отказать запуску, если дневной бюджет брифа ниже минимума площадки (spec §C).
+
+    `daily_budget_rub(spec)` уже сводит месячный бюджет брифа к дневному лимиту
+    (та же формула, что показывает предупреждение по балансу) — `None` значит
+    «обсудить» и сравнивать не с чем, тогда проверка молча пропускает запуск.
+    Площадка берётся по `spec.object_kind` — тому же ключу, что раскладка брифа
+    (`services.mapping.build_campaign_spec`) уже сохранила из распознанной
+    площадки, поэтому второй раз её распознавать не нужно.
+    """
+    daily_budget = daily_budget_rub(spec)
+    if daily_budget is None:
+        return
+    surface = surface_for(spec.object_kind)
+    if daily_budget < surface.min_daily_budget_rub:
+        raise BudgetBelowMinimumError(surface.min_daily_budget_rub, daily_budget, surface.title)
+
+
 def _is_unauthorized(exc: BaseException) -> bool:
     """Отличить «VK отклонил токен» от прочих отказов канала.
 
@@ -377,6 +542,12 @@ class LaunchPreview:
     daily_budget_rub: float | None
     balance_below_daily_budget: bool
     client_mismatch: bool
+    # Минимальный дневной бюджет площадки и признак, что бюджет брифа ниже него
+    # (spec 2026-09-19-block1-remaining-gaps §C) — карточка предупреждает заранее,
+    # что реальный запуск (`_check_daily_budget_meets_minimum`) отклонит кампанию;
+    # кнопку запуска это не прячет — оператор может сначала поднять бюджет в брифе.
+    min_daily_budget_rub: int
+    budget_below_minimum: bool
 
 
 async def launch_preview(
@@ -443,6 +614,9 @@ async def launch_preview(
         if balance is not None:
             balance_warning = balance_below_daily_budget(balance, amount, needs_discussion)
 
+    min_daily_budget = card.surface_min_daily_budget_rub
+    budget_below_minimum = daily_budget is not None and daily_budget < min_daily_budget
+
     return LaunchPreview(
         client_name=card.client_name,
         client_tax_id=tax_id(card) or None,
@@ -460,6 +634,8 @@ async def launch_preview(
         daily_budget_rub=daily_budget,
         balance_below_daily_budget=balance_warning,
         client_mismatch=ad_account_client_mismatch(ad_account, card.client_id),
+        min_daily_budget_rub=min_daily_budget,
+        budget_below_minimum=budget_below_minimum,
     )
 
 
@@ -637,6 +813,8 @@ async def launch_from_creative(
     router: ChannelRouter | None = None,
     ad_account_id: int | None = None,
     goal: str | None = None,
+    allow_relaunch: bool = False,
+    resolve_object: ObjectResolver = resolve_vk_object,
 ) -> LaunchOutcome:
     """Сохранить креатив, разложить бриф и создать кампанию. Коммит — на вызывающем.
 
@@ -657,14 +835,32 @@ async def launch_from_creative(
     сообщения, Senler); бриф с ещё не реализованной будущей целью по-прежнему
     отклоняется тем же `UnsupportedGoalError`, что и неизвестный параметр `goal`.
 
+    `allow_relaunch` — оператор явно подтвердил повторный запуск по брифу, у
+    которого уже есть незавершённая кампания на боевом канале (spec §F). Без
+    него второй такой запуск отклоняется `CampaignAlreadyExistsError` —
+    см. `_check_no_active_campaign`.
+
+    `resolve_object` — резолвер числового id объекта по короткому адресу (spec
+    §D), инжектируемый, чтобы тесты не ходили в сеть; по умолчанию
+    `integrations.vk_object.resolve_vk_object`. Вызывается ДО `build_campaign_spec`
+    для площадки «сообщество/личная страница» — см. `_resolve_brief_object`.
+    Инвариант порядка: резолв объекта выполняется ДО `lock_brief_for_launch` —
+    это сетевой HTTP-запрос (таймаут 5 с), и он не должен идти под блокировкой
+    строки брифа (`FOR UPDATE`). `_check_no_active_campaign` — единственная
+    проверка, которая обязана выполняться ПОСЛЕ захвата блокировки; резолв на неё
+    не влияет и от неё не зависит.
+
     Бросает `BriefNotFoundError`, если брифа нет, `BriefValidationError`
     (из `parse_brief`), `UnsupportedGoalError` (неподдержанный параметр `goal`
     ИЛИ неподдержанная цель самого брифа), ошибки выбора кабинета
     (`AccountNotFoundError`, `TokenUnavailableError`, `NoAdAccountError`,
-    `AmbiguousAdAccountError`) и сверки кабинета с брифом (`AdAccountClientMismatchError`,
-    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3) —
+    `AmbiguousAdAccountError`), сверки кабинета с брифом (`AdAccountClientMismatchError`,
+    `AdvertiserMismatchError`, spec 2026-08-25-cabinet-client-binding-design §1.2-1.3),
+    `CampaignAlreadyExistsError` (повтор без `allow_relaunch`, spec §F) и
+    `BudgetBelowMinimumError` (дневной бюджет ниже минимума площадки, spec §C) —
     все они срабатывают ДО записи `Creative`/`Cabinet`/`Campaign` и до обращения
-    к площадке (см. `_check_ad_account_matches_brief`).
+    к площадке (см. `_check_ad_account_matches_brief`, `_check_no_active_campaign`,
+    `_check_daily_budget_meets_minimum`).
     """
     cfg = settings or get_settings()
     _validate_goal(goal)
@@ -688,6 +884,22 @@ async def launch_from_creative(
     # чужой кабинет или несовпавший ИНН обязаны прервать запуск начисто (spec §1.2-1.3).
     _check_ad_account_matches_brief(ad_account, brief.client_id, parsed.tax_id)
 
+    # Числовой адрес объекта (spec §D) — ДО раскладки спеки (он способен сменить
+    # площадку, а значит и пакет/цель кампании) и ДО блокировки строки брифа: резолв
+    # ходит по сети в vk.com (HTTP GET, таймаут 5 с), и держать под ним строку
+    # заблокированной (`FOR UPDATE`) значит блокировать конкурентный запуск по этому
+    # брифу на всё время сетевого похода. Блокировка нужна только проверке активной
+    # кампании и созданию новой — резолв на них не влияет.
+    parsed = await _resolve_brief_object(session, account_id, brief, parsed, resolve_object)
+
+    # Блокировка строки брифа (no-op на SQLite) держит проверку и создание кампании
+    # в одной транзакции: два одновременных запуска по одному брифу не должны оба
+    # проскочить проверку параллельно (spec §F, гонка двух запросов). Возвращаемая
+    # строка намеренно не используется — сам факт блокировки и есть эффект, `brief`
+    # выше уже разобран для запуска.
+    await lock_brief_for_launch(session, account_id, brief_id)
+    await _check_no_active_campaign(session, account_id, brief_id, allow_relaunch=allow_relaunch)
+
     try:
         spec = build_campaign_spec(parsed)
     except UnsupportedBriefGoalError as exc:
@@ -695,6 +907,10 @@ async def launch_from_creative(
         # выше): роутерам и боту достаточно ловить один `UnsupportedGoalError`, чтобы
         # честно ответить 422 вместо утечки 500 в VK.
         raise UnsupportedGoalError(exc.goal.value) from exc
+
+    # Дневной бюджет ниже минимума площадки (spec §C) — тоже ДО любых побочных
+    # эффектов: площадка такую кампанию не примет, значит запуск не имеет смысла.
+    _check_daily_budget_meets_minimum(spec)
 
     senler_note: str | None = None
     if parsed.goal is Goal.SENLER:

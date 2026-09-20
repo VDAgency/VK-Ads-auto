@@ -11,6 +11,8 @@ import { useState } from "react";
 
 import {
   adminFetch,
+  hashtagErrorMessage,
+  isCampaignAlreadyExists,
   launchErrorMessage,
   type AdAccount,
   type Flash,
@@ -58,8 +60,12 @@ export function ConfirmStep({
   picked,
   title,
   body,
+  hashtags,
+  allowRelaunch,
   onFlash,
   onChangeCabinet,
+  onHashtagsError,
+  onCampaignAlreadyExists,
   onLaunched,
 }: {
   brief_id: number;
@@ -70,8 +76,25 @@ export function ConfirmStep({
   picked: PickedFile | null;
   title: string;
   body: string;
+  hashtags: string;
+  /** Оператор явно подтвердил «запустить ещё одну» на экране предупреждения
+   * (`LaunchWizard.tsx`, задача 6) — уходит в запрос как `allow_relaunch`. Обычный
+   * первый запуск шлёт `false`, ядро само отказывает без этого флага (409
+   * `campaign_already_exists`), если по брифу уже есть незавершённая кампания. */
+  allowRelaunch: boolean;
   onFlash: (flash: Flash) => void;
   onChangeCabinet: () => void;
+  /** Ядро отказало именно по хэштегам (422 `hashtags_*`, задача 5) — родитель
+   * возвращает оператора на шаг «Креатив» и показывает причину под полем, а
+   * не общей полосой результата: там текст был бы оторван от поля, которое
+   * нужно поправить. */
+  onHashtagsError: (message: string) => void;
+  /** 409 `campaign_already_exists` (задача 6): кто-то успел запустить кампанию
+   * по этому брифу, пока оператор дошёл до подтверждения (гонка двух вкладок
+   * либо повтор без флага). Родитель возвращает на экран «по этому брифу уже
+   * есть кампания» — то же уведомление, что показывается при открытии такого
+   * брифа, а не общая полоса ошибки. */
+  onCampaignAlreadyExists: () => void;
   /** Итог запуска целиком, не только текст — родитель прячет кнопку «Запустить»
    * насовсем после успеха (не «серая», а её нет), а не просто блокирует её на
    * время запроса (найденный баг: повторное нажатие после успеха создавало
@@ -112,19 +135,30 @@ export function ConfirmStep({
             height: picked.height,
             title,
             body,
+            hashtags,
             ad_account_id: account.id,
             goal: goalCode,
+            allow_relaunch: allowRelaunch,
           }),
         });
       } else {
         result = await adminFetch<LaunchOutcome>(`/briefs/${brief_id}/launch`, {
           method: "POST",
-          body: JSON.stringify({ ad_account_id: account.id }),
+          body: JSON.stringify({ ad_account_id: account.id, allow_relaunch: allowRelaunch }),
         });
       }
       onLaunched(result);
     } catch (error) {
-      onFlash({ text: launchErrorMessage(error), ok: false });
+      if (isCampaignAlreadyExists(error)) {
+        onCampaignAlreadyExists();
+        return;
+      }
+      const hashtagMessage = hashtagErrorMessage(error);
+      if (hashtagMessage) {
+        onHashtagsError(hashtagMessage);
+      } else {
+        onFlash({ text: launchErrorMessage(error), ok: false });
+      }
     } finally {
       setSending(false);
     }
@@ -207,6 +241,16 @@ export function ConfirmStep({
         <p className="adm-warn">
           <strong>Баланс кабинета</strong> меньше дневного бюджета из брифа. Кампанию это не
           остановит, но кабинет стоит пополнить.
+        </p>
+      ) : null}
+
+      {preview.budget_below_minimum && preview.daily_budget_rub != null ? (
+        <p className="adm-warn">
+          Дневной бюджет {Math.round(preview.daily_budget_rub).toLocaleString("ru-RU")} ₽ ниже
+          минимума площадки{preview.surface_title ? ` «${preview.surface_title}»` : ""} —{" "}
+          {preview.min_daily_budget_rub.toLocaleString("ru-RU")} ₽.{" "}
+          <strong>Запуск будет отклонён.</strong> Поднимите бюджет правкой брифа либо запустите как
+          есть и увидите отказ.
         </p>
       ) : null}
 

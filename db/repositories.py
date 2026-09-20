@@ -16,6 +16,7 @@ from db.models import (
     Cabinet,
     Campaign,
     Client,
+    ClientBankDetails,
     Creative,
     Discount,
     Operator,
@@ -81,6 +82,48 @@ async def get_brief(session: AsyncSession, account_id: int, brief_id: int) -> Br
     """Получить бриф тенанта по id (для операторской карточки)."""
     stmt = select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id)
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def lock_brief_for_launch(
+    session: AsyncSession, account_id: int, brief_id: int
+) -> Brief | None:
+    """Бриф тенанта с блокировкой строки (`SELECT … FOR UPDATE`) — защита от гонки
+    двух одновременных запусков по одному брифу (задача 6, spec F): пока одна
+    транзакция держит блокировку между проверкой активной кампании и её созданием,
+    вторая ждёт и увидит уже созданную кампанию, а не проскочит ту же проверку
+    параллельно. На SQLite (тесты) `FOR UPDATE` — no-op: там нет конкурентных
+    писателей, блокировка не нужна и не поддерживается драйвером.
+    """
+    stmt = (
+        select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id).with_for_update()
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def save_brief_object_resolution(
+    session: AsyncSession,
+    account_id: int,
+    brief_id: int,
+    numeric_id: int,
+    kind: str,
+    resolved_at: datetime,
+) -> Brief | None:
+    """Сохранить итог резолва числового id объекта рекламы (задача 8, spec §D).
+
+    Заполненные колонки — признак «резолвить больше не нужно»: вызывающая
+    сторона (`services/launch_service.py`) проверяет их перед тем, как звать
+    резолвер повторно. Возвращает `None`, если брифа нет в тенанте — сохранять
+    тогда некуда.
+    """
+    stmt = select(Brief).where(Brief.account_id == account_id, Brief.id == brief_id)
+    brief = (await session.execute(stmt)).scalar_one_or_none()
+    if brief is None:
+        return None
+    brief.object_numeric_id = numeric_id
+    brief.object_resolved_kind = kind
+    brief.object_resolved_at = resolved_at
+    await session.flush()
+    return brief
 
 
 async def list_clients(session: AsyncSession, account_id: int) -> list[Client]:
@@ -160,6 +203,22 @@ async def get_latest_campaign_for_brief(
         .limit(1)
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_campaigns_for_brief(
+    session: AsyncSession, account_id: int, brief_id: int
+) -> list[Campaign]:
+    """Все кампании по брифу, свежие сверху — проверка повторного запуска (задача 6):
+    в отличие от `get_latest_campaign_for_brief` нужны все попытки, потому что
+    честный фолбэк на заглушку (`services.launch_service.launch_from_creative`)
+    оставляет по строке на КАЖДЫЙ запуск, а не переиспользует старую.
+    """
+    stmt = (
+        select(Campaign)
+        .where(Campaign.account_id == account_id, Campaign.brief_id == brief_id)
+        .order_by(Campaign.id.desc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_brief_ids_for_invites(
@@ -973,5 +1032,43 @@ async def set_ad_account_client(
     if row is None:
         return None
     row.client_id = client_id
+    await session.flush()
+    return row
+
+
+# --- Банковские реквизиты клиента (ClientBankDetails, spec 2026-09-19 §E) -----
+
+
+async def get_bank_details(
+    session: AsyncSession, account_id: int, client_id: int
+) -> ClientBankDetails | None:
+    """Сохранённые реквизиты клиента тенанта. `None` — ещё не заполнены."""
+    stmt = select(ClientBankDetails).where(
+        ClientBankDetails.account_id == account_id, ClientBankDetails.client_id == client_id
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_bank_details(
+    session: AsyncSession,
+    account_id: int,
+    client_id: int,
+    *,
+    payer_name: str,
+    bank_name: str,
+    bik: str,
+    settlement_account: str,
+    correspondent_account: str,
+) -> ClientBankDetails:
+    """Создать реквизиты клиента или заменить существующие (одна запись на клиента)."""
+    row = await get_bank_details(session, account_id, client_id)
+    if row is None:
+        row = ClientBankDetails(account_id=account_id, client_id=client_id)
+        session.add(row)
+    row.payer_name = payer_name
+    row.bank_name = bank_name
+    row.bik = bik
+    row.settlement_account = settlement_account
+    row.correspondent_account = correspondent_account
     await session.flush()
     return row

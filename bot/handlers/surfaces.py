@@ -58,6 +58,12 @@ def render_surfaces() -> str:
             lines.append(f"{mark} <b>{_escape(target.title)}</b>{creative}")
             lines.append(f"   в бриф: «{_escape(target.kind)}» или своими словами")
             lines.append(f"   {_escape(target.hint)}")
+            # Минимальный дневной бюджет площадки (задача 7, spec §C) — показываем,
+            # только если он отличается от базовых 100 ₽, чтобы не засорять справку
+            # цифрой, одинаковой у подавляющего большинства площадок.
+            if target.min_daily_budget_rub != 100:
+                minimum = f"{target.min_daily_budget_rub:,}".replace(",", " ")
+                lines.append(f"   минимальный бюджет: {minimum} ₽/день")
         lines.append("")
     lines.append(_OUTRO)
     return "\n".join(lines)

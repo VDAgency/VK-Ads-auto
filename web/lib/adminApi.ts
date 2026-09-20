@@ -66,6 +66,16 @@ export type ClientRow = {
 
 export type ClientBrief = { id: number; variant: string; status: string };
 
+/** Реквизиты клиента (зеркало `BankDetailsOut` ядра) — в админке только на чтение,
+ * заполняет сам клиент в своём кабинете (spec 2026-09-19 §E). */
+export type ClientBankDetails = {
+  payer_name: string;
+  bank_name: string;
+  bik: string;
+  settlement_account: string;
+  correspondent_account: string;
+};
+
 export type ClientDetail = {
   id: number;
   full_name: string | null;
@@ -73,6 +83,7 @@ export type ClientDetail = {
   phone: string | null;
   telegram: string | null;
   briefs: ClientBrief[];
+  bank_details: ClientBankDetails | null;
 };
 
 export type BriefListItem = {
@@ -250,6 +261,10 @@ export type LaunchPreview = {
   daily_budget_rub: number | null;
   balance_below_daily_budget: boolean;
   client_mismatch: boolean;
+  /** Минимальный дневной бюджет площадки и признак, что бюджет брифа ниже него
+   * (задача 7, spec §C) — тот же расчёт, что реальный запуск отклонит. */
+  min_daily_budget_rub: number;
+  budget_below_minimum: boolean;
 };
 
 /** Причины отказа выбора кабинета при запуске (409-детали ядра) — тот же текст,
@@ -276,8 +291,21 @@ export const LAUNCH_REJECT_ERRORS: Record<string, string> = {
   senler_not_connected:
     "К сообществу не подключён чат-бот Senler — заявки будет некому обрабатывать. " +
     "Проверьте подключение и повторите запуск.",
+  budget_below_minimum:
+    "Дневной бюджет ниже минимума площадки — VK не примет такую кампанию. " +
+    "Увеличьте бюджет в брифе.",
   brief_not_found: "Бриф не найден.",
 };
+
+/** 409-код повторного запуска по брифу в ядре (задача 6, spec §F) — распознаётся
+ * отдельно от `CABINET_REJECT_ERRORS`: вместо общей полосы ошибки мастер
+ * возвращает оператора на уведомление «по этому брифу уже есть кампания»
+ * (`LaunchWizard.tsx`), а не показывает голый текст отказа. */
+export function isCampaignAlreadyExists(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.detail === "campaign_already_exists"
+  );
+}
 
 /** Известные отказы `POST /ad-accounts/agency-cabinets` — тот же текст, что
  * бот показывает в `_agency_cabinet_reject_reason` (bot/api_client.py), без
@@ -359,6 +387,27 @@ export function agencyCabinetErrorMessage(error: unknown): string {
     if (typeof detail === "string") return AGENCY_CABINET_ERRORS[detail] ?? AGENCY_CABINET_FALLBACK;
   }
   return AGENCY_CABINET_FALLBACK;
+}
+
+/** Причины отказа хэштегов креатива (422 `hashtags_*` ядра, `services/hashtags.py`) —
+ * тот же смысл, что бот показывает по этим кодам (`bot/api_client.py::_hashtag_reject_reason`,
+ * задача 5). */
+export const HASHTAG_ERRORS: Record<string, string> = {
+  hashtags_invalid_tag: "В хэштегах разрешены только буквы, цифры и «_».",
+  hashtags_too_many: "Хэштегов больше 10 — уберите лишние.",
+  hashtags_tag_too_long: "Один из хэштегов длиннее 50 символов — сократите его.",
+  hashtags_text_too_long:
+    "Текст с хэштегами не помещается в лимит площадки — сократите текст или хэштеги.",
+  hashtags_not_supported: "У этой площадки нет текста объявления — хэштеги здесь не нужны.",
+};
+
+/** Человеческая причина отказа именно по хэштегам — `null`, если ошибка о другом
+ * (тогда её показывает общий `launchErrorMessage`, а не поле хэштегов). */
+export function hashtagErrorMessage(error: unknown): string | null {
+  if (error instanceof ApiError && error.status === 422 && typeof error.detail === "string") {
+    return HASHTAG_ERRORS[error.detail] ?? null;
+  }
+  return null;
 }
 
 /** Человеческая причина отказа запуска/приёма креатива по ошибке API — единая
@@ -542,6 +591,7 @@ export type SurfaceOut = {
   goal: string;
   goal_title: string;
   needs_creative: boolean;
+  min_daily_budget_rub: number;
 };
 
 export type SurfacesOut = { items: SurfaceOut[] };

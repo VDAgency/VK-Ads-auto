@@ -264,6 +264,10 @@ class _FakeState:
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = dict(data)
         self.cleared = False
+        self.state: Any = None
+
+    async def set_state(self, state: Any) -> None:
+        self.state = state
 
     async def update_data(self, **kwargs: Any) -> None:
         self.data.update(kwargs)
@@ -279,7 +283,12 @@ class _FakeState:
 def test_got_description_shows_full_card_with_creative(monkeypatch: pytest.MonkeyPatch) -> None:
     """Тот же боевой путь (`bot/handlers/creative.py:got_description`): карточка
     подтверждения после ввода описания несёт клиента, объект, цель, бюджет и
-    кабинет — не только заголовок и текст креатива, как было раньше."""
+    кабинет — не только заголовок и текст креатива, как было раньше.
+
+    Между описанием и карточкой встал шаг «хэштеги?» (Task 5) — сценарий
+    сквозной: описание → «Без хэштегов» → карточка, ровно как выберет оператор,
+    которому хэштеги не нужны.
+    """
 
     async def fake_get_brief(brief_id: int) -> BriefCard:
         return _card(brief_id=brief_id)
@@ -307,8 +316,10 @@ def test_got_description_shows_full_card_with_creative(monkeypatch: pytest.Monke
     message = _FakeMessage("Заголовок объявления\nТекст объявления")
 
     asyncio.run(creative.got_description(message, state))
+    skip_callback = _FakeCallback("hashtags_skip")
+    asyncio.run(creative.skip_hashtags(skip_callback, state))
 
-    text, markup = message.answers[-1]
+    text, markup = skip_callback.message.answers[-1]
     assert "Иван Петров" in text  # клиент
     assert "vk.com/ivan" in text  # объект рекламы
     assert "Подписчики" in text  # цель по-русски
@@ -339,7 +350,9 @@ def test_launch_without_creative_end_to_end_waits_for_confirmation(
     async def fake_list(client_id: int | None = None) -> list[AdAccountItem]:
         return [_account(id=3, client_id=42, client_name="Иван Петров")]
 
-    async def fake_launch(brief_id: int, ad_account_id: int | None = None) -> Any:
+    async def fake_launch(
+        brief_id: int, ad_account_id: int | None = None, *, allow_relaunch: bool = False
+    ) -> Any:
         launched["brief_id"] = brief_id
         launched["ad_account_id"] = ad_account_id
         return SimpleNamespace(campaign_status="prepared", campaign_id=1, message="🚀 подготовлена")

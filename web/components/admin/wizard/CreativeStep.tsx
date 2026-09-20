@@ -18,6 +18,9 @@ export function CreativeStep({
   onTitleChange,
   body,
   onBodyChange,
+  hashtags,
+  onHashtagsChange,
+  hashtagsError,
   onContinue,
 }: {
   picked: PickedFile | null;
@@ -26,6 +29,12 @@ export function CreativeStep({
   onTitleChange: (value: string) => void;
   body: string;
   onBodyChange: (value: string) => void;
+  hashtags: string;
+  onHashtagsChange: (value: string) => void;
+  /** Причина отказа ядра по хэштегам (422 `hashtags_*`, задача 5) — приходит от
+   * попытки запуска на шаге подтверждения; здесь только показ под полем, сама
+   * ошибка узнаётся уже после отправки, не при наборе текста. */
+  hashtagsError?: string | null;
   onContinue: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -171,6 +180,23 @@ export function CreativeStep({
           onChange={(event) => onBodyChange(event.target.value)}
         />
         <p className="adm-panel__hint">{body.length} из 220</p>
+      </div>
+
+      <div className="form-field">
+        <label htmlFor="cr-hashtags">Хэштеги</label>
+        <input
+          id="cr-hashtags"
+          type="text"
+          value={hashtags}
+          onChange={(event) => onHashtagsChange(event.target.value)}
+          aria-describedby="cr-hashtags-hint cr-hashtags-error"
+        />
+        <p className="adm-panel__hint" id="cr-hashtags-hint">
+          Необязательно, через пробел или запятую, например: кофе утро
+        </p>
+        <div id="cr-hashtags-error" role="alert">
+          {hashtagsError ? <p className="adm-drop__error">{hashtagsError}</p> : null}
+        </div>
       </div>
 
       <div className="adm-actions">

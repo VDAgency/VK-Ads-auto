@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { ApiError, apiFetch } from "@/lib/api";
+import {
+  ApiError,
+  apiFetch,
+  bankDetailsFieldErrors,
+  getBankDetails,
+  saveBankDetails,
+  type BankDetailsOut,
+} from "@/lib/api";
 
 import "./cabinet.css";
 
@@ -189,6 +196,169 @@ function ReferralBlock({ url }: { url: string }) {
   );
 }
 
+/** Человеческий текст кода ошибки поля реквизитов (`services/bank_details.py`, spec §E). */
+const BANK_DETAILS_ERROR_RU: Record<string, string> = {
+  required: "Заполните это поле.",
+  too_long: "Слишком длинное значение — не больше 255 символов.",
+  bik_format: "БИК — 9 цифр.",
+  account_format: "Расчётный счёт — 20 цифр.",
+  account_checksum: "Счёт не сходится с БИК — проверьте цифры.",
+  corr_format: "Корр. счёт — 20 цифр, начинается с 30101.",
+  corr_checksum: "Корр. счёт не сходится с БИК — проверьте цифры.",
+};
+
+const EMPTY_BANK_DETAILS: BankDetailsOut = {
+  payer_name: "",
+  bank_name: "",
+  bik: "",
+  settlement_account: "",
+  correspondent_account: "",
+};
+
+const BANK_DETAILS_FIELDS: {
+  key: keyof BankDetailsOut;
+  label: string;
+  numeric?: boolean;
+  maxLength?: number;
+}[] = [
+  { key: "payer_name", label: "Наименование плательщика" },
+  { key: "bank_name", label: "Банк" },
+  { key: "bik", label: "БИК", numeric: true, maxLength: 9 },
+  { key: "settlement_account", label: "Расчётный счёт", numeric: true, maxLength: 20 },
+  { key: "correspondent_account", label: "Корр. счёт", numeric: true, maxLength: 20 },
+];
+
+/**
+ * Раздел «Реквизиты для документов» (spec 2026-09-19 §E). Своя загрузка и
+ * сохранение — отдельный эндпоинт от основного `GET /cabinet`. `token` нужен,
+ * когда клиент открыл кабинет по ссылке входа без cookie-сессии (пароль уже
+ * установлен, `CabinetPage` тогда не выдаёт cookie, см. `getBankDetails`).
+ */
+function BankDetailsBlock({ token }: { token: string | null }) {
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [form, setForm] = useState<BankDetailsOut>(EMPTY_BANK_DETAILS);
+  const [hint, setHint] = useState<string | null>(null);
+  const [hasSaved, setHasSaved] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getBankDetails(token)
+      .then((data) => {
+        if (cancelled) return;
+        if (data.bank_details) {
+          setForm(data.bank_details);
+          setHasSaved(true);
+        } else {
+          setHint(data.brief_hint);
+        }
+        setStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  function updateField(field: keyof BankDetailsOut, value: string) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    setSaved(false);
+    setFieldErrors((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    setSaveError("");
+    setFieldErrors({});
+    setSaving(true);
+    try {
+      const result = await saveBankDetails(form, token);
+      setForm(result.bank_details);
+      setHasSaved(true);
+      setSaved(true);
+    } catch (err) {
+      const errors = bankDetailsFieldErrors(err);
+      if (errors) {
+        setFieldErrors(errors);
+      } else {
+        setSaveError("Не удалось сохранить реквизиты. Попробуйте позже.");
+      }
+    }
+    setSaving(false);
+  }
+
+  return (
+    <section className="cab-card" aria-labelledby="bank-title">
+      <h2 id="bank-title">Реквизиты для документов</h2>
+      <p className="cab-card__sub">
+        Нужны для оформления документов по услуге. Автоматически никуда не переносим.
+      </p>
+
+      {status === "loading" ? <p className="cab-card__sub">Загружаем…</p> : null}
+
+      {status === "error" ? (
+        <p className="cab-card__sub">Не удалось загрузить реквизиты. Обновите страницу.</p>
+      ) : null}
+
+      {status === "ready" ? (
+        <>
+          {!hasSaved && hint ? <p className="cab-bank-hint">В брифе вы указали: {hint}</p> : null}
+
+          {BANK_DETAILS_FIELDS.map((field) => (
+            <div className="form-field" key={field.key}>
+              <label htmlFor={`bank-${field.key}`}>{field.label}</label>
+              <input
+                id={`bank-${field.key}`}
+                name={field.key}
+                type="text"
+                inputMode={field.numeric ? "numeric" : undefined}
+                maxLength={field.maxLength}
+                value={form[field.key]}
+                onChange={(event) => updateField(field.key, event.target.value)}
+              />
+              {fieldErrors[field.key] ? (
+                <p className="cab-field-error" role="alert">
+                  {BANK_DETAILS_ERROR_RU[fieldErrors[field.key]] ?? "Проверьте значение."}
+                </p>
+              ) : null}
+            </div>
+          ))}
+
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={saving}
+            onClick={() => void handleSave()}
+          >
+            {saving ? "Сохраняем…" : "Сохранить"}
+          </button>
+
+          {saved ? (
+            <p className="cab-bank-success" role="status">
+              Реквизиты сохранены.
+            </p>
+          ) : null}
+
+          {saveError ? (
+            <div className="result err show" role="alert">
+              {saveError}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export default function CabinetPage() {
   const [view, setView] = useState<CabinetView | null>(null);
   const [needPassword, setNeedPassword] = useState(false);
@@ -198,6 +368,9 @@ export default function CabinetPage() {
   const [pw2, setPw2] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
+  // Заполняется только при входе по ссылке без cookie-сессии (пароль уже
+  // установлен) — реквизитам нужен тот же токен, что и основному GET /cabinet.
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
   /** Загрузить кабинет по session-cookie (без токена в URL). */
   const loadCabinet = useCallback(async () => {
@@ -225,6 +398,9 @@ export default function CabinetPage() {
             setNeedPassword(true);
           } else {
             setView(data);
+            // Токен-вход не выдаёт cookie (её ставят только /login и
+            // /set-password) — без него запросы реквизитов получили бы 401.
+            setAuthToken(token);
           }
         } catch {
           // Токен недействителен или истёк — на модалку входа.
@@ -419,6 +595,8 @@ export default function CabinetPage() {
             <ReportBlock report={view.report} />
 
             {view.referral_url ? <ReferralBlock url={view.referral_url} /> : null}
+
+            <BankDetailsBlock token={authToken} />
 
             <section className="cab-card" aria-labelledby="profile-title">
               <h2 id="profile-title">Ваши контакты</h2>

@@ -1,8 +1,9 @@
-"""Сбор статистики кампаний и сборка ежедневного дайджеста.
+"""Снятие метрик кампании с площадки и приведение к производным (CTR/CPC/CPL).
 
-Метрики берём через адаптер (площадка-агностично), считаем производные (CTR/CPC/CPL)
-и форматируем отчёт. Хранение срезов — `db.repositories.save_stat`. Расписание
-(дайджест в 9:00) подключается планировщиком/n8n отдельно; здесь — сбор и формат.
+Метрики берём через адаптер (площадка-агностично). Хранение срезов —
+`db.repositories.save_stat`. Ежедневная сводка оператору (09:00 МСК, задача 3А)
+— отдельный модуль `services.daily_digest`, который переиспользует
+`fetch_campaign_stats` через `services.stats_sync`, а не эти строки напрямую.
 """
 
 from __future__ import annotations
@@ -45,21 +46,3 @@ async def fetch_campaign_stats(adapter: PlatformAdapter, campaign_id: str) -> Ca
         spent=raw.get("spent", 0.0),
         results=raw.get("goals", 0.0),
     )
-
-
-def build_digest(stats: list[CampaignStats]) -> str:
-    """Собрать текст ежедневного дайджеста по списку кампаний."""
-    if not stats:
-        return "Активных кампаний нет."
-    lines = ["Ежедневный отчёт:"]
-    total_spent = 0.0
-    total_results = 0.0
-    for item in stats:
-        lines.append(
-            f"• {item.campaign_id}: показы {int(item.shows)}, расход {item.spent:.0f} ₽, "
-            f"подписки {int(item.results)}, CTR {item.ctr}%, CPC {item.cpc} ₽, CPL {item.cpl} ₽"
-        )
-        total_spent += item.spent
-        total_results += item.results
-    lines.append(f"Итого: расход {total_spent:.0f} ₽, подписки {int(total_results)}.")
-    return "\n".join(lines)

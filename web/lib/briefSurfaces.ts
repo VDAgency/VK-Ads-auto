@@ -30,6 +30,10 @@ export type BriefSurfaceOption = {
   enabled: boolean;
   /** Цель кампании площадки — определяет, на какой вкладке она показана. */
   goal: BriefGoalKey;
+  /** Короткая подсказка под подписью варианта — сейчас только у Дзена (задача 7,
+   * spec §C): минимальный бюджет площадки заметно выше остальных, и клиент должен
+   * узнать об этом до отправки брифа, а не только после отказа запуска. */
+  note?: string;
 };
 
 export const BRIEF_SURFACES: BriefSurfaceOption[] = [
@@ -55,7 +59,13 @@ export const BRIEF_SURFACES: BriefSurfaceOption[] = [
     enabled: true,
     goal: "subscription",
   },
-  { value: "канал Дзен", label: "📄 Канал Дзен", enabled: true, goal: "subscription" },
+  {
+    value: "канал Дзен",
+    label: "📄 Канал Дзен",
+    enabled: true,
+    goal: "subscription",
+    note: "Минимальный бюджет у Дзена — 10 000 ₽ в день.",
+  },
   // Смежные цели: продвигаем готовый объект или собираем заявки. Креатив для постов
   // не нужен — объявлением служит сам пост.
   {

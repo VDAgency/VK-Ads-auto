@@ -110,6 +110,33 @@ def creative_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def hashtags_choice_keyboard() -> InlineKeyboardMarkup:
+    """Шаг «хэштеги» после описания креатива (Task 5): добавить или пропустить.
+
+    Пропуск ведёт прямо к подтверждению запуска, как раньше без этого шага.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="#️⃣ Добавить", callback_data="hashtags_add"),
+                InlineKeyboardButton(text="Без хэштегов", callback_data="hashtags_skip"),
+            ]
+        ]
+    )
+
+
+def hashtags_skip_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка «Без хэштегов» на экране ввода строки — путь наружу без набора текста.
+
+    Тот же `callback_data`, что и в `hashtags_choice_keyboard`: один хендлер
+    обрабатывает пропуск из обоих состояний (выбора и ввода) — оператору
+    незачем печатать что-то, чтобы отказаться от хэштегов.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Без хэштегов", callback_data="hashtags_skip")]]
+    )
+
+
 def launch_confirm_keyboard(brief_id: int, ad_account_id: int) -> InlineKeyboardMarkup:
     """Подтверждение запуска кампании без креатива (карточка подтверждения, Т3).
 
@@ -122,6 +149,41 @@ def launch_confirm_keyboard(brief_id: int, ad_account_id: int) -> InlineKeyboard
             [
                 InlineKeyboardButton(
                     text="🚀 Запустить", callback_data=f"nocre_confirm:{brief_id}:{ad_account_id}"
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="nocre_cancel"),
+            ]
+        ]
+    )
+
+
+def relaunch_confirm_keyboard(brief_id: int) -> InlineKeyboardMarkup:
+    """409 `campaign_already_exists` в сценарии с креативом (задача 6): повторить
+    тем же креативом (`allow_relaunch=True`) либо отменить — материалы остаются
+    в FSM, повторного набора не требуется (`bot/handlers/creative.py`)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚀 Запустить ещё одну", callback_data=f"creative_relaunch:{brief_id}"
+                ),
+                InlineKeyboardButton(text="✖ Отмена", callback_data="creative_cancel"),
+            ]
+        ]
+    )
+
+
+def relaunch_confirm_keyboard_no_creative(
+    brief_id: int, ad_account_id: int
+) -> InlineKeyboardMarkup:
+    """То же самое для сценария без креатива. Оба id — в `callback_data`: у этого
+    сценария нет FSM-состояния между показом карточки и повтором (тот же приём,
+    что в `launch_confirm_keyboard`)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚀 Запустить ещё одну",
+                    callback_data=f"nocre_relaunch:{brief_id}:{ad_account_id}",
                 ),
                 InlineKeyboardButton(text="✖ Отмена", callback_data="nocre_cancel"),
             ]

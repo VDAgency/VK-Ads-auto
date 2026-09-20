@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 from html import escape as _escape
 from typing import Any
 
@@ -18,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from services.brief_parser import parse_budget
 from services.goals import launch_goals
-from services.launch import balance_below_daily_budget
+from services.launch import balance_below_daily_budget, daily_budget_rub_from_amount
 
 from bot import api_client
 from bot.access import OperatorOnly
@@ -27,15 +28,21 @@ from bot.api_client import (
     AgencyCabinetRejected,
     BriefCard,
     BriefNotFound,
+    CampaignAlreadyExists,
     CoreUnavailable,
     CreativeRejected,
+    HashtagRejected,
 )
 from bot.keyboards import (
     ad_account_pick_keyboard,
     brief_card_keyboard,
     cabinet_create_confirm_keyboard,
     creative_confirm_keyboard,
+    hashtags_choice_keyboard,
+    hashtags_skip_keyboard,
     launch_goal_keyboard,
+    relaunch_confirm_keyboard,
+    relaunch_confirm_keyboard_no_creative,
 )
 from bot.states import LaunchCampaign, UploadCreative
 
@@ -51,6 +58,12 @@ _ASK_MEDIA = "🖼 Пришлите фото или видео для рекла
 _ASK_DESCRIPTION = (
     "Добавьте описание: первая строка — заголовок (до 40 символов), остальное — текст "
     "(до 220). Или отправьте «-», чтобы без описания."
+)
+# Шаг «хэштеги» (Task 5, spec 2026-09-19-block1-remaining-gaps §B) — между описанием
+# и подтверждением запуска: единственный вызов ядра должен нести готовую строку.
+_ASK_HASHTAGS_CHOICE = "Добавить хэштеги к тексту объявления?"
+_ASK_HASHTAGS_INPUT = (
+    "Пришлите хэштеги через пробел или запятую, например: кофе утро. «#» можно не ставить."
 )
 _TOO_BIG = "Файл больше 20 МБ — Telegram не даёт боту его скачать. Пришлите версию полегче."
 _ASK_CABINET = "В каком рекламном кабинете запускаем кампанию?"
@@ -84,6 +97,56 @@ GOALS: list[tuple[str, str, bool]] = [
 # (Т3, spec 2026-08-25-cabinet-client-binding-design §2: «цель по-русски»). Считаем
 # из launch_goals(), а не дублируем текстом, чтобы подписи не могли разойтись.
 GOAL_LABELS: dict[str, str] = {goal.code: goal.title for goal in launch_goals()}
+
+# Статус кампании (`Campaign.status`, задача 6) по-русски, женский род («кампания
+# подготовлена») — отдельно от `_STATUS_RU` статусов брифа в
+# `bot/handlers/brief_card.py` и от `_STATUS_HINT` кабинета в
+# `bot/handlers/stats.py` (мужской род, «кабинет подготовлен»): разное
+# согласование, общий словарь смешал бы формулировки.
+_CAMPAIGN_STATUS_RU = {
+    "prepared": "подготовлена",
+    "launched": "запущена",
+    "moderation": "на модерации",
+    "stopped": "остановлена",
+    "failed": "ошибка запуска",
+}
+
+
+async def _relaunch_notice_text(brief_id: int) -> str:
+    """Текст уведомления 409 `campaign_already_exists` (задача 6) со статусом
+    существующей кампании — берём из свежей карточки брифа (`card.campaign_status`),
+    409-деталь ядра его не несёт (строковый код, как у прочих отказов запуска).
+    """
+    status = None
+    with contextlib.suppress(BriefNotFound, CoreUnavailable):
+        card = await api_client.get_brief(brief_id)
+        status = card.campaign_status
+    status_ru = _CAMPAIGN_STATUS_RU.get(status or "", status) if status else None
+    suffix = f" (статус: {status_ru})" if status_ru else ""
+    return f"⚠️ По этому брифу уже есть кампания{suffix}. Запустить ещё одну?"
+
+
+async def _offer_relaunch(message: Message, brief_id: int) -> None:
+    """409 `campaign_already_exists` в сценарии с креативом: показать статус
+    существующей кампании и явно спросить, запускать ли ещё одну."""
+    await message.answer(
+        await _relaunch_notice_text(brief_id), reply_markup=relaunch_confirm_keyboard(brief_id)
+    )
+
+
+async def offer_relaunch_without_creative(
+    message: Message, brief_id: int, ad_account_id: int
+) -> None:
+    """То же самое, но для сценария без креатива (`bot/handlers/brief_card.py`):
+    нет FSM, оба id уходят в `callback_data` клавиатуры, поэтому используется
+    отдельная клавиатура (`relaunch_confirm_keyboard_no_creative`). Публичная —
+    вызывается из другого модуля хендлеров, как и
+    `create_cabinet_or_report`/`offer_cabinet_creation`.
+    """
+    await message.answer(
+        await _relaunch_notice_text(brief_id),
+        reply_markup=relaunch_confirm_keyboard_no_creative(brief_id, ad_account_id),
+    )
 
 
 # --- C1: предложение завести клиенту кабинет автоматически ---------------------
@@ -616,6 +679,33 @@ def _balance_line(account: AdAccountItem, card: BriefCard) -> str | None:
     return line
 
 
+def _format_rub(value: float) -> str:
+    """Целое число рублей с пробелом-разделителем тысяч («10 000», не «10000»)."""
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def _budget_minimum_line(card: BriefCard) -> str | None:
+    """Предупреждение, что дневной бюджет брифа ниже минимума площадки (задача 7,
+    spec §C) — теми же числами, которые реальный запуск сравнит с минимумом
+    (`services.launch_service._check_daily_budget_meets_minimum`). Показывается
+    заранее, но кнопку подтверждения не прячет: оператор может сначала поднять
+    бюджет правкой брифа, а может и отправить как есть и увидеть честный отказ.
+
+    Бюджет «обсудить» (`daily_budget_rub_from_amount` вернул `None`) — сравнивать
+    не с чем, строка не показывается.
+    """
+    amount, needs_discussion = parse_budget(_field_value(card, "Бюджет"))
+    daily_budget = daily_budget_rub_from_amount(amount, needs_discussion)
+    minimum = card.surface_min_daily_budget_rub
+    if daily_budget is None or daily_budget >= minimum:
+        return None
+    surface = f"«{_escape(card.surface_title)}»" if card.surface_title else "этой площадки"
+    return (
+        f"⚠️ Дневной бюджет {_format_rub(daily_budget)} ₽ ниже минимума {surface} — "
+        f"{_format_rub(minimum)} ₽. Запуск будет отклонён."
+    )
+
+
 def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_label: str) -> str:
     """Карточка подтверждения запуска — клиент, объект, цель, бюджет, кабинет,
     отметка соответствия (spec 2026-08-25-cabinet-client-binding-design §2).
@@ -659,6 +749,11 @@ def render_launch_confirmation(card: BriefCard, account: AdAccountItem, goal_lab
     lines += [
         f"🎯 Цель: {_escape(goal_label)}",
         f"💰 Бюджет: {budget} · срок: {term}",
+    ]
+    budget_min_line = _budget_minimum_line(card)
+    if budget_min_line:
+        lines.append(budget_min_line)
+    lines += [
         "",
         f"💼 Кабинет: {_escape(account.title)} (id {_escape(account.external_id)})",
         f"Конечный рекламодатель кабинета: {advertiser}",
@@ -694,13 +789,52 @@ def _account_from_state(data: dict[str, Any]) -> AdAccountItem:
 
 @router.message(StateFilter(UploadCreative.waiting_description))
 async def got_description(message: Message, state: FSMContext) -> None:
-    """Принять описание и показать карточку подтверждения запуска (Т3).
-
-    Бриф запрашивается заново (а не берётся из FSM) — чтобы карточка показывала
-    актуальные данные, даже если оператор успел их поправить, пока грузил медиа.
-    """
+    """Принять описание и спросить про хэштеги (Task 5), прежде чем показать
+    карточку подтверждения запуска (Т3)."""
     title, body = _split_description(message.text or "")
     await state.update_data(title=title, body=body)
+    await state.set_state(UploadCreative.waiting_hashtags_choice)
+    await message.answer(_ASK_HASHTAGS_CHOICE, reply_markup=hashtags_choice_keyboard())
+
+
+@router.callback_query(
+    F.data == "hashtags_add", StateFilter(UploadCreative.waiting_hashtags_choice)
+)
+async def ask_hashtags(callback: CallbackQuery, state: FSMContext) -> None:
+    """Оператор решил добавить хэштеги — попросить строку."""
+    await state.set_state(UploadCreative.waiting_hashtags)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(_ASK_HASHTAGS_INPUT, reply_markup=hashtags_skip_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data == "hashtags_skip",
+    StateFilter(UploadCreative.waiting_hashtags_choice, UploadCreative.waiting_hashtags),
+)
+async def skip_hashtags(callback: CallbackQuery, state: FSMContext) -> None:
+    """«Без хэштегов» — работает и с шага выбора, и с шага ввода строки (после
+    отказа ядра оператору не нужно печатать что-то, чтобы отказаться от затеи)."""
+    await state.update_data(hashtags=None)
+    if isinstance(callback.message, Message):
+        await _show_launch_confirmation(callback.message, state)
+    await callback.answer()
+
+
+@router.message(StateFilter(UploadCreative.waiting_hashtags))
+async def got_hashtags(message: Message, state: FSMContext) -> None:
+    """Принять строку хэштегов как есть — нормализация только на стороне ядра."""
+    await state.update_data(hashtags=message.text or "")
+    await _show_launch_confirmation(message, state)
+
+
+async def _show_launch_confirmation(message: Message, state: FSMContext) -> None:
+    """Показать карточку подтверждения запуска (Т3) — общий хвост для «без
+    хэштегов» и «хэштеги приняты».
+
+    Бриф запрашивается заново (а не берётся из FSM) — чтобы карточка показывала
+    актуальные данные, даже если оператор успел их поправить, пока грузил материалы.
+    """
     data = await state.get_data()
     brief_id = int(data["brief_id"])
 
@@ -711,14 +845,17 @@ async def got_description(message: Message, state: FSMContext) -> None:
         await message.answer(_NOT_FOUND)
         return
     except CoreUnavailable:
-        # Не сбрасываем состояние: описание уже принято, оператор может просто
-        # повторить его тем же сообщением, когда ядро отзовётся.
+        # Не сбрасываем состояние: описание и хэштеги уже приняты, оператор
+        # может просто повторить действие, когда ядро отзовётся.
         await message.answer(_UNAVAILABLE)
         return
 
     account = _account_from_state(data)
     goal_code = str(data.get("goal", ""))
     goal_label = GOAL_LABELS.get(goal_code, goal_code)
+    title = str(data.get("title", ""))
+    body = str(data.get("body", ""))
+    hashtags = data.get("hashtags")
 
     lines = [render_launch_confirmation(card, account, goal_label), "", "Креатив:"]
     if title:
@@ -727,6 +864,8 @@ async def got_description(message: Message, state: FSMContext) -> None:
         lines.append(f"Текст: {_escape(body)}")
     if not title and not body:
         lines.append("Без описания.")
+    if hashtags:
+        lines.append(f"Хэштеги: {_escape(str(hashtags))}")
     lines.append("")
     lines.append("Отправка запустит подготовку рекламной кампании.")
     await message.answer(
@@ -743,20 +882,21 @@ async def cancel_creative(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "creative_send")
-async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Скачать медиа из Telegram, отправить в ядро → подготовка/запуск кампании."""
-    data = await state.get_data()
-    if not isinstance(callback.message, Message):
-        await callback.answer()
-        return
-    message = callback.message
+async def _upload_creative_from_state(
+    message: Message, state: FSMContext, bot: Bot, *, allow_relaunch: bool
+) -> None:
+    """Скачать медиа из Telegram, отправить в ядро → подготовка/запуск кампании.
 
+    Общий хвост для первой отправки (`send_creative`) и для повтора после 409
+    `campaign_already_exists` (`relaunch_creative`, задача 6) — во втором случае
+    состояние НЕ сбрасывается на 409, поэтому те же медиа/описание/хэштеги можно
+    отправить ещё раз с `allow_relaunch=True`, не прося оператора набрать их снова.
+    """
+    data = await state.get_data()
     buffer = await bot.download(data["file_id"])
     if buffer is None:
         await state.clear()
         await message.answer(_TOO_BIG)
-        await callback.answer()
         return
     media_b64 = base64.b64encode(buffer.read()).decode("ascii")
 
@@ -772,10 +912,21 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
             str(data.get("body", "")),
             ad_account_id=data.get("ad_account_id"),
             goal=data.get("goal"),
+            hashtags=data.get("hashtags"),
+            allow_relaunch=allow_relaunch,
         )
     except BriefNotFound:
         await state.clear()
         await message.answer(_NOT_FOUND)
+    except HashtagRejected as exc:
+        # Не сбрасываем весь сценарий: медиа и описание уже приняты, возвращаем
+        # оператора именно к вводу хэштегов (Task 5, ambiguities resolved).
+        await state.set_state(UploadCreative.waiting_hashtags)
+        await message.answer(f"⚠️ {exc.reason}", reply_markup=hashtags_skip_keyboard())
+    except CampaignAlreadyExists:
+        # Состояние НЕ сбрасываем: тот же креатив/описание понадобится для
+        # повтора («Запустить ещё одну» → `relaunch_creative` ниже).
+        await _offer_relaunch(message, brief_id)
     except CreativeRejected as exc:
         await state.clear()
         await message.answer(f"⚠️ {exc.reason}")
@@ -785,4 +936,20 @@ async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
     else:
         await state.clear()
         await message.answer(result.message, reply_markup=brief_card_keyboard(brief_id))
+
+
+@router.callback_query(F.data == "creative_send")
+async def send_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Первая отправка креатива — без подтверждённого повторного запуска."""
+    if isinstance(callback.message, Message):
+        await _upload_creative_from_state(callback.message, state, bot, allow_relaunch=False)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("creative_relaunch:"))
+async def relaunch_creative(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Оператор подтвердил «Запустить ещё одну» после 409 `campaign_already_exists`
+    (задача 6) — повтор тем же креативом/описанием из FSM, с `allow_relaunch=True`."""
+    if isinstance(callback.message, Message):
+        await _upload_creative_from_state(callback.message, state, bot, allow_relaunch=True)
     await callback.answer()

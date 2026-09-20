@@ -27,10 +27,13 @@ from services.creative_intake import (
     intake_creative,
     launch_without_creative,
 )
+from services.hashtags import HashtagError
 from services.launch_service import (
     AdAccountClientMismatchError,
     AdvertiserMismatchError,
     BriefNotFoundError,
+    BudgetBelowMinimumError,
+    CampaignAlreadyExistsError,
     SenlerNotConnectedError,
     UnsupportedGoalError,
 )
@@ -110,6 +113,9 @@ class BriefCardOut(BaseModel):
     surface_title: str = ""
     # Нужен ли креатив: у продвижения готового поста его не спрашивают.
     surface_needs_creative: bool = True
+    # Минимальный дневной бюджет площадки (spec 2026-09-19-block1-remaining-gaps §C) —
+    # карточка подтверждения запуска предупреждает заранее, если бюджет ниже него.
+    surface_min_daily_budget_rub: int = 100
     # Название цели запуска без креатива (`services.goals.NO_CREATIVE_GOAL`) —
     # каналы больше не решают это правило сами (CLAUDE.md §1.3), а показывают то,
     # что уже посчитало ядро.
@@ -140,9 +146,14 @@ class LaunchIn(BaseModel):
     Поле необязательное; без него (тело `{}` или отсутствует вовсе — так бот
     ходил сюда раньше) ядро само берёт кабинет по умолчанию — единственный
     активный, а при нуле/нескольких кабинетах отвечает 409.
+
+    `allow_relaunch` — оператор явно подтвердил повторный запуск по брифу, у
+    которого уже есть незавершённая кампания на боевом канале (задача 6, spec §F).
+    Без него такой повтор отклоняется 409 `campaign_already_exists`.
     """
 
     ad_account_id: int | None = None
+    allow_relaunch: bool = False
 
 
 class CreativeIn(BaseModel):
@@ -158,10 +169,15 @@ class CreativeIn(BaseModel):
     height: int = 0
     title: str = ""
     body: str = ""
+    # Хэштеги оператора (строкой, как есть с формы/бота) — необязательное поле;
+    # ядро нормализует и дописывает в конец текста (`services/hashtags.py`).
+    hashtags: str | None = None
     # Выбор оператора. Необязательные: без кабинета ядро берёт единственный
     # активный (иначе честный 409), цель — из раскладки брифа.
     ad_account_id: int | None = None
     goal: str | None = None
+    # См. `LaunchIn.allow_relaunch` — то же поле, тот же смысл, для пути с креативом.
+    allow_relaunch: bool = False
 
 
 class CreativeLaunchOut(BaseModel):
@@ -181,6 +197,16 @@ def creative_http_error(exc: CreativeError) -> HTTPException:
     return HTTPException(status_code=422, detail=exc.code)
 
 
+def hashtag_http_error(exc: HashtagError) -> HTTPException:
+    """Маппинг `HashtagError` в HTTP-ответ (общий для бота и админки).
+
+    Машинный код — с префиксом `hashtags_`, чтобы бот/веб отличали его от кодов
+    `creative_http_error` при переводе в человеческий текст (общий список
+    маппинга — `docs/superpowers/.../global-constraints.md`).
+    """
+    return HTTPException(status_code=422, detail=f"hashtags_{exc.code}")
+
+
 def to_card_out(view: BriefCardView) -> BriefCardOut:
     return BriefCardOut(
         brief_id=view.brief_id,
@@ -198,6 +224,7 @@ def to_card_out(view: BriefCardView) -> BriefCardOut:
         campaign_status=view.campaign_status,
         surface_title=view.surface_title,
         surface_needs_creative=view.surface_needs_creative,
+        surface_min_daily_budget_rub=view.surface_min_daily_budget_rub,
         launch_goal_title=view.launch_goal_title,
         cabinet_step_available=view.cabinet_step_available,
         cabinet_step_own_cabinet_exists=view.cabinet_step_own_cabinet_exists,
@@ -270,7 +297,11 @@ async def edit_brief(
 
 
 async def launch_brief_response(
-    session: AsyncSession, brief_id: int, ad_account_id: int | None
+    session: AsyncSession,
+    brief_id: int,
+    ad_account_id: int | None,
+    *,
+    allow_relaunch: bool = False,
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива — общая часть для бота и веб-админки.
 
@@ -280,11 +311,16 @@ async def launch_brief_response(
 
     `ad_account_id` — кабинет, выбранный оператором. Не передан — ядро берёт
     кабинет по умолчанию и, если это невозможно (кабинетов нет или их
-    несколько), отвечает 409 вместо угадывания.
+    несколько), отвечает 409 вместо угадывания. `allow_relaunch` — см.
+    `LaunchIn.allow_relaunch`.
     """
     try:
         outcome = await launch_without_creative(
-            session, DEFAULT_ACCOUNT_ID, brief_id, ad_account_id=ad_account_id
+            session,
+            DEFAULT_ACCOUNT_ID,
+            brief_id,
+            ad_account_id=ad_account_id,
+            allow_relaunch=allow_relaunch,
         )
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
@@ -294,10 +330,14 @@ async def launch_brief_response(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
         raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:
@@ -322,7 +362,10 @@ async def launch_brief(
 ) -> CreativeLaunchOut:
     """Запустить кампанию без креатива — для площадок, которым он не нужен."""
     ad_account_id = data.ad_account_id if data is not None else None
-    return await launch_brief_response(session, brief_id, ad_account_id)
+    allow_relaunch = data.allow_relaunch if data is not None else False
+    return await launch_brief_response(
+        session, brief_id, ad_account_id, allow_relaunch=allow_relaunch
+    )
 
 
 @router.post("/{brief_id}/creative", status_code=201)
@@ -343,11 +386,15 @@ async def upload_creative(
             height=data.height,
             title=data.title,
             body=data.body,
+            hashtags=data.hashtags,
             ad_account_id=data.ad_account_id,
             goal=data.goal,
+            allow_relaunch=data.allow_relaunch,
         )
     except CreativeError as exc:
         raise creative_http_error(exc) from exc
+    except HashtagError as exc:
+        raise hashtag_http_error(exc) from exc
     except BriefNotFoundError as exc:
         raise HTTPException(status_code=404, detail="brief_not_found") from exc
     except BriefValidationError as exc:
@@ -356,10 +403,14 @@ async def upload_creative(
         raise HTTPException(status_code=422, detail="goal_not_supported") from exc
     except SenlerNotConnectedError as exc:
         raise HTTPException(status_code=422, detail="senler_not_connected") from exc
+    except BudgetBelowMinimumError as exc:
+        raise HTTPException(status_code=422, detail="budget_below_minimum") from exc
     except AdAccountClientMismatchError as exc:
         raise HTTPException(status_code=409, detail="ad_account_client_mismatch") from exc
     except AdvertiserMismatchError as exc:
         raise HTTPException(status_code=409, detail="advertiser_mismatch") from exc
+    except CampaignAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail="campaign_already_exists") from exc
     except NoAdAccountError as exc:
         raise HTTPException(status_code=409, detail="no_ad_account") from exc
     except AmbiguousAdAccountError as exc:

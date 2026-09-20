@@ -189,6 +189,11 @@ class Surface:
     # Прошла ли площадка боевое создание кампании в живом кабинете. Непроверенные
     # в интерфейсе показываются как «скоро» и клиенту не предлагаются.
     verified: bool = False
+    # Минимальный дневной бюджет, который принимает площадка: VK отклоняет
+    # `budget_limit_day` ниже порога целиком (боевая проверка 2026-07-27,
+    # spec 2026-09-19-block1-remaining-gaps §C). 100 ₽/день — у всех площадок
+    # ВК/ОК/MAX; у Дзена порог заметно выше (см. `DZEN_CHANNEL` ниже).
+    min_daily_budget_rub: int = 100
 
     @property
     def ratios(self) -> tuple[str, ...]:
@@ -414,6 +419,7 @@ DZEN_CHANNEL = Surface(
     default_cta="",
     verified=True,
     url_slot=URL_SLOT_DZEN,
+    min_daily_budget_rub=10000,
     patterns=_patterns(
         None,
         "text_40",

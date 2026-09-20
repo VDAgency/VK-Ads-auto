@@ -15,12 +15,13 @@ from core.app import create_app
 from cryptography.fernet import Fernet
 from db.base import Base
 from db.models import Account, Brief, Client
+from db.repositories import get_creative_for_brief
 from db.session import get_session
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from services.ad_accounts import add_account
 from services.vk_identity import VkIdentity
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 T = TypeVar("T")
@@ -79,7 +80,13 @@ def _mock_vk_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ad_accounts, "fetch_balance", balance)
 
 
-async def _with_client(scenario: Callable[[AsyncClient], Awaitable[T]], *, seed: bool = True) -> T:
+async def _with_client(
+    scenario: Callable[[AsyncClient], Awaitable[T]],
+    *,
+    seed: bool = True,
+    payload: dict[str, str] | None = None,
+    after: Callable[[AsyncSession], Awaitable[None]] | None = None,
+) -> T:
     engine = create_async_engine(
         "sqlite+aiosqlite://",
         poolclass=StaticPool,
@@ -93,7 +100,13 @@ async def _with_client(scenario: Callable[[AsyncClient], Awaitable[T]], *, seed:
         if seed:
             session.add(Client(id=1, account_id=1, full_name="Вячеслав", email="v@example.com"))
             session.add(
-                Brief(id=1, account_id=1, client_id=1, variant="individual", payload=dict(_VALID))
+                Brief(
+                    id=1,
+                    account_id=1,
+                    client_id=1,
+                    variant="individual",
+                    payload=payload or dict(_VALID),
+                )
             )
         await session.commit()
         if seed:
@@ -111,6 +124,9 @@ async def _with_client(scenario: Callable[[AsyncClient], Awaitable[T]], *, seed:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         result = await scenario(client)
+    if after is not None:
+        async with maker() as session:
+            await after(session)
     await engine.dispose()
     return result
 
@@ -172,3 +188,171 @@ def test_upload_creative_404_when_brief_missing() -> None:
         return resp.status_code
 
     assert asyncio.run(_with_client(scenario, seed=False)) == 404
+
+
+def test_upload_creative_with_hashtags_appends_them_to_body() -> None:
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст объявления",
+                "hashtags": "скидка, Акция",
+            },
+        )
+        return {"status": resp.status_code, "body": resp.json()}
+
+    saved_body: dict[str, str | None] = {}
+
+    async def after(session: AsyncSession) -> None:
+        creative = await get_creative_for_brief(session, 1, 1)
+        assert creative is not None
+        saved_body["value"] = creative.body
+
+    result = asyncio.run(_with_client(scenario, after=after))
+    assert result["status"] == 201, result["body"]
+    assert saved_body["value"] == "Текст объявления\n#скидка #Акция"
+
+
+def test_upload_creative_without_hashtags_behaves_as_before() -> None:
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст объявления",
+            },
+        )
+        return resp.status_code
+
+    assert asyncio.run(_with_client(scenario)) == 201
+
+
+def test_upload_creative_rejects_invalid_hashtag() -> None:
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст объявления",
+                "hashtags": "#a-b",
+            },
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    result = asyncio.run(_with_client(scenario))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_invalid_tag"
+
+
+def test_upload_creative_hashtags_not_supported_for_surface_without_text() -> None:
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json={
+                "media_b64": _IMAGE_B64,
+                "media_type": "photo",
+                "width": 800,
+                "height": 800,
+                "title": "Заголовок",
+                "body": "Текст объявления",
+                "hashtags": "промо",
+            },
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    # Продвижение поста сообщества — площадка без текстового слота
+    # (`integrations.vk_surfaces.VK_POST_COMMUNITY.needs_creative is False`).
+    payload = dict(_VALID)
+    payload["target_type"] = "пост сообщества"
+
+    result = asyncio.run(_with_client(scenario, payload=payload))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_not_supported"
+
+
+def _hashtag_upload_json(*, body: str, hashtags: str) -> dict[str, Any]:
+    return {
+        "media_b64": _IMAGE_B64,
+        "media_type": "photo",
+        "width": 800,
+        "height": 800,
+        "title": "Заголовок",
+        "body": body,
+        "hashtags": hashtags,
+    }
+
+
+def test_upload_creative_hashtags_over_channel_text_slot_is_rejected() -> None:
+    """Канал ВКонтакте — самый узкий слот `text_90` среди его шаблонов
+    (`integrations.vk_surfaces.VK_CHANNEL`, `TEXT_SLOT_LIMITS["text_90"] == 90`).
+
+    Текст + хэштеги вместе — 91 символ: меньше generic `MAX_TEXT_LEN` (220), но
+    больше 90 — без учёта площадки прошло бы 201, а в реальной кампании
+    `integrations.vk_api._fit` молча обрезал бы хэштеги. Ядро обязано отказать
+    здесь, до сохранения креатива.
+    """
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Т" * 85, hashtags="тест"),
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    payload = dict(_VALID)
+    payload["target_type"] = "канал ВКонтакте"
+
+    result = asyncio.run(_with_client(scenario, payload=payload))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_text_too_long"
+
+
+def test_upload_creative_same_hashtags_fit_community_wider_text_slot() -> None:
+    """Тот же текст+хэштеги (91 символ), но площадка — сообщество ВКонтакте:
+    её шаблоны используют `text_2000`, генерик-лимит `MAX_TEXT_LEN` (220) шире
+    91 символа — запрос проходит."""
+
+    async def scenario(client: AsyncClient) -> int:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Т" * 85, hashtags="тест"),
+        )
+        return resp.status_code
+
+    payload = dict(_VALID)
+    payload["target_type"] = "сообщество ВКонтакте"
+
+    assert asyncio.run(_with_client(scenario, payload=payload)) == 201
+
+
+def test_upload_creative_hashtags_over_dzen_text_slot_is_rejected() -> None:
+    """Дзен — самый жёсткий текстовый слот (`text_40`, `TEXT_SLOT_LIMITS["text_40"]
+    == 40`). Короткий текст (5 символов) + один длинный тег (41 символ с `#`) —
+    47 символов вместе, больше 40."""
+
+    async def scenario(client: AsyncClient) -> dict[str, Any]:
+        resp = await client.post(
+            "/api/v1/briefs/1/creative",
+            json=_hashtag_upload_json(body="Текст", hashtags="а" * 40),
+        )
+        return {"status": resp.status_code, "detail": resp.json()["detail"]}
+
+    payload = dict(_VALID)
+    payload["target_type"] = "канал Дзен"
+
+    result = asyncio.run(_with_client(scenario, payload=payload))
+    assert result["status"] == 422
+    assert result["detail"] == "hashtags_text_too_long"

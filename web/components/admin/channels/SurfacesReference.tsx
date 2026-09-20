@@ -51,6 +51,9 @@ export function SurfacesReference() {
                   </span>
                   <span className="adm-row__meta">
                     в бриф: «{surface.kind}» или своими словами · {surface.hint}
+                    {surface.min_daily_budget_rub !== 100
+                      ? ` · минимальный бюджет: ${surface.min_daily_budget_rub.toLocaleString("ru-RU")} ₽/день`
+                      : ""}
                   </span>
                 </span>
                 <Badge tone={surface.available ? "accent" : "neutral"}>

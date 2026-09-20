@@ -64,6 +64,7 @@ def _fake_launch(
         settings: Any = None,
         ad_account_id: int | None = None,
         goal: str | None = None,
+        allow_relaunch: bool = False,
     ) -> LaunchOutcome:
         captured["account_id"] = account_id
         captured["brief_id"] = brief_id
